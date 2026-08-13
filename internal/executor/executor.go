@@ -22,42 +22,42 @@ func NewConfig() *Config {
 	return &Config{}
 }
 
-// WithDir add Dir to cfg.
+// WithDir adds Dir to cfg.
 func (cfg *Config) WithDir(dir string) *Config {
 	cfg.Dir = dir
 	return cfg
 }
 
-// WithEnv add Env to cfg.
+// WithEnv adds Env to cfg.
 func (cfg *Config) WithEnv(env []string) *Config {
 	cfg.Env = env
 	return cfg
 }
 
-// WithStdout add Stdout to cfg.
+// WithStdout adds Stdout to cfg.
 func (cfg *Config) WithStdout(stdout io.Writer) *Config {
 	cfg.Stdout = stdout
 	return cfg
 }
 
-// WithStdin add Stdin to cfg.
+// WithStdin adds Stdin to cfg.
 func (cfg *Config) WithStdin(stdin io.Reader) *Config {
 	cfg.Stdin = stdin
 	return cfg
 }
 
-// WithStderr add Stderr to cfg.
+// WithStderr adds Stderr to cfg.
 func (cfg *Config) WithStderr(stderr io.Writer) *Config {
 	cfg.Stderr = stderr
 	return cfg
 }
 
-// Run executes a script at scriptPath the provided arguments.
+// Run executes a script at scriptPath with the provided arguments.
 func Run(ctx context.Context, scriptPath string, args ...string) error {
 	return RunWithConfig(ctx, &Config{}, scriptPath, args...)
 }
 
-// RunWithConfig executes a script at scriptPath the provided arguments and execution settings.
+// RunWithConfig executes a script at scriptPath with the provided arguments and execution settings.
 func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...string) error {
 	if ctx == nil {
 		return fmt.Errorf("executor: context is required")

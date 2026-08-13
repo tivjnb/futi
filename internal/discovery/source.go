@@ -22,8 +22,9 @@ type Child struct {
 	ModuleRoot   string // корень модуля (для module)
 }
 
-// Source — источник модулей. Расширяемая точка для будущего
-// многоисточникового разрешения (LocalSource, ProjectSource).
+// Source — источник модулей. Реализации: GlobalSource (один каталог),
+// CompositeSource (несколько каталогов с namespace-маппингом).
+// Расширяемая точка для будущих источников (LocalSource, ProjectSource).
 type Source interface {
 	// Resolve находит модуль по namespace (например "dev.deploy").
 	// Возвращает путь к манифесту и корень модуля (директория пакета).
@@ -155,6 +156,9 @@ func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if namespace == "" {
+				return nil, nil
+			}
 			return nil, fmt.Errorf("discovery: namespace %q not found", namespace)
 		}
 		return nil, fmt.Errorf("discovery: list children %q: %w", namespace, err)

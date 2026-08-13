@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"futi/internal/config"
 	"futi/internal/discovery"
 	"futi/internal/execmodule"
 	"futi/internal/modulerunner"
+
+	"github.com/olekukonko/tablewriter"
 )
 
 var (
@@ -97,15 +99,33 @@ func parseArgs(args []string) (namespace, command string, params map[string]stri
 	return namespace, command, params, nil
 }
 
-func modulesDir() string {
-	if dir := os.Getenv("FUTI_MODULES_DIR"); dir != "" {
-		return dir
-	}
-	home, err := os.UserHomeDir()
+// createSource создаёт источник модулей.
+// Если есть config.yaml — загружает конфиг и создаёт CompositeSource.
+// Иначе — fallback на GlobalSource с ~/.config/futi/modules/ (или FUTI_MODULES_DIR).
+func createSource() discovery.Source {
+	cfgPath, err := config.DefaultConfigPath()
 	if err != nil {
-		log.Fatalf("failed to get home directory: %v", err)
+		log.Fatalf("config path: %v", err)
 	}
-	return filepath.Join(home, ".config", "futi", "modules")
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+
+	if cfg != nil && len(cfg.Sources) > 0 {
+		return discovery.NewCompositeSource(cfg)
+	}
+
+	// Fallback: нет конфига — одиночный GlobalSource
+	modDir := os.Getenv("FUTI_MODULES_DIR")
+	if modDir == "" {
+		modDir, err = config.DefaultModulesDir()
+		if err != nil {
+			log.Fatalf("modules dir: %v", err)
+		}
+	}
+	return discovery.NewGlobalSource(modDir)
 }
 
 // runList выводит содержимое namespace или команды модуля.
@@ -113,7 +133,7 @@ func modulesDir() string {
 // Иначе — показывает непосредственных детей namespace, или всё поддерево при recurse.
 // При verbose=true добавляет колонку PATH.
 func runList(namespace string, verbose, recurse bool) error {
-	source := discovery.NewGlobalSource(modulesDir())
+	source := createSource()
 
 	// Сначала пробуем резолвить как модуль
 	manifestPath, moduleRoot, err := source.Resolve(namespace)
@@ -150,28 +170,29 @@ func printCommands(manifestPath, moduleRoot string, verbose bool) error {
 		return nil
 	}
 
-	if verbose {
-		fmt.Printf("%-20s %-40s %s\n", "COMMAND", "DESCRIPTION", "PATH")
-		for name, cmd := range mod.Commands {
-			fmt.Printf("%-20s %-40s %s\n", name, cmd.Description, manifestPath)
-		}
-	} else {
-		fmt.Printf("%-20s %s\n", "COMMAND", "DESCRIPTION")
-		for name, cmd := range mod.Commands {
-			fmt.Printf("%-20s %s\n", name, cmd.Description)
+	var rows [][]string
+	for name, cmd := range mod.Commands {
+		if verbose {
+			rows = append(rows, []string{name, cmd.Description, manifestPath})
+		} else {
+			rows = append(rows, []string{name, cmd.Description})
 		}
 	}
-	return nil
+
+	w := tablewriter.NewTable(os.Stdout)
+	if verbose {
+		w.Header("COMMAND", "DESCRIPTION", "PATH")
+	} else {
+		w.Header("COMMAND", "DESCRIPTION")
+	}
+	if err := w.Bulk(rows); err != nil {
+		return fmt.Errorf("list: render: %w", err)
+	}
+	return w.Render()
 }
 
 func printChildren(children []discovery.Child, verbose bool) error {
-	type row struct {
-		typeStr     string
-		name        string
-		description string
-		path        string
-	}
-	rows := make([]row, 0, len(children))
+	var rows [][]string
 	for _, c := range children {
 		var desc, path string
 		if c.Type == "module" {
@@ -180,28 +201,122 @@ func printChildren(children []discovery.Child, verbose bool) error {
 				desc = mod.Description
 			}
 		}
-		rows = append(rows, row{c.Type, c.Name, desc, path})
+		if verbose {
+			rows = append(rows, []string{c.Type, c.Name, desc, path})
+		} else {
+			rows = append(rows, []string{c.Type, c.Name, desc})
+		}
 	}
 
+	w := tablewriter.NewTable(os.Stdout)
 	if verbose {
-		fmt.Printf("%-12s %-20s %-30s %s\n", "TYPE", "NAME", "DESCRIPTION", "PATH")
-		for _, r := range rows {
-			fmt.Printf("%-12s %-20s %-30s %s\n", r.typeStr, r.name, r.description, r.path)
-		}
+		w.Header("TYPE", "NAME", "DESCRIPTION", "PATH")
 	} else {
-		fmt.Printf("%-12s %-20s %s\n", "TYPE", "NAME", "DESCRIPTION")
-		for _, r := range rows {
-			fmt.Printf("%-12s %-20s %s\n", r.typeStr, r.name, r.description)
-		}
+		w.Header("TYPE", "NAME", "DESCRIPTION")
 	}
-	return nil
+	if err := w.Bulk(rows); err != nil {
+		return fmt.Errorf("list: render: %w", err)
+	}
+	return w.Render()
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, "usage: futi <namespace...> <command> [--param val]")
-	fmt.Fprintln(os.Stderr, "       futi <namespace...> list")
-	fmt.Fprintln(os.Stderr, "       futi list")
-	fmt.Fprintln(os.Stderr, "       futi -h | --help")
+	fmt.Fprint(os.Stderr, `futi — universal CLI utility manager
+
+Turns scattered commands, scripts and tools into YAML modules with a single
+CLI interface. Install a module once — use it everywhere.
+
+USAGE
+  futi <namespace...> <command> [--param val] [--param=val] [--bool-flag]
+  futi <namespace...> list [flags]
+  futi list [flags]
+  futi -h | --help
+
+The last positional argument (without --) is the command; everything before
+it is the namespace, joined with dots. Example: "futi dev deploy staging"
+resolves to namespace "dev.deploy", command "staging".
+
+MODULES
+  Modules live in ~/.config/futi/modules/ by default (override with
+  FUTI_MODULES_DIR). With a config.yaml, sources can be anywhere —
+  see CONFIGURATION below.
+  A module is either a single YAML file (docker.yaml) or a package directory
+  with a config.yaml inside (deploy/config.yaml). Nested namespaces map to
+  directory paths: dev/deploy.yaml → namespace "dev.deploy".
+
+CONFIGURATION
+  A config file at ~/.config/futi/config.yaml can define multiple module
+  sources with mountpoints:
+
+    sources:
+      - path: ~/.config/futi/modules         # root mount (default)
+      - path: /path/to/project-modules       # mountpoint: ns1.ns2
+        mountpoint: ns1.ns2
+      - path: /path/to/tools                 # mounted as namespace "tools"
+        mountpoint: dev
+        mount_as_namespace: tools
+
+  mountpoint       Mount source contents under this namespace (default: root)
+  mount_as_namespace  Wrap source contents under an extra namespace level
+
+  When no config file exists, futi falls back to a single source at
+  ~/.config/futi/modules/ (or FUTI_MODULES_DIR).
+
+LISTING
+  futi list                        Show top-level modules and namespaces
+  futi <ns> list                   Show children of a namespace or commands
+                                   of a module
+  futi list -r, --recurse          Recursively traverse the subtree
+  futi list -v, --verbose          Add a PATH column (manifest location)
+  futi <ns> list -r -v             Flags combine
+
+PARAMETERS
+  --param value                    Pass a string parameter
+  --param=value                    Alternative syntax
+  --bool-flag                      Boolean flag (true when bare)
+  --bool-flag=false                Explicit false
+
+  Boolean values are normalized: "false", "0", "no", "" are falsy;
+  "true", "1", "yes" are truthy. Use {{if .flag}}...{{end}} in templates.
+
+TEMPLATING
+  Commands use Go text/template syntax:
+    {{.name}}                       Substitute a parameter value
+    {{if .follow}}...{{end}}        Conditional block (for bool params)
+
+  Quote values with spaces in the template:
+    cmd: "echo \"{{.msg}}\""        --msg "hello world" works correctly
+
+MODULE SCHEMA (YAML)
+  name: docker                     Optional, defaults to file/dir name
+  description: Docker management    Optional
+  commands:
+    build:
+      description: Build image      Optional
+      params:
+        - name: tag
+          type: string              string (default) or bool
+          required: true
+          default: Dockerfile
+      cmd: "docker build -t {{.tag}} ."
+
+FLAGS
+  -h, --help                        Show this help
+  -v, --verbose                     Show module paths in list output
+  -r, --recurse                     Recursively list namespace subtree
+
+EXAMPLES
+  futi docker build --tag myapp    Run "build" command in "docker" module
+  futi dev deploy staging           Namespace "dev.deploy", command "staging"
+  futi k8s logs mypod --follow      Bool flag --follow
+  futi images list -r               Recursively list all image modules
+  futi docker list -v               Show docker commands with manifest path
+
+ENVIRONMENT
+  FUTI_MODULES_DIR                  Override modules directory (used when
+                                    no config.yaml exists; default
+                                    ~/.config/futi/modules/)
+`)
 }
 
 func main() {
@@ -232,7 +347,7 @@ func main() {
 		}
 	}
 
-	source := discovery.NewGlobalSource(modulesDir())
+	source := createSource()
 	if err := modulerunner.Run(context.Background(), source, namespace, command, params, nil, nil); err != nil {
 		log.Fatalf("run: %v", err)
 	}

@@ -48,7 +48,7 @@ futi list
 # No modules found.
 ```
 
-futi хранит модули в `~/.config/futi/modules/`. Переопределить каталог:
+futi хранит модули в `~/.config/futi/modules/` (при наличии `config.yaml` — в путях, указанных в конфиге). Переопределить каталог для fallback без конфига:
 
 ```bash
 export FUTI_MODULES_DIR=/path/to/modules
@@ -82,7 +82,11 @@ $ futi hello greet --name world
 hello world
 
 $ futi list
-hello                /home/user/.config/futi/modules/hello.yaml
+┌────────┬───────┬─────────────┐
+│  TYPE  │ NAME  │ DESCRIPTION │
+├────────┼───────┼─────────────┤
+│ module │ hello │ Demo module │
+└────────┴───────┴─────────────┘
 ```
 
 ---
@@ -173,6 +177,33 @@ futi использует SaltStack-модель discovery. Модуль мож�
 namespace формируется из пути: `dev/deploy.yaml` → `dev.deploy`, вызывается как `futi dev deploy <command>` (последний аргумент — команда, остальное — namespace).
 
 **Конфликт имён:** если для одного namespace существуют и `.yaml`, и `/config.yaml` — ошибка. Уберите одно из двух.
+
+### Конфиг-файл: несколько источников
+
+Файл `~/.config/futi/config.yaml` задаёт источники модулей с mountpoint'ами:
+
+```yaml
+sources:
+  - path: ~/.config/futi/modules         # корень (по умолчанию)
+  - path: /path/to/project-modules       # содержимое монтируется в ns1.ns2
+    mountpoint: ns1.ns2
+  - path: /path/to/another-source        # дополнение ns1.ns2 из другого пути
+    mountpoint: ns1.ns2
+  - path: /path/to/tools                 # обёрнуто как namespace "tools" внутри "dev"
+    mountpoint: dev
+    mount_as_namespace: tools
+```
+
+Параметры:
+- `path` (обязательный) — каталог с модулями
+- `mountpoint` — внутрь какого namespace монтировать содержимое (по умолчанию: корень)
+- `mount_as_namespace` — обернуть содержимое в дополнительный namespace с этим именем
+
+Несколько источников с одинаковым mountpoint **объединяются** — модули из всех источников видны в одном namespace. Если два источника дают модуль с одинаковым именем — ошибка конфликта.
+
+Пустые namespace создаются неявно: если источник монтируется на `ns1.ns2`, то `ns1` и `ns2` существуют как namespaces, даже без собственных модулей.
+
+Если конфиг-файл отсутствует — futi использует один каталог `~/.config/futi/modules/` (или `FUTI_MODULES_DIR`).
 
 ---
 
@@ -278,28 +309,43 @@ futi k8s logs mypod --follow         # namespace=k8s, command=logs, follow=true
 
 ```bash
 $ futi list                          # корень: модули и namespaces
-TYPE         NAME                 DESCRIPTION
-module       docker               Docker management
-namespace    images
+┌───────────┬────────┬───────────────────┐
+│   TYPE    │  NAME  │    DESCRIPTION    │
+├───────────┼────────┼───────────────────┤
+│ module    │ docker │ Docker management │
+│ namespace │ images │                   │
+└───────────┴────────┴───────────────────┘
 
 $ futi images list                   # namespace: вложенные namespaces и модули
-TYPE         NAME                 DESCRIPTION
-namespace    converter
-module       png                  PNG utilities
+┌───────────┬───────────┬───────────────┐
+│   TYPE    │   NAME    │  DESCRIPTION  │
+├───────────┼───────────┼───────────────┤
+│ namespace │ converter │               │
+│ module    │ png       │ PNG utilities │
+└───────────┴───────────┴───────────────┘
 
 $ futi images converter list         # вложенный namespace
-TYPE         NAME                 DESCRIPTION
-module       to_png               Convert images to PNG
+┌────────┬────────┬──────────────────────┐
+│  TYPE  │  NAME  │     DESCRIPTION      │
+├────────┼────────┼──────────────────────┤
+│ module │ to_png │ Convert images to PNG │
+└────────┴────────┴──────────────────────┘
 
 $ futi images png list               # модуль: команды
-COMMAND              DESCRIPTION
-optimize             Optimize PNG file
-resize
+┌─────────┬─────────────┐
+│ COMMAND │ DESCRIPTION │
+├─────────┼─────────────┤
+│ optimize│ Optimize PNG│
+│ resize  │             │
+└─────────┴─────────────┘
 
 $ futi docker list                   # модуль в корне: команды
-COMMAND              DESCRIPTION
-ps
-build                Build image
+┌─────────┬─────────────┐
+│ COMMAND │ DESCRIPTION │
+├─────────┼─────────────┤
+│ ps      │             │
+│ build   │ Build image │
+└─────────┴─────────────┘
 ```
 
 Логика: если namespace резолвится как модуль — `list` показывает его команды. Если как namespace-директория — показывает непосредственных детей (вложенные namespaces и модули). `list` зарезервирован — нельзя создать команду с именем `list` в модуле.
@@ -308,27 +354,36 @@ build                Build image
 
 ```bash
 $ futi list -v
-TYPE         NAME                 DESCRIPTION                    PATH
-module       docker               Docker management              /home/user/.config/futi/modules/docker.yaml
-namespace    images
+┌───────────┬────────┬───────────────────┬──────────────────────────────────────────┐
+│   TYPE    │  NAME  │    DESCRIPTION    │                   PATH                    │
+├───────────┼────────┼───────────────────┼──────────────────────────────────────────┤
+│ module    │ docker │ Docker management │ /home/user/.config/futi/modules/docker.yaml│
+│ namespace │ images │                   │                                          │
+└───────────┴────────┴───────────────────┴──────────────────────────────────────────┘
 ```
 
 Флаг `-r`/`--recurse` рекурсивно обходит всё поддерево namespace, показывая полный namespace-путь от контекста:
 
 ```bash
 $ futi list -r
-TYPE         NAME                     DESCRIPTION
-module       docker                   Docker management
-namespace    images
-namespace    images.converter
-module       images.converter.to_png   Convert images to PNG
-module       images.png               PNG utilities
+┌───────────┬──────────────────────┬──────────────────────┐
+│   TYPE    │         NAME         │     DESCRIPTION      │
+├───────────┼──────────────────────┼──────────────────────┤
+│ module    │ docker               │ Docker management    │
+│ namespace │ images               │                      │
+│ namespace │ images.converter     │                      │
+│ module    │ images.converter.to_png│ Convert images to PNG│
+│ module    │ images.png           │ PNG utilities        │
+└───────────┴──────────────────────┴──────────────────────┘
 
 $ futi images list -r                # от контекста images
-TYPE         NAME                     DESCRIPTION
-namespace    converter
-module       converter.to_png         Convert images to PNG
-module       png                      PNG utilities
+┌───────────┬──────────────────┬──────────────────────┐
+│   TYPE    │       NAME       │     DESCRIPTION      │
+├───────────┼──────────────────┼──────────────────────┤
+│ namespace │ converter        │                      │
+│ module    │ converter.to_png │ Convert images to PNG│
+│ module    │ png              │ PNG utilities        │
+└───────────┴──────────────────┴──────────────────────┘
 ```
 
 `-r` игнорируется для модулей (показывает команды как обычно). Можно комбинировать: `futi list -r -v`.
@@ -454,7 +509,7 @@ futi находится на стадии PRE PRE MVP. Ниже — направ
 
 ### Ближайшие планы
 
-- **Локальная загрузка модулей** — project-local модули (аналог `Makefile`), переопределение глобальных
+- **Авто-discovery из CWD** — автоматический поиск `./futi.yaml` или `./.futi/` в текущей директории, без явного указания в config.yaml
 - **Типы параметров** — `int`, `file`, `json`, `env`, `secret` (безопасная передача через env, не args)
 - **Subcommands** — вложенные команды внутри модуля (`futi db migrate up`)
 - **Сохранение exit code** — проброс кода завершения вызываемой команды
@@ -510,7 +565,7 @@ futi module check                 # проверить обновления
 ### Дополнительно
 
 - **Module versioning** — версии модулей, совместимость
-- **Project overrides** — `./futi.yaml` для проектных переопределений
+- **Project overrides** — переопределение модулей на уровне проекта (приоритет над глобальными)
 - **Config linting** — валидация схем модулей, подсказки
 - **TUI** — интерактивный просмотр и вызов модулей
 - **Module registry** — публичный реестр шаримых модулей
