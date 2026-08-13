@@ -257,7 +257,10 @@ futi mytool deploy --env staging
 
 ```bash
 futi <namespace...> <command> [--param val]    # вызов команды модуля
-futi list                                       # список установленных модулей
+futi list                                       # модули и namespaces в корне
+futi <namespace...> list                        # содержимое namespace или команды модуля
+futi <namespace...> list -v                     # то же, с колонкой PATH
+futi <namespace...> list -r                     # рекурсивный обход поддерева
 futi -h | --help                                # справка
 ```
 
@@ -269,7 +272,66 @@ futi dev deploy staging              # namespace=dev.deploy, command=staging
 futi k8s logs mypod --follow         # namespace=k8s, command=logs, follow=true
 ```
 
-`list` зарезервировано — `futi list` выводит модули, а не вызывает команду `list` в модуле.
+### Навигация через `list`
+
+`list` показывает содержимое текущего уровня иерархии:
+
+```bash
+$ futi list                          # корень: модули и namespaces
+TYPE         NAME                 DESCRIPTION
+module       docker               Docker management
+namespace    images
+
+$ futi images list                   # namespace: вложенные namespaces и модули
+TYPE         NAME                 DESCRIPTION
+namespace    converter
+module       png                  PNG utilities
+
+$ futi images converter list         # вложенный namespace
+TYPE         NAME                 DESCRIPTION
+module       to_png               Convert images to PNG
+
+$ futi images png list               # модуль: команды
+COMMAND              DESCRIPTION
+optimize             Optimize PNG file
+resize
+
+$ futi docker list                   # модуль в корне: команды
+COMMAND              DESCRIPTION
+ps
+build                Build image
+```
+
+Логика: если namespace резолвится как модуль — `list` показывает его команды. Если как namespace-директория — показывает непосредственных детей (вложенные namespaces и модули). `list` зарезервирован — нельзя создать команду с именем `list` в модуле.
+
+Флаг `-v`/`--verbose` добавляет колонку `PATH` — путь к манифесту модуля. Полезно при нескольких источниках модулей или отладке:
+
+```bash
+$ futi list -v
+TYPE         NAME                 DESCRIPTION                    PATH
+module       docker               Docker management              /home/user/.config/futi/modules/docker.yaml
+namespace    images
+```
+
+Флаг `-r`/`--recurse` рекурсивно обходит всё поддерево namespace, показывая полный namespace-путь от контекста:
+
+```bash
+$ futi list -r
+TYPE         NAME                     DESCRIPTION
+module       docker                   Docker management
+namespace    images
+namespace    images.converter
+module       images.converter.to_png   Convert images to PNG
+module       images.png               PNG utilities
+
+$ futi images list -r                # от контекста images
+TYPE         NAME                     DESCRIPTION
+namespace    converter
+module       converter.to_png         Convert images to PNG
+module       png                      PNG utilities
+```
+
+`-r` игнорируется для модулей (показывает команды как обычно). Можно комбинировать: `futi list -r -v`.
 
 ---
 

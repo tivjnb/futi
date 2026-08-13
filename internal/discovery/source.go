@@ -36,6 +36,11 @@ type Source interface {
 	// ListChildren возвращает непосредственных детей namespace:
 	// вложенные namespaces и модули. Пустой namespace = корень.
 	ListChildren(namespace string) ([]Child, error)
+
+	// ListChildrenRecursive рекурсивно обходит поддерево namespace
+	// и возвращает всех потомков с полным namespace-путём от контекста.
+	// Пустой namespace = корень.
+	ListChildrenRecursive(namespace string) ([]Child, error)
 }
 
 // GlobalSource ищет модули в фиксированном каталоге (например ~/.config/futi/modules/).
@@ -189,4 +194,86 @@ func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {
 	}
 
 	return children, nil
+}
+
+// ListChildrenRecursive рекурсивно обходит поддерево namespace
+// и возвращает всех потомков. Name каждого Child — полный namespace-путь
+// от контекста (например для контекста "images": "png", "converter",
+// "converter.to_png").
+func (s *GlobalSource) ListChildrenRecursive(namespace string) ([]Child, error) {
+	// Проверяем существование namespace
+	var dir string
+	if namespace == "" {
+		dir = s.RootDir
+	} else {
+		segments := strings.Split(namespace, ".")
+		dir = filepath.Join(s.RootDir, filepath.Join(segments...))
+	}
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			if namespace == "" {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("discovery: namespace %q not found", namespace)
+		}
+		return nil, fmt.Errorf("discovery: list recursive %q: %w", namespace, err)
+	}
+
+	var result []Child
+	s.walkChildrenRecursive(dir, "", &result)
+	return result, nil
+}
+
+// walkChildrenRecursive обходит директорию dir. prefix — префикс для
+// детей текущего уровня: при "" дети не получают префикса, иначе
+// fullName = prefix + "." + childName.
+func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			name := entry.Name()
+			if name == "config.yaml" || !strings.HasSuffix(name, ".yaml") {
+				continue
+			}
+			childPath := filepath.Join(dir, name)
+			childName := strings.TrimSuffix(name, ".yaml")
+			fullName := childName
+			if prefix != "" {
+				fullName = prefix + "." + childName
+			}
+			*result = append(*result, Child{
+				Name:         fullName,
+				Type:         "module",
+				ManifestPath: childPath,
+				ModuleRoot:   dir,
+			})
+		} else {
+			childDir := filepath.Join(dir, entry.Name())
+			configPath := filepath.Join(childDir, "config.yaml")
+			childName := entry.Name()
+			fullName := childName
+			if prefix != "" {
+				fullName = prefix + "." + childName
+			}
+			if fileExists(configPath) {
+				*result = append(*result, Child{
+					Name:         fullName,
+					Type:         "module",
+					ManifestPath: configPath,
+					ModuleRoot:   childDir,
+				})
+				// Модуль-пакет: не углубляемся внутрь
+			} else {
+				*result = append(*result, Child{
+					Name: fullName,
+					Type: "namespace",
+				})
+				s.walkChildrenRecursive(childDir, fullName, result)
+			}
+		}
+	}
 }

@@ -246,6 +246,88 @@ func TestListChildrenExcludesConfigYamlAtCurrentLevel(t *testing.T) {
 	}
 }
 
+func TestListChildrenRecursiveRoot(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "docker.yaml"), "name: docker\n")
+	nsDir := filepath.Join(dir, "images")
+	mkdir(t, nsDir)
+	writeFile(t, filepath.Join(nsDir, "png.yaml"), "name: images.png\n")
+	converterDir := filepath.Join(nsDir, "converter")
+	mkdir(t, converterDir)
+	writeFile(t, filepath.Join(converterDir, "to_png.yaml"), "name: images.converter.to_png\n")
+
+	s := NewGlobalSource(dir)
+	children, err := s.ListChildrenRecursive("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(children) != 5 {
+		t.Fatalf("expected 5 children, got %d: %+v", len(children), children)
+	}
+
+	byName := make(map[string]string)
+	for _, c := range children {
+		byName[c.Name] = c.Type
+	}
+	if byName["docker"] != "module" {
+		t.Fatalf("expected module 'docker', got %q", byName["docker"])
+	}
+	if byName["images"] != "namespace" {
+		t.Fatalf("expected namespace 'images', got %q", byName["images"])
+	}
+	if byName["images.png"] != "module" {
+		t.Fatalf("expected module 'images.png', got %q", byName["images.png"])
+	}
+	if byName["images.converter"] != "namespace" {
+		t.Fatalf("expected namespace 'images.converter', got %q", byName["images.converter"])
+	}
+	if byName["images.converter.to_png"] != "module" {
+		t.Fatalf("expected module 'images.converter.to_png', got %q", byName["images.converter.to_png"])
+	}
+}
+
+func TestListChildrenRecursiveFromNamespace(t *testing.T) {
+	dir := t.TempDir()
+	nsDir := filepath.Join(dir, "images")
+	mkdir(t, nsDir)
+	writeFile(t, filepath.Join(nsDir, "png.yaml"), "name: images.png\n")
+	converterDir := filepath.Join(nsDir, "converter")
+	mkdir(t, converterDir)
+	writeFile(t, filepath.Join(converterDir, "to_png.yaml"), "name: images.converter.to_png\n")
+
+	s := NewGlobalSource(dir)
+	children, err := s.ListChildrenRecursive("images")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(children) != 3 {
+		t.Fatalf("expected 3 children, got %d: %+v", len(children), children)
+	}
+
+	byName := make(map[string]string)
+	for _, c := range children {
+		byName[c.Name] = c.Type
+	}
+	if byName["png"] != "module" {
+		t.Fatalf("expected module 'png', got %q", byName["png"])
+	}
+	if byName["converter"] != "namespace" {
+		t.Fatalf("expected namespace 'converter', got %q", byName["converter"])
+	}
+	if byName["converter.to_png"] != "module" {
+		t.Fatalf("expected module 'converter.to_png', got %q", byName["converter.to_png"])
+	}
+}
+
+func TestListChildrenRecursiveNonExistentReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	s := NewGlobalSource(dir)
+	_, err := s.ListChildrenRecursive("nonexistent")
+	if err == nil {
+		t.Fatal("expected error for non-existent namespace")
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {

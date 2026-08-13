@@ -116,3 +116,84 @@ func TestParseArgsListWithNestedNamespace(t *testing.T) {
 		t.Fatalf("unexpected namespace: %q", req.namespace)
 	}
 }
+
+func TestParseArgsListVerbose(t *testing.T) {
+	args := []string{"list", "--verbose"}
+	_, _, _, err := parseArgs(args)
+	var req *listRequest
+	if !errors.As(err, &req) {
+		t.Fatalf("expected *listRequest, got: %v", err)
+	}
+	if !req.verbose {
+		t.Fatal("expected verbose=true")
+	}
+}
+
+func TestParseArgsListVerboseShort(t *testing.T) {
+	args := []string{"list", "-v"}
+	_, _, _, err := parseArgs(args)
+	var req *listRequest
+	if !errors.As(err, &req) {
+		t.Fatalf("expected *listRequest, got: %v", err)
+	}
+	if !req.verbose {
+		t.Fatal("expected verbose=true")
+	}
+}
+
+func TestParseArgsListWithNamespaceVerbose(t *testing.T) {
+	args := []string{"images", "list", "-v"}
+	_, _, _, err := parseArgs(args)
+	var req *listRequest
+	if !errors.As(err, &req) {
+		t.Fatalf("expected *listRequest, got: %v", err)
+	}
+	if req.namespace != "images" {
+		t.Fatalf("unexpected namespace: %q", req.namespace)
+	}
+	if !req.verbose {
+		t.Fatal("expected verbose=true")
+	}
+}
+
+func TestParseArgsListRecurse(t *testing.T) {
+	args := []string{"list", "--recurse"}
+	_, _, _, err := parseArgs(args)
+	var req *listRequest
+	if !errors.As(err, &req) {
+		t.Fatalf("expected *listRequest, got: %v", err)
+	}
+	if !req.recurse {
+		t.Fatal("expected recurse=true")
+	}
+}
+
+func TestParseArgsListRecurseShort(t *testing.T) {
+	args := []string{"list", "-r"}
+	_, _, _, err := parseArgs(args)
+	var req *listRequest
+	if !errors.As(err, &req) {
+		t.Fatalf("expected *listRequest, got: %v", err)
+	}
+	if !req.recurse {
+		t.Fatal("expected recurse=true")
+	}
+}
+
+func TestParseArgsListWithNamespaceRecurseVerbose(t *testing.T) {
+	args := []string{"images", "list", "-r", "-v"}
+	_, _, _, err := parseArgs(args)
+	var req *listRequest
+	if !errors.As(err, &req) {
+		t.Fatalf("expected *listRequest, got: %v", err)
+	}
+	if req.namespace != "images" {
+		t.Fatalf("unexpected namespace: %q", req.namespace)
+	}
+	if !req.recurse {
+		t.Fatal("expected recurse=true")
+	}
+	if !req.verbose {
+		t.Fatal("expected verbose=true")
+	}
+}
