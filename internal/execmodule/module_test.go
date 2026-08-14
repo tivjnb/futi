@@ -96,6 +96,162 @@ func TestLoadModuleInvalidYAML(t *testing.T) {
 	}
 }
 
+func TestLoadModuleWithDefaultCmd(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "echo_mod.yaml")
+	writeFile(t, manifestPath, `
+name: echo_mod
+description: Echo utilities
+cmd: "echo {{.args}}"
+commands:
+  upper:
+    cmd: "echo {{.args}} | tr a-z A-Z"
+`)
+
+	mod, err := LoadModule(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mod.Cmd != "echo {{.args}}" {
+		t.Fatalf("unexpected default cmd: %q", mod.Cmd)
+	}
+	if mod.Description != "Echo utilities" {
+		t.Fatalf("unexpected description: %q", mod.Description)
+	}
+	if len(mod.Commands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(mod.Commands))
+	}
+}
+
+func TestLoadModuleWithoutDefaultCmd(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "db.yaml")
+	writeFile(t, manifestPath, `
+name: db
+commands:
+  status:
+    cmd: "echo status"
+`)
+
+	mod, err := LoadModule(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mod.Cmd != "" {
+		t.Fatalf("expected empty default cmd, got %q", mod.Cmd)
+	}
+}
+
+func TestLoadModuleWithSubcommands(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "db.yaml")
+	writeFile(t, manifestPath, `
+name: db
+commands:
+  migrate:
+    description: Database migrations
+    commands:
+      up:
+        description: Run migrations up
+        cmd: "echo migrating up"
+      down:
+        description: Run migrations down
+        cmd: "echo migrating down"
+      create:
+        description: Create a new migration
+        params:
+          - name: name
+            type: string
+            required: true
+        cmd: "echo create {{.name}}"
+  status:
+    cmd: "echo status"
+`)
+
+	mod, err := LoadModule(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	migrate, ok := mod.Commands["migrate"]
+	if !ok {
+		t.Fatal("command 'migrate' not found")
+	}
+	if migrate.Description != "Database migrations" {
+		t.Fatalf("unexpected description: %q", migrate.Description)
+	}
+	if len(migrate.Commands) != 3 {
+		t.Fatalf("expected 3 subcommands, got %d", len(migrate.Commands))
+	}
+
+	up, ok := migrate.Commands["up"]
+	if !ok {
+		t.Fatal("subcommand 'up' not found")
+	}
+	if up.Cmd != "echo migrating up" {
+		t.Fatalf("unexpected up cmd: %q", up.Cmd)
+	}
+	if up.Description != "Run migrations up" {
+		t.Fatalf("unexpected up description: %q", up.Description)
+	}
+
+	create, ok := migrate.Commands["create"]
+	if !ok {
+		t.Fatal("subcommand 'create' not found")
+	}
+	if len(create.Params) != 1 {
+		t.Fatalf("expected 1 param, got %d", len(create.Params))
+	}
+	if create.Params[0].Name != "name" || !create.Params[0].Required {
+		t.Fatalf("unexpected param: %+v", create.Params[0])
+	}
+
+	status, ok := mod.Commands["status"]
+	if !ok {
+		t.Fatal("command 'status' not found")
+	}
+	if status.Cmd != "echo status" {
+		t.Fatalf("unexpected status cmd: %q", status.Cmd)
+	}
+	if len(status.Commands) != 0 {
+		t.Fatalf("expected 0 subcommands, got %d", len(status.Commands))
+	}
+}
+
+func TestLoadModuleNestedSubcommands(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "db.yaml")
+	writeFile(t, manifestPath, `
+name: db
+commands:
+  migrate:
+    commands:
+      up:
+        commands:
+          force:
+            cmd: "echo force"
+          safe:
+            cmd: "echo safe"
+`)
+
+	mod, err := LoadModule(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	migrate := mod.Commands["migrate"]
+	up := migrate.Commands["up"]
+	if len(up.Commands) != 2 {
+		t.Fatalf("expected 2 nested subcommands, got %d", len(up.Commands))
+	}
+	if up.Commands["force"].Cmd != "echo force" {
+		t.Fatal("nested subcommand 'force' not parsed correctly")
+	}
+	if up.Commands["safe"].Cmd != "echo safe" {
+		t.Fatal("nested subcommand 'safe' not parsed correctly")
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {

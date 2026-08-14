@@ -98,6 +98,7 @@ $ futi list
 ```yaml
 name: docker                    # опционально, по умолчанию = имя файла
 description: Docker management  # опционально
+cmd: "docker ps"                # опционально: команда по умолчанию (без явной команды)
 
 commands:
   # Простая команда без параметров
@@ -109,7 +110,7 @@ commands:
     description: Build Docker image
     params:
       - name: tag
-        type: string
+        type: string            # string (по умолчанию), bool или int
         required: true
       - name: file
         type: string
@@ -126,6 +127,17 @@ commands:
         type: bool
         default: false
     cmd: "docker logs {{.container}} {{if .follow}}-f{{end}}"
+
+  # Вложенные команды: команда может иметь commands вместе с cmd или вместо него.
+  # Если указан cmd + commands, cmd вызывается как fallback при отсутствии subcommand.
+  migrate:
+    description: Database migrations
+    cmd: "migrate"              # fallback если не указан subcommand
+    commands:
+      up:
+        cmd: "migrate up"
+      down:
+        cmd: "migrate down"
 ```
 
 ### Поля
@@ -134,12 +146,14 @@ commands:
 |---|---|---|
 | `name` | string | Имя модуля (опционально, по умолчанию = имя файла/директории) |
 | `description` | string | Описание модуля (опционально) |
+| `cmd` | string | Команда по умолчанию на уровне модуля (опционально) |
 | `commands` | map | Команды модуля |
 | `commands.<name>.description` | string | Описание команды (опционально) |
-| `commands.<name>.cmd` | string | Шаблон команды (обязательно) |
+| `commands.<name>.cmd` | string | Шаблон команды (если есть `commands` — fallback) |
 | `commands.<name>.params` | list | Параметры команды (опционально) |
+| `commands.<name>.commands` | map | Вложенные команды (опционально) |
 | `params[].name` | string | Имя параметра (обязательно) |
-| `params[].type` | string | Тип: `string` (по умолчанию) или `bool` |
+| `params[].type` | string | Тип: `string` (по умолчанию), `bool` или `int` |
 | `params[].required` | bool | Обязательный параметр (по умолчанию `false`) |
 | `params[].default` | string | Значение по умолчанию |
 
@@ -230,7 +244,28 @@ futi использует Go `text/template`:
 | Синтаксис | Описание |
 |---|---|
 | `{{.name}}` | Подстановка значения параметра |
+| `{{.args}}` | Все аргументы после `--` (строка, пробел-joined) |
+| `{{index .args_list 0}}` | N-й аргумент после `--` (доступ к массиву) |
 | `{{if .follow}}...{{end}}` | Условный блок (для bool) |
+
+Аргументы после `--` передаются в шаблон:
+
+```bash
+futi echo_mod echo -- hello world
+# → cmd: "echo {{.args}}" → echo hello world
+
+futi echo_mod echo -- hello world
+# → cmd: "echo {{index .args_list 0}}" → echo hello
+```
+
+Команда по умолчанию (на уровне модуля) вызывается без явной команды:
+
+```bash
+futi echo_mod -- hello world
+# → module.cmd: "echo {{.args}}" → echo hello world
+```
+
+> **Примечание:** разделитель `--` для args может быть заменён гибридным режимом в будущих версиях (позиционные args для листовых команд без явного `--`).
 
 Bool-параметры нормализуются: `false`, `0`, `no`, `""` → falsy; `true`, `1`, `yes` → truthy.
 
@@ -287,20 +322,23 @@ futi mytool deploy --env staging
 ## Команды CLI
 
 ```bash
-futi <namespace...> <command> [--param val]    # вызов команды модуля
-futi list                                       # модули и namespaces в корне
-futi <namespace...> list                        # содержимое namespace или команды модуля
-futi <namespace...> list -v                     # то же, с колонкой PATH
-futi <namespace...> list -r                     # рекурсивный обход поддерева
-futi -h | --help                                # справка
+futi <namespace...> <command> [--param val] [-- args]   # вызов команды модуля
+futi <namespace>                            # команда по умолчанию (если есть cmd на уровне модуля)
+futi list                                   # модули и namespaces в корне
+futi <namespace...> list                    # содержимое namespace или команды модуля
+futi <namespace...> list -v                 # то же, с колонкой PATH
+futi <namespace...> list -r                 # рекурсивный обход поддерева
+futi -h | --help                            # справка
 ```
 
-Парсинг: последний позиционный аргумент (без `--`) — команда, всё до него — namespace (сегменты через `.`).
+Парсинг: последний позиционный аргумент (до `--`) — команда, всё до него — namespace (сегменты через `.`). Аргументы после `--` передаются в шаблон команды как `{{.args}}` (строка) и `{{.args_list}}` (массив).
 
 ```bash
 futi docker build --tag myapp        # namespace=docker, command=build
 futi dev deploy staging              # namespace=dev.deploy, command=staging
 futi k8s logs mypod --follow         # namespace=k8s, command=logs, follow=true
+futi echo_mod echo -- hello world    # namespace=echo_mod, command=echo, args="hello world"
+futi echo_mod -- hello world         # default cmd модуля echo_mod, args="hello world"
 ```
 
 ### Навигация через `list`
@@ -391,6 +429,32 @@ $ futi images list -r                # от контекста images
 ---
 
 ## Примеры
+
+### Echo-модуль (args + default cmd)
+
+```yaml
+# ~/.config/futi/modules/echo_mod.yaml
+name: echo_mod
+description: Echo utilities
+cmd: "echo {{.args}}"           # команда по умолчанию
+commands:
+  upper:
+    description: Uppercase echo
+    cmd: "echo {{.args}} | tr a-z A-Z"
+  repeat:
+    description: Repeat first arg N times
+    params:
+      - name: count
+        type: int
+        required: true
+    cmd: "for i in $(seq 1 {{.count}}); do echo {{index .args_list 0}}; done"
+```
+
+```bash
+futi echo_mod -- hello world         # echo hello world (default cmd)
+futi echo_mod upper -- hello world   # echo hello world | tr a-z A-Z
+futi echo_mod repeat --count 3 -- hi # hi\nhi\nhi
+```
 
 ### Git shortcuts
 
@@ -509,10 +573,8 @@ futi находится на стадии PRE PRE MVP. Ниже — направ
 
 ### Ближайшие планы
 
-- **Авто-discovery из CWD** — автоматический поиск `./futi.yaml` или `./.futi/` в текущей директории, без явного указания в config.yaml
-- **Типы параметров** — `int`, `file`, `json`, `env`, `secret` (безопасная передача через env, не args)
-- **Subcommands** — вложенные команды внутри модуля (`futi db migrate up`)
-- **Сохранение exit code** — проброс кода завершения вызываемой команды
+- **Типы параметров** — расширение за пределы `int`: `file`, `json`, `env`, `secret` (безопасная передача через env, не args)
+- **Гибридный args-парсинг** — позиционные args для листовых команд без явного `--`
 - **Shell completion** — автодополнение для bash/zsh/fish
 
 ### Unified I/O

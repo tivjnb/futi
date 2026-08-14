@@ -8,18 +8,26 @@ import (
 )
 
 // Module — загруженный YAML-модуль.
+// Cmd — опциональная команда по умолчанию: вызывается, если не указана
+// конкретная команда. Позволяет использовать модуль как одну команду:
+// `futi echo_mod -- hello world` выполнит Cmd с args="hello world".
 type Module struct {
 	Name        string
 	Description string
 	Root        string
+	Cmd         string
 	Commands    map[string]*Command
 }
 
 // Command — одна команда модуля.
+// Команда может быть листом (Cmd != ""), ветвью (Commands != nil)
+// или одновременно и тем, и другим — Cmd и Commands ортогональны:
+// Cmd = что выполнить, Commands = куда можно спуститься дальше.
 type Command struct {
 	Description string
 	Params      []Param
 	Cmd         string
+	Commands    map[string]*Command
 }
 
 // Param — параметр команды.
@@ -34,13 +42,15 @@ type Param struct {
 type moduleYAML struct {
 	Name        string                 `yaml:"name"`
 	Description string                 `yaml:"description"`
+	Cmd         string                 `yaml:"cmd"`
 	Commands    map[string]commandYAML `yaml:"commands"`
 }
 
 type commandYAML struct {
-	Description string      `yaml:"description"`
-	Params      []paramYAML `yaml:"params"`
-	Cmd         string      `yaml:"cmd"`
+	Description string                 `yaml:"description"`
+	Params      []paramYAML            `yaml:"params"`
+	Cmd         string                 `yaml:"cmd"`
+	Commands    map[string]commandYAML `yaml:"commands"`
 }
 
 type paramYAML struct {
@@ -65,26 +75,43 @@ func LoadModule(manifestPath, moduleRoot string) (*Module, error) {
 
 	commands := make(map[string]*Command, len(raw.Commands))
 	for name, c := range raw.Commands {
-		params := make([]Param, len(c.Params))
-		for i, p := range c.Params {
-			params[i] = Param{
-				Name:     p.Name,
-				Type:     p.Type,
-				Required: p.Required,
-				Default:  p.Default,
-			}
-		}
-		commands[name] = &Command{
-			Description: c.Description,
-			Params:      params,
-			Cmd:         c.Cmd,
-		}
+		commands[name] = parseCommand(c)
 	}
 
 	return &Module{
 		Name:        raw.Name,
 		Description: raw.Description,
 		Root:        moduleRoot,
+		Cmd:         raw.Cmd,
 		Commands:    commands,
 	}, nil
+}
+
+// parseCommand рекурсивно преобразует commandYAML в Command,
+// включая вложенные commands.
+func parseCommand(c commandYAML) *Command {
+	params := make([]Param, len(c.Params))
+	for i, p := range c.Params {
+		params[i] = Param{
+			Name:     p.Name,
+			Type:     p.Type,
+			Required: p.Required,
+			Default:  p.Default,
+		}
+	}
+
+	cmd := &Command{
+		Description: c.Description,
+		Params:      params,
+		Cmd:         c.Cmd,
+	}
+
+	if len(c.Commands) > 0 {
+		cmd.Commands = make(map[string]*Command, len(c.Commands))
+		for name, sub := range c.Commands {
+			cmd.Commands[name] = parseCommand(sub)
+		}
+	}
+
+	return cmd
 }

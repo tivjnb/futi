@@ -16,64 +16,97 @@ import (
 
 // Run находит модуль через source, загружает его, валидирует параметры,
 // рендерит cmd-шаблон и выполняет команду.
+// Поддерживает subcommands: progressive resolution пробует резолвить модуль
+// от длиннейшего namespace к коротчайшему; остаток = command path.
+// args — строка после `--` (для {{.args}}), argsList — массив (для {{.args_list}}).
+// command="" означает вызов default cmd модуля (Module.Cmd).
 // stdout/stderr — опциональные writers для перехвата вывода (nil = os.Stdout/os.Stderr).
 func Run(
 	ctx context.Context,
 	source discovery.Source,
 	namespace, command string,
 	params map[string]string,
+	args string,
+	argsList []string,
 	stdout, stderr io.Writer,
 ) error {
-	manifestPath, moduleRoot, err := source.Resolve(namespace)
-	if err != nil {
-		return fmt.Errorf("modulerunner: %w", err)
+	// Реконструкция positional args из namespace + command.
+	var positional []string
+	if namespace == "" {
+		positional = []string{command}
+	} else if command == "" {
+		positional = []string{namespace}
+	} else {
+		positional = strings.Split(namespace, ".")
+		positional = append(positional, command)
 	}
 
-	mod, err := execmodule.LoadModule(manifestPath, moduleRoot)
-	if err != nil {
-		return fmt.Errorf("modulerunner: %w", err)
+	// Progressive resolution: пробуем резолвить модуль от длиннейшего
+	// namespace к коротчайшему. Остаток = command path.
+	// i=len(positional) → ns=все, commandPath=[] (default cmd случай).
+	for i := len(positional); i >= 0; i-- {
+		ns := strings.Join(positional[:i], ".")
+		commandPath := positional[i:]
+
+		manifestPath, moduleRoot, err := source.Resolve(ns)
+		if err != nil {
+			continue
+		}
+
+		mod, err := execmodule.LoadModule(manifestPath, moduleRoot)
+		if err != nil {
+			return fmt.Errorf("modulerunner: %w", err)
+		}
+
+		// commandPath пустой → default cmd модуля
+		var cmd *execmodule.Command
+		if len(commandPath) == 0 {
+			if mod.Cmd == "" {
+				return fmt.Errorf("modulerunner: module %q has no default command; specify one", ns)
+			}
+			cmd = &execmodule.Command{Cmd: mod.Cmd}
+		} else {
+			cmd, err = mod.ResolveCommand(commandPath)
+			if err != nil {
+				return fmt.Errorf("modulerunner: %w", err)
+			}
+		}
+
+		resolved, err := cmd.Validate(params)
+		if err != nil {
+			return fmt.Errorf("modulerunner: %w", err)
+		}
+
+		rendered, err := cmd.Render(resolved, args, argsList)
+		if err != nil {
+			return fmt.Errorf("modulerunner: %w", err)
+		}
+
+		parts, err := shlex.Split(rendered)
+		if err != nil {
+			return fmt.Errorf("modulerunner: split command %q: %w", rendered, err)
+		}
+		if len(parts) == 0 {
+			return fmt.Errorf("modulerunner: empty command after render")
+		}
+
+		// Резолвинг относительных путей к скриптам пакета от moduleRoot.
+		if !filepath.IsAbs(parts[0]) && strings.Contains(parts[0], "/") {
+			parts[0] = filepath.Join(moduleRoot, parts[0])
+		}
+
+		cfg := executor.NewConfig().WithDir(moduleRoot)
+		if stdout != nil {
+			cfg = cfg.WithStdout(stdout)
+		}
+		if stderr != nil {
+			cfg = cfg.WithStderr(stderr)
+		}
+
+		return executor.RunWithConfig(ctx, cfg, parts[0], parts[1:]...)
 	}
 
-	cmd, ok := mod.Commands[command]
-	if !ok {
-		return fmt.Errorf("modulerunner: command %q not found in module %q", command, namespace)
-	}
-
-	resolved, err := cmd.Validate(params)
-	if err != nil {
-		return fmt.Errorf("modulerunner: %w", err)
-	}
-
-	rendered, err := cmd.Render(resolved)
-	if err != nil {
-		return fmt.Errorf("modulerunner: %w", err)
-	}
-
-	parts, err := shlex.Split(rendered)
-	if err != nil {
-		return fmt.Errorf("modulerunner: split command %q: %w", rendered, err)
-	}
-	if len(parts) == 0 {
-		return fmt.Errorf("modulerunner: empty command after render")
-	}
-
-	// Резолвинг относительных путей к скриптам пакета от moduleRoot.
-	// Если executable содержит "/" и не абсолютный — joined с moduleRoot.
-	// exec.LookPath проверяет CWD процесса, а не command.Dir, поэтому
-	// резолвим явно для скриптов пакета (./scripts/deploy.sh и т.д.).
-	if !filepath.IsAbs(parts[0]) && strings.Contains(parts[0], "/") {
-		parts[0] = filepath.Join(moduleRoot, parts[0])
-	}
-
-	cfg := executor.NewConfig().WithDir(moduleRoot)
-	if stdout != nil {
-		cfg = cfg.WithStdout(stdout)
-	}
-	if stderr != nil {
-		cfg = cfg.WithStderr(stderr)
-	}
-
-	return executor.RunWithConfig(ctx, cfg, parts[0], parts[1:]...)
+	return fmt.Errorf("modulerunner: module not found for %v", positional)
 }
 
 // CommandInfo описывает команду модуля для листинга.

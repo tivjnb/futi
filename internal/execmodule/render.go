@@ -3,6 +3,7 @@ package execmodule
 import (
 	"bytes"
 	"fmt"
+	"strconv"
 	"strings"
 	"text/template"
 )
@@ -28,6 +29,11 @@ func (c *Command) Validate(provided map[string]string) (map[string]string, error
 		if p.Type == "bool" {
 			val = normalizeBool(val)
 		}
+		if p.Type == "int" && val != "" {
+			if _, err := strconv.Atoi(val); err != nil {
+				return nil, fmt.Errorf("execmodule: param %q must be int, got %q", p.Name, val)
+			}
+		}
 		resolved[p.Name] = val
 	}
 
@@ -47,19 +53,25 @@ func (c *Command) Validate(provided map[string]string) (map[string]string, error
 	return resolved, nil
 }
 
-// Render подставляет значения параметров в cmd-шаблон.
-// Использует Go text/template: {{.var}} для подстановки,
+// Render подставляет значения параметров и args в cmd-шаблон.
+// Использует Go text/template: {{.var}} для подстановки params,
+// {{.args}} для строки args, {{index .args_list N}} для элемента массива args,
 // {{if .bool}}...{{end}} для условных блоков.
-func (c *Command) Render(params map[string]string) (string, error) {
+func (c *Command) Render(params map[string]string, args string, argsList []string) (string, error) {
 	tmpl, err := template.New("cmd").Option("missingkey=error").Parse(c.Cmd)
 	if err != nil {
 		return "", fmt.Errorf("execmodule: parse template %q: %w", c.Cmd, err)
 	}
 
-	data := make(map[string]string, len(params))
+	data := make(map[string]interface{}, len(params)+2)
 	for k, v := range params {
 		data[k] = v
 	}
+	data["args"] = args
+	if argsList == nil {
+		argsList = []string{}
+	}
+	data["args_list"] = argsList
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {

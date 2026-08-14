@@ -62,7 +62,7 @@ func TestRenderSubstitutesVariables(t *testing.T) {
 	cmd := &Command{
 		Cmd: "docker build -t {{.tag}} -f {{.file}} .",
 	}
-	rendered, err := cmd.Render(map[string]string{"tag": "myapp", "file": "Dockerfile.dev"})
+	rendered, err := cmd.Render(map[string]string{"tag": "myapp", "file": "Dockerfile.dev"}, "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestRenderConditionalBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	rendered, err := cmd.Render(resolved)
+	rendered, err := cmd.Render(resolved, "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestRenderConditionalBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	renderedFalse, err := cmd.Render(resolvedFalse)
+	renderedFalse, err := cmd.Render(resolvedFalse, "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,8 +146,153 @@ func TestRenderMissingVariableReturnsError(t *testing.T) {
 	cmd := &Command{
 		Cmd: "echo {{.msg}}",
 	}
-	_, err := cmd.Render(map[string]string{})
+	_, err := cmd.Render(map[string]string{}, "", nil)
 	if err == nil {
 		t.Fatal("expected error for missing variable in template")
+	}
+}
+
+func TestRenderSubstitutesArgs(t *testing.T) {
+	cmd := &Command{
+		Cmd: "echo {{.args}}",
+	}
+	rendered, err := cmd.Render(map[string]string{}, "hello world", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rendered != "echo hello world" {
+		t.Fatalf("unexpected render: %q, want %q", rendered, "echo hello world")
+	}
+}
+
+func TestRenderSubstitutesArgsList(t *testing.T) {
+	cmd := &Command{
+		Cmd: "echo {{index .args_list 0}} {{index .args_list 1}}",
+	}
+	rendered, err := cmd.Render(map[string]string{}, "", []string{"hello", "world"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rendered != "echo hello world" {
+		t.Fatalf("unexpected render: %q, want %q", rendered, "echo hello world")
+	}
+}
+
+func TestRenderArgsAndParams(t *testing.T) {
+	cmd := &Command{
+		Cmd: "echo {{.name}} {{.args}}",
+	}
+	rendered, err := cmd.Render(map[string]string{"name": "alice"}, "hello world", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rendered != "echo alice hello world" {
+		t.Fatalf("unexpected render: %q, want %q", rendered, "echo alice hello world")
+	}
+}
+
+func TestRenderArgsEmpty(t *testing.T) {
+	cmd := &Command{
+		Cmd: "echo {{.args}}",
+	}
+	rendered, err := cmd.Render(map[string]string{}, "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rendered != "echo " {
+		t.Fatalf("unexpected render: %q, want %q", rendered, "echo ")
+	}
+}
+
+func TestRenderArgsListEmpty(t *testing.T) {
+	cmd := &Command{
+		Cmd: "echo {{.args}}",
+	}
+	rendered, err := cmd.Render(map[string]string{}, "", []string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rendered != "echo " {
+		t.Fatalf("unexpected render: %q, want %q", rendered, "echo ")
+	}
+}
+
+func TestValidateIntParamValid(t *testing.T) {
+	cmd := &Command{
+		Cmd: "echo {{.count}}",
+		Params: []Param{
+			{Name: "count", Type: "int", Required: true},
+		},
+	}
+	resolved, err := cmd.Validate(map[string]string{"count": "42"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved["count"] != "42" {
+		t.Fatalf("expected %q, got %q", "42", resolved["count"])
+	}
+}
+
+func TestValidateIntParamInvalid(t *testing.T) {
+	cmd := &Command{
+		Cmd: "echo {{.count}}",
+		Params: []Param{
+			{Name: "count", Type: "int", Required: true},
+		},
+	}
+	_, err := cmd.Validate(map[string]string{"count": "abc"})
+	if err == nil {
+		t.Fatal("expected error for non-int value")
+	}
+	if !strings.Contains(err.Error(), "count") || !strings.Contains(err.Error(), "int") {
+		t.Fatalf("error should mention param name and type, got: %v", err)
+	}
+}
+
+func TestValidateIntParamDefault(t *testing.T) {
+	cmd := &Command{
+		Cmd: "echo {{.count}}",
+		Params: []Param{
+			{Name: "count", Type: "int", Default: "10"},
+		},
+	}
+	resolved, err := cmd.Validate(map[string]string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved["count"] != "10" {
+		t.Fatalf("expected default %q, got %q", "10", resolved["count"])
+	}
+}
+
+func TestValidateIntParamNotRequiredEmpty(t *testing.T) {
+	cmd := &Command{
+		Cmd: "echo {{.count}}",
+		Params: []Param{
+			{Name: "count", Type: "int"},
+		},
+	}
+	resolved, err := cmd.Validate(map[string]string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved["count"] != "" {
+		t.Fatalf("expected empty, got %q", resolved["count"])
+	}
+}
+
+func TestValidateIntParamNegative(t *testing.T) {
+	cmd := &Command{
+		Cmd: "echo {{.count}}",
+		Params: []Param{
+			{Name: "count", Type: "int", Required: true},
+		},
+	}
+	resolved, err := cmd.Validate(map[string]string{"count": "-5"})
+	if err != nil {
+		t.Fatalf("unexpected error for negative int: %v", err)
+	}
+	if resolved["count"] != "-5" {
+		t.Fatalf("expected %q, got %q", "-5", resolved["count"])
 	}
 }
