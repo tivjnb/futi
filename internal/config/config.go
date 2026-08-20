@@ -12,6 +12,24 @@ import (
 // Config — главный конфиг futi.
 type Config struct {
 	Sources []SourceConfig `yaml:"sources"`
+	Cache   CacheConfig    `yaml:"cache"`
+}
+
+// CacheConfig — настройки кэша модулей.
+//
+// Refresh — стратегия обновления:
+//   - "every_time" (default) — обновлять при каждом запуске CLI.
+//   - "every_t_min" — обновлять раз в Time (см. ниже).
+//   - "force_only" — никогда автоматически, только `futi cache refresh`.
+//
+// Time — длительность для "every_t_min". Формат: "30m", "2h", "1d4h".
+// Игнорируется для "every_time" и "force_only".
+//
+// Пустая секция (отсутствует в config.yaml) → zero-value → AlwaysPolicy (default).
+// Валидация значений — в modulecache.NewPolicyFromConfig.
+type CacheConfig struct {
+	Refresh string `yaml:"refresh"`
+	Time    string `yaml:"time"`
 }
 
 // SourceConfig описывает один источник модулей.

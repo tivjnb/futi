@@ -123,6 +123,53 @@ sources:
 	}
 }
 
+// TestLoadParsesCacheSection проверяет, что секция cache парсится корректно.
+func TestLoadParsesCacheSection(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, `
+sources:
+  - path: /home/user/.config/futi/modules
+cache:
+  refresh: every_t_min
+  time: 30m
+`)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Cache.Refresh != "every_t_min" {
+		t.Fatalf("expected refresh=every_t_min, got %q", cfg.Cache.Refresh)
+	}
+	if cfg.Cache.Time != "30m" {
+		t.Fatalf("expected time=30m, got %q", cfg.Cache.Time)
+	}
+}
+
+// TestLoadCacheSectionMissingDefaultsToEmpty проверяет, что отсутствующая
+// секция cache → zero-value CacheConfig (Refresh="", Time="").
+// NewPolicyFromConfig("", "") → AlwaysPolicy (default).
+func TestLoadCacheSectionMissingDefaultsToEmpty(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, `
+sources:
+  - path: /home/user/.config/futi/modules
+`)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Cache.Refresh != "" {
+		t.Fatalf("expected empty refresh, got %q", cfg.Cache.Refresh)
+	}
+	if cfg.Cache.Time != "" {
+		t.Fatalf("expected empty time, got %q", cfg.Cache.Time)
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {

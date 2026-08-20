@@ -1,0 +1,54 @@
+// Внимание: package-level doc находится в cache.go (canonical).
+// Этот файл содержит Storage interface, entry/cacheFile типы и MemoryStorage.
+
+package modulecache
+
+import (
+	"time"
+
+	"futi/internal/execmodule"
+)
+
+// entry — одна запись кэша: модуль + метаданные для инвалидации по mtime+size.
+type entry struct {
+	Module  *execmodule.Module
+	ModTime time.Time // mtime файла манифеста
+	Size    int64     // size файла манифеста
+}
+
+// cacheFile — формат на диске (gob-сериализуемый).
+type cacheFile struct {
+	Version         int               // версионирование схемы; текущая = 1
+	LastRefreshTime time.Time         // для every_t_min политики
+	Entries         map[string]entry  // только persistent (глобальные) модули
+}
+
+// Текущая версия схемы cacheFile. При несовпадении — rebuild с пустого состояния.
+const cacheFileVersion = 1
+
+// MemoryStorage — no-op хранилище: Load возвращает пустую cacheFile, Save ничего не делает.
+// Используется как fallback когда persistent кэш недоступен (нет home dir для cache path),
+// и как заготовка для будущего HTTP server (ROADMAP) — long-running процесс с in-memory кэшем.
+type MemoryStorage struct{}
+
+// Load возвращает пустую cacheFile — нет persistent состояния.
+func (MemoryStorage) Load() (cacheFile, error) { return cacheFile{}, nil }
+
+// Save — no-op. Ничего не сохраняет.
+func (MemoryStorage) Save(cacheFile) error { return nil }
+
+// Storage — абстракция над persistent/in-memory хранилищем кэша.
+//
+// Реализации:
+//   - DiskStorage — gob-файл на диске (CLI).
+//   - MemoryStorage — no-op для HTTP (будущее, не реализован).
+type Storage interface {
+	// Load загружает состояние. Возвращает пустую cacheFile (без ошибки), если
+	// storage пуст (файл отсутствует). Возвращает error при повреждении или
+	// несовместимой версии — вызывающий решает: rebuild.
+	Load() (cacheFile, error)
+
+	// Save сохраняет cacheFile целиком (Version, LastRefreshTime, Entries).
+	// Атомарная запись (temp + rename) для DiskStorage.
+	Save(cf cacheFile) error
+}

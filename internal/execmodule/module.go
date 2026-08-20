@@ -60,9 +60,29 @@ type paramYAML struct {
 	Default  string `yaml:"default"`
 }
 
-// LoadModule загружает манифест модуля из YAML-файла.
+// LoadModule загружает манифест модуля из YAML-файла и валидирует схему.
 // moduleRoot — директория модуля (для пакетов со скриптами).
+// Возвращает ошибку при невалидной схеме (первая ошибка из Validate).
+// Для получения полного отчёта всех ошибок используйте ParseModule + Validate.
 func LoadModule(manifestPath, moduleRoot string) (*Module, error) {
+	mod, err := ParseModule(manifestPath, moduleRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	errors, _ := mod.Validate()
+	if len(errors) > 0 {
+		return nil, fmt.Errorf("execmodule: invalid module %q: %w", manifestPath, errors[0])
+	}
+
+	return mod, nil
+}
+
+// ParseModule загружает манифест модуля из YAML-файла без валидации схемы.
+// Используется `futi validate` для получения полного отчёта всех ошибок
+// через последующий вызов Module.Validate().
+// moduleRoot — директория модуля (для пакетов со скриптами).
+func ParseModule(manifestPath, moduleRoot string) (*Module, error) {
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("execmodule: read manifest %q: %w", manifestPath, err)

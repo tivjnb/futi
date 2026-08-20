@@ -21,6 +21,9 @@ futi deploy staging
 - [Параметры и шаблонизация](#параметры-и-шаблонизация)
 - [Модуль-пакет со скриптами](#модуль-пакет-со-скриптами)
 - [Команды CLI](#команды-cli)
+- [Валидация](#валидация)
+- [Создание модулей](#создание-модулей)
+- [Кэш модулей](#кэш-модулей)
 - [Примеры](#примеры)
 - [ROADMAP](#roadmap)
 - [Лицензия](#лицензия)
@@ -73,6 +76,12 @@ commands:
         required: true
     cmd: "echo hello {{.name}}"
 EOF
+```
+
+Или через `futi init` (создаёт модуль с шаблоном):
+
+```bash
+futi init hello --desc "Demo module" --command greet
 ```
 
 Вызовите:
@@ -247,6 +256,8 @@ futi использует Go `text/template`:
 | `{{.args}}` | Все аргументы после `--` (строка, пробел-joined) |
 | `{{index .args_list 0}}` | N-й аргумент после `--` (доступ к массиву) |
 | `{{if .follow}}...{{end}}` | Условный блок (для bool) |
+| `{{.env.FOO}}` | Переменная окружения `FOO` (error если не задана) |
+| `{{if index .env "FOO"}}...{{end}}` | Условный блок по наличию env var |
 
 Аргументы после `--` передаются в шаблон:
 
@@ -269,7 +280,7 @@ futi echo_mod -- hello world
 
 Bool-параметры нормализуются: `false`, `0`, `no`, `""` → falsy; `true`, `1`, `yes` → truthy.
 
-### Валидация
+### Валидация параметров
 
 - `required: true` и параметр не передан → ошибка
 - `default` применяется, если параметр не передан
@@ -284,6 +295,32 @@ cmd: "echo \"{{.msg}}\""   # --msg "hello world" → echo "hello world"
 ```
 
 Без кавычек `shlex` разобьёт строку на отдельные аргументы.
+
+### Переменные окружения в шаблонах
+
+Доступ к переменным окружения через `{{.env.FOO}}` — полезно для секретов (токены, API keys), которые небезопасно передавать через `--param` (видны в `ps`):
+
+```yaml
+commands:
+  deploy:
+    params:
+      - name: env
+        type: string
+        required: true
+    cmd: "deploy --token {{.env.DEPLOY_TOKEN}} --env {{.env}}"
+```
+
+```bash
+export DEPLOY_TOKEN=secret123
+futi deploy --env staging
+# → deploy --token secret123 --env staging
+```
+
+Обращение к несуществующей переменной вызывает ошибку (fail-fast). Для опциональной проверки используйте `index`:
+
+```yaml
+cmd: "deploy {{if index .env \"VERBOSE\"}}-v{{end}}"
+```
 
 ---
 
@@ -328,10 +365,15 @@ futi list                                   # модули и namespaces в ко
 futi <namespace...> list                    # содержимое namespace или команды модуля
 futi <namespace...> list -v                 # то же, с колонкой PATH
 futi <namespace...> list -r                 # рекурсивный обход поддерева
+futi <namespace...> validate                # валидация схемы модуля
+futi init <name> [flags]                    # создать модуль с шаблоном
+futi cache refresh                          # явное обновление кэша модулей
 futi -h | --help                            # справка
 ```
 
 Парсинг: последний позиционный аргумент (до `--`) — команда, всё до него — namespace (сегменты через `.`). Аргументы после `--` передаются в шаблон команды как `{{.args}}` (строка) и `{{.args_list}}` (массив).
+
+`list` и `validate` — зарезервированные слова, их нельзя использовать как имена команд в модуле.
 
 ```bash
 futi docker build --tag myapp        # namespace=docker, command=build
@@ -386,6 +428,20 @@ $ futi docker list                   # модуль в корне: команд�
 └─────────┴─────────────┘
 ```
 
+Если у модуля есть команда по умолчанию (`cmd` на уровне модуля), она отображается первой с маркером `(default)`:
+
+```bash
+$ futi echo_mod list                 # модуль с default cmd
+┌───────────┬─────────────┐
+│ COMMAND   │ DESCRIPTION │
+├───────────┼─────────────┤
+│ (default) │             │
+│ upper     │             │
+└───────────┴─────────────┘
+```
+
+То же касается subcommands: если команда имеет `cmd` + `commands`, `cmd` показывается как `(default)` (fallback при вызове без subcommand).
+
 Логика: если namespace резолвится как модуль — `list` показывает его команды. Если как namespace-директория — показывает непосредственных детей (вложенные namespaces и модули). `list` зарезервирован — нельзя создать команду с именем `list` в модуле.
 
 Флаг `-v`/`--verbose` добавляет колонку `PATH` — путь к манифесту модуля. Полезно при нескольких источниках модулей или отладке:
@@ -425,6 +481,193 @@ $ futi images list -r                # от контекста images
 ```
 
 `-r` игнорируется для модулей (показывает команды как обычно). Можно комбинировать: `futi list -r -v`.
+
+---
+
+## Валидация
+
+`futi validate` проверяет схему модуля без вызова команды — полезно при разработке модуля, в CI или перед публикацией.
+
+```bash
+$ futi docker validate
+OK
+```
+
+Невалидный модуль выводит отчёт со всеми ошибками и предупреждениями за один проход:
+
+```bash
+$ futi bad validate
+ERROR: command "empty": must have cmd or commands
+ERROR: command "build": param "tag" has invalid type "float" (valid: string, bool, int)
+ERROR: command "build": duplicate param "tag"
+validate: module "bad" has 3 error(s)
+$ echo $?
+1
+```
+
+Предупреждения не блокируют (exit code 0):
+
+```bash
+$ futi db validate
+WARNING: command "migrate": has subcommands but no cmd (calling without subcommand will fail)
+$ echo $?
+0
+```
+
+### Что проверяется
+
+**Ошибки** (блокируют загрузку модуля, `futi <ns> <cmd>` упадёт с понятным сообщением):
+
+- команда без `cmd` и без `commands` (бесполезная команда)
+- дубликаты имён `params` в команде
+- `type` параметра не из `{string, bool, int}` (пустой = `string`)
+
+**Предупреждения** (не блокируют, показываются только в `validate`):
+
+- команда с `commands`, но без `cmd` — вызов без subcommand падает в runtime
+
+Валидация выполняется рекурсивно для всех вложенных `commands`. При обычном вызове (`futi <ns> <cmd>`) валидация запускается автоматически при загрузке модуля — `futi validate` нужен для просмотра **всех** ошибок за один проход и для warnings (которые в runtime не показываются).
+
+`validate` зарезервирован как `list` — нельзя создать команду с именем `validate` в модуле.
+
+---
+
+## Создание модулей
+
+`futi init` создаёт YAML-модуль с шаблоном — не нужно копировать из README вручную. Модуль сразу доступен через auto-discovery.
+
+```bash
+futi init mytool                          # ./.futi/mytool.yaml
+futi init dev/mytool                      # ./.futi/dev/mytool.yaml (namespace dev)
+futi init mytool --global                 # ~/.config/futi/modules/mytool.yaml
+```
+
+Флаги:
+
+| Флаг | Описание |
+|---|---|
+| `--desc <text>` | Описание модуля (по умолчанию `My tool`) |
+| `--default-cmd <cmd>` | Команда по умолчанию на уровне модуля (`cmd` поле) |
+| `--command <name>` | Добавить команду (можно несколько раз) |
+| `--global` | Создать в `~/.config/futi/modules/` вместо `./.futi/` |
+
+Минимальный модуль (без флагов):
+
+```bash
+$ futi init mytool
+Created: .futi/mytool.yaml
+
+$ futi mytool hello
+hello
+```
+
+```yaml
+# .futi/mytool.yaml
+name: mytool
+description: My tool
+commands:
+  hello:
+    cmd: "echo hello"
+```
+
+С флагами:
+
+```bash
+$ futi init dev/apitool --desc "API utilities" --default-cmd "echo api" --command fetch --command build
+Created: .futi/dev/apitool.yaml
+
+$ futi dev apitool           # default cmd
+api
+
+$ futi dev apitool fetch     # команда
+fetch
+```
+
+```yaml
+# .futi/dev/apitool.yaml
+name: apitool
+description: API utilities
+cmd: "echo api"
+commands:
+  fetch:
+    cmd: "echo fetch"
+  build:
+    cmd: "echo build"
+```
+
+При существующем файле возвращается ошибка (без перезаписи). Созданный модуль проходит валидацию схемы.
+
+---
+
+## Кэш модулей
+
+futi кэширует загруженные модули для устранения повторной загрузки в рамках одного запуска и между запусками. Persistent кэш хранится в `~/.cache/futi/modulecache.gob` (gob-формат), in-memory кэш — в рамках процесса.
+
+### Поведение
+
+- При старте CLI загружает persistent кэш с диска (глобальные модули).
+- In-memory кэш хранит ВСЕ модули (глобальные + локальные из `./.futi/` или `./futi.yaml`).
+- Локальные модули не сохраняются на диск — только глобальные.
+- При Refresh: проверка `mtime + size` — перечитываются только изменившиеся файлы.
+- Удалённые из source модули очищаются из кэша при следующем Refresh.
+- Ошибки загрузки отдельных модулей не фатальны — модуль пропускается, счётчик `skipped` инкрементируется.
+
+### `futi cache refresh`
+
+Явное обновление кэша: обходит source, перечитывает изменившиеся модули, сохраняет на диск.
+
+```bash
+$ futi cache refresh
+Cache refreshed: 5 modules, 2 updated
+
+# С невалидным модулем:
+$ futi cache refresh
+Cache refreshed: 5 modules, 2 updated, 1 skipped
+```
+
+`futi cache` без подкоманды или с неизвестной подкомандой возвращает понятную ошибку:
+
+```bash
+$ futi cache
+error: cache requires a subcommand (try "cache refresh")
+
+$ futi cache foo
+error: unknown cache subcommand "foo" (try "cache refresh")
+```
+
+### Политики обновления
+
+Стратегия автоматического обновления при старте CLI задаётся в `config.yaml`:
+
+```yaml
+cache:
+  refresh: every_time   # every_time (default) | every_t_min | force_only
+  time: "30m"            # только для every_t_min
+```
+
+| Политика | Поведение |
+|---|---|
+| `every_time` | Обновлять при каждом запуске CLI (default). |
+| `every_t_min` | Обновлять раз в указанный интервал `time`. Между запусками — использовать кэш с диска. |
+| `force_only` | Никогда автоматически. Только `futi cache refresh`. |
+
+Формат `time` — расширение `time.ParseDuration` с поддержкой дней через суффикс `d`:
+
+| Пример | Значение |
+|---|---|
+| `30m` | 30 минут |
+| `2h` | 2 часа |
+| `1d` | 1 день (24 часа) |
+| `1d4h` | 1 день 4 часа (28 часов) |
+| `1d2h30m` | 1 день 2 часа 30 минут |
+
+Компоненты суммируются. Отрицательные значения не поддерживаются.
+
+### Fallback
+
+Если `~/.cache/` недоступен (нет `HOME` / `XDG_CACHE_HOME`) — futi fallback-ит на in-memory кэш с предупреждением в stderr. CLI работает, но persistent кэш недоступен до следующего запуска с корректным окружением.
+
+При повреждённом gob-файле — кэш автоматически перестраивается с пустого состояния. При несовпадении версии схемы (новая версия futi) — аналогично.
 
 ---
 
@@ -573,7 +816,7 @@ futi находится на стадии PRE PRE MVP. Ниже — направ
 
 ### Ближайшие планы
 
-- **Типы параметров** — расширение за пределы `int`: `file`, `json`, `env`, `secret` (безопасная передача через env, не args)
+- **Типы параметров** — расширение за пределы `int`: `file`, `json`, `secret` (безопасная передача через env, не args; базовый доступ к env vars уже есть через `{{.env.FOO}}`)
 - **Гибридный args-парсинг** — позиционные args для листовых команд без явного `--`
 - **Shell completion** — автодополнение для bash/zsh/fish
 
@@ -628,7 +871,7 @@ futi module check                 # проверить обновления
 
 - **Module versioning** — версии модулей, совместимость
 - **Project overrides** — переопределение модулей на уровне проекта (приоритет над глобальными)
-- **Config linting** — валидация схем модулей, подсказки
+- **Config linting** — расширение валидации схем (базовая валидация через `futi validate` уже есть): подсказки по best practices, deprecated-поля, стилистика
 - **TUI** — интерактивный просмотр и вызов модулей
 - **Module registry** — публичный реестр шаримых модулей
 

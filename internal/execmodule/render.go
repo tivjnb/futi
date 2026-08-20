@@ -3,6 +3,7 @@ package execmodule
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"text/template"
@@ -53,17 +54,19 @@ func (c *Command) Validate(provided map[string]string) (map[string]string, error
 	return resolved, nil
 }
 
-// Render подставляет значения параметров и args в cmd-шаблон.
+// Render подставляет значения параметров, args и env в cmd-шаблон.
 // Использует Go text/template: {{.var}} для подстановки params,
 // {{.args}} для строки args, {{index .args_list N}} для элемента массива args,
 // {{if .bool}}...{{end}} для условных блоков.
+// {{.env.FOO}} — доступ к переменной окружения FOO (error если не задана,
+// для optional-проверки используйте {{if index .env "FOO"}}).
 func (c *Command) Render(params map[string]string, args string, argsList []string) (string, error) {
 	tmpl, err := template.New("cmd").Option("missingkey=error").Parse(c.Cmd)
 	if err != nil {
 		return "", fmt.Errorf("execmodule: parse template %q: %w", c.Cmd, err)
 	}
 
-	data := make(map[string]interface{}, len(params)+2)
+	data := make(map[string]interface{}, len(params)+3)
 	for k, v := range params {
 		data[k] = v
 	}
@@ -72,6 +75,7 @@ func (c *Command) Render(params map[string]string, args string, argsList []strin
 		argsList = []string{}
 	}
 	data["args_list"] = argsList
+	data["env"] = envMap()
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
@@ -79,6 +83,20 @@ func (c *Command) Render(params map[string]string, args string, argsList []strin
 	}
 
 	return buf.String(), nil
+}
+
+// envMap возвращает map переменных окружения процесса из os.Environ().
+// Используется в Render для доступа к {{.env.FOO}} в шаблонах.
+// Несуществующие переменные вызывают error при missingkey=error —
+// для optional-проверки используйте {{if index .env "FOO"}}.
+func envMap() map[string]string {
+	m := make(map[string]string)
+	for _, kv := range os.Environ() {
+		if i := strings.Index(kv, "="); i >= 0 {
+			m[kv[:i]] = kv[i+1:]
+		}
+	}
+	return m
 }
 
 // normalizeBool приводит строковое значение bool-параметра к каноническому

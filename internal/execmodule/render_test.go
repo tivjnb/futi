@@ -296,3 +296,64 @@ func TestValidateIntParamNegative(t *testing.T) {
 		t.Fatalf("expected %q, got %q", "-5", resolved["count"])
 	}
 }
+
+func TestRenderEnvVar(t *testing.T) {
+	t.Setenv("FUTI_TEST_VAR", "hello")
+	cmd := &Command{Cmd: "echo {{.env.FUTI_TEST_VAR}}"}
+	rendered, err := cmd.Render(map[string]string{}, "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rendered != "echo hello" {
+		t.Fatalf("expected 'echo hello', got %q", rendered)
+	}
+}
+
+func TestRenderEnvVarMissing(t *testing.T) {
+	cmd := &Command{Cmd: "echo {{.env.FUTI_DEFINITELY_NONEXISTENT_VAR_XYZ}}"}
+	_, err := cmd.Render(map[string]string{}, "", nil)
+	if err == nil {
+		t.Fatal("expected error for missing env var")
+	}
+}
+
+func TestRenderEnvVarConditional(t *testing.T) {
+	t.Setenv("FUTI_TEST_COND", "yes")
+	cmd := &Command{Cmd: "{{if index .env \"FUTI_TEST_COND\"}}set{{else}}unset{{end}}"}
+	rendered, err := cmd.Render(map[string]string{}, "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rendered != "set" {
+		t.Fatalf("expected 'set', got %q", rendered)
+	}
+}
+
+func TestRenderEnvVarConditionalMissing(t *testing.T) {
+	cmd := &Command{Cmd: "{{if index .env \"FUTI_NOPE_NOTHERE_XYZ\"}}set{{else}}unset{{end}}"}
+	rendered, err := cmd.Render(map[string]string{}, "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rendered != "unset" {
+		t.Fatalf("expected 'unset', got %q", rendered)
+	}
+}
+
+func TestRenderEnvVarWithParams(t *testing.T) {
+	t.Setenv("FUTI_TEST_TOKEN", "secret123")
+	cmd := &Command{
+		Cmd: "deploy --token {{.env.FUTI_TEST_TOKEN}} --env {{.env_name}}",
+		Params: []Param{
+			{Name: "env_name", Type: "string", Required: true},
+		},
+	}
+	rendered, err := cmd.Render(map[string]string{"env_name": "staging"}, "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expected := "deploy --token secret123 --env staging"
+	if rendered != expected {
+		t.Fatalf("expected %q, got %q", expected, rendered)
+	}
+}

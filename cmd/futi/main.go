@@ -16,13 +16,25 @@ import (
 	"futi/internal/discovery"
 	"futi/internal/execmodule"
 	"futi/internal/modulerunner"
+	"futi/internal/modulecache"
 
 	"github.com/olekukonko/tablewriter"
 )
 
+// loadModule загружает модуль через loader, либо fallback на execmodule.LoadModule
+// при nil-loader. Fallback сохраняет обратную совместимость для тестов и
+// вызовов без кэша.
+func loadModule(loader modulerunner.ModuleLoader, manifestPath, moduleRoot string) (*execmodule.Module, error) {
+	if loader == nil {
+		return execmodule.LoadModule(manifestPath, moduleRoot)
+	}
+	return loader.LoadModule(manifestPath, moduleRoot)
+}
+
 var (
-	errListCommand = errors.New("list command requested")
-	errHelp        = errors.New("help requested")
+	errListCommand     = errors.New("list command requested")
+	errValidateCommand = errors.New("validate command requested")
+	errHelp            = errors.New("help requested")
 )
 
 // parsedArgs — результат парсинга аргументов CLI.
@@ -43,6 +55,14 @@ type listRequest struct {
 
 func (e *listRequest) Error() string { return "list command requested" }
 func (e *listRequest) Unwrap() error { return errListCommand }
+
+// validateRequest сигнализирует, что запрошена валидация модуля.
+type validateRequest struct {
+	namespace string
+}
+
+func (e *validateRequest) Error() string { return "validate command requested" }
+func (e *validateRequest) Unwrap() error { return errValidateCommand }
 
 // parseArgs разбирает позиционные аргументы и флаги.
 // Правило: позиционные аргументы (без --) = namespace... + command
@@ -126,6 +146,14 @@ func parseArgs(args []string) (*parsedArgs, error) {
 		}
 	}
 
+	if positional[len(positional)-1] == "validate" {
+		if len(positional) < 2 {
+			return nil, errors.New("usage: futi <namespace...> validate")
+		}
+		ns := strings.Join(positional[:len(positional)-1], ".")
+		return nil, &validateRequest{namespace: ns}
+	}
+
 	if len(positional) < 2 {
 		// Один позиционный — это namespace без команды (default cmd).
 		// Допустимо, если у модуля есть cmd.
@@ -150,34 +178,41 @@ func parseArgs(args []string) (*parsedArgs, error) {
 	}, nil
 }
 
-// createSource создаёт источник модулей.
-// Приоритет: локальный source (./.futi/ или ./futi.yaml) поверх глобального.
-// Если есть config.yaml — загружает конфиг и создаёт CompositeSource.
-// Иначе — fallback на GlobalSource с ~/.config/futi/modules/ (или FUTI_MODULES_DIR).
-func createSource() discovery.Source {
-	global := createGlobalSource()
-	local := localSource()
-	if local != nil {
-		return discovery.NewLayeredSource(local, global)
+// createSource создаёт источник модулей: локальный source (./.futi/ или ./futi.yaml)
+// поверх глобального. global уже создан в main() и используется для cache.Start.
+// loader используется для загрузки ./futi.yaml при определении имени модуля
+// (если передан *modulecache.Cache — повторная загрузка того же файла в Run
+// возьмёт модуль из кэша).
+func createSource(loader modulerunner.ModuleLoader, global discovery.Source) (discovery.Source, error) {
+	local, err := localSource(loader)
+	if err != nil {
+		return nil, err
 	}
-	return global
+	if local != nil {
+		return discovery.NewLayeredSource(local, global), nil
+	}
+	return global, nil
 }
 
 // createGlobalSource создаёт глобальный источник модулей из config.yaml
 // или fallback на ~/.config/futi/modules/.
-func createGlobalSource() discovery.Source {
+// Возвращает загруженный *config.Config (для настроек кэша) вместе с Source —
+// устраняет двойную загрузку config.yaml (REVIEW #12).
+// Возвращает ошибку вместо log.Fatalf — позволяет тестировать и инъектить
+// ошибки (невалидный config, отсутствие home dir).
+func createGlobalSource() (*config.Config, discovery.Source, error) {
 	cfgPath, err := config.DefaultConfigPath()
 	if err != nil {
-		log.Fatalf("config path: %v", err)
+		return nil, nil, fmt.Errorf("config path: %w", err)
 	}
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		return nil, nil, fmt.Errorf("config: %w", err)
 	}
 
 	if cfg != nil && len(cfg.Sources) > 0 {
-		return discovery.NewCompositeSource(cfg)
+		return cfg, discovery.NewCompositeSource(cfg), nil
 	}
 
 	// Fallback: нет конфига — одиночный GlobalSource
@@ -185,19 +220,23 @@ func createGlobalSource() discovery.Source {
 	if modDir == "" {
 		modDir, err = config.DefaultModulesDir()
 		if err != nil {
-			log.Fatalf("modules dir: %v", err)
+			return nil, nil, fmt.Errorf("modules dir: %w", err)
 		}
 	}
-	return discovery.NewGlobalSource(modDir)
+	return cfg, discovery.NewGlobalSource(modDir), nil
 }
 
 // localSource проверяет CWD на наличие локальных модулей:
 //   - ./.futi/ — каталог модулей (GlobalSource)
 //   - ./futi.yaml — одиночный файл модуля (FileSource, имя из поля name)
 //
-// Возвращает nil, если локальных модулей нет.
+// Возвращает (nil, nil), если локальных модулей нет.
 // При наличии обоих — ./.futi/ имеет приоритет над ./futi.yaml.
-func localSource() discovery.Source {
+// loader загружает ./futi.yaml для извлечения name; используется abs-путь,
+// чтобы ключ кэша совпадал с тем, что использует Run через FileSource.
+// Возвращает ошибку при невалидном futi.yaml — автор модуля получает раннюю
+// диагностику вместо непонятного "module not found" в runtime.
+func localSource(loader modulerunner.ModuleLoader) (discovery.Source, error) {
 	var layers []discovery.Source
 
 	if info, err := os.Stat(".futi"); err == nil && info.IsDir() {
@@ -206,25 +245,88 @@ func localSource() discovery.Source {
 	}
 
 	if _, err := os.Stat("futi.yaml"); err == nil {
-		mod, err := execmodule.LoadModule("futi.yaml", ".")
-		if err == nil {
-			name := mod.Name
-			if name == "" {
-				name = "futi"
-			}
-			abs, _ := filepath.Abs("futi.yaml")
-			absRoot, _ := filepath.Abs(".")
-			layers = append(layers, discovery.NewFileSource(abs, absRoot, name))
+		abs, _ := filepath.Abs("futi.yaml")
+		absRoot, _ := filepath.Abs(".")
+		mod, err := loadModule(loader, abs, absRoot)
+		if err != nil {
+			return nil, fmt.Errorf("local source: %w", err)
 		}
+		name := mod.Name
+		if name == "" {
+			name = "futi"
+		}
+		layers = append(layers, discovery.NewFileSource(abs, absRoot, name))
 	}
 
 	if len(layers) == 0 {
-		return nil
+		return nil, nil
 	}
 	if len(layers) == 1 {
-		return layers[0]
+		return layers[0], nil
 	}
-	return discovery.NewLayeredSource(layers...)
+	return discovery.NewLayeredSource(layers...), nil
+}
+
+// defaultCachePath возвращает путь к gob-файлу кэша: ~/.cache/futi/modulecache.gob.
+// Использует os.UserCacheDir() (поддерживает XDG_CACHE_HOME на Linux).
+func defaultCachePath() (string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("cache path: get cache dir: %w", err)
+	}
+	return filepath.Join(cacheDir, "futi", "modulecache.gob"), nil
+}
+
+// newCacheFromConfig создаёт *modulecache.Cache из конфига.
+// При ошибке получения cache path — fallback на MemoryStorage (in-memory only).
+// При ошибке создания policy — fallback на AlwaysPolicy с warning.
+func newCacheFromConfig(cfg *config.Config) *modulecache.Cache {
+	cachePath, err := defaultCachePath()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cache: %v (using in-memory only)\n", err)
+		return modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
+	}
+	storage := modulecache.NewDiskStorage(cachePath)
+
+	policy := modulecache.RefreshPolicy(modulecache.AlwaysPolicy{})
+	if cfg != nil {
+		p, err := modulecache.NewPolicyFromConfig(cfg.Cache.Refresh, cfg.Cache.Time)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cache config: %v (using default every_time)\n", err)
+		} else {
+			policy = p
+		}
+	}
+	return modulecache.New(storage, policy)
+}
+
+// cacheSubcommand извлекает cache subcommand из args (os.Args[1:]).
+// Возвращает (subcommand, true) если первый аргумент — "cache".
+// Возвращает ("", false) если "cache" не первый аргумент (обычная команда).
+// subcommand="" означает "cache" без подкоманды — main выведет понятную ошибку.
+func cacheSubcommand(args []string) (subcommand string, present bool) {
+	if len(args) < 1 || args[0] != "cache" {
+		return "", false
+	}
+	if len(args) < 2 {
+		return "", true
+	}
+	return args[1], true
+}
+
+// runCacheRefresh явно обновляет кэш: обходит globalSource, перечитывает
+// изменившиеся модули, сохраняет на диск. Выводит статистику.
+func runCacheRefresh(w io.Writer, cache *modulecache.Cache, globalSource discovery.Source) error {
+	result, err := cache.Refresh(globalSource)
+	if err != nil {
+		return fmt.Errorf("cache refresh: %w", err)
+	}
+	fmt.Fprintf(w, "Cache refreshed: %d modules, %d updated", result.Total, result.Updated)
+	if result.Skipped > 0 {
+		fmt.Fprintf(w, ", %d skipped", result.Skipped)
+	}
+	fmt.Fprintln(w)
+	return nil
 }
 
 // runList выводит содержимое namespace или команды модуля.
@@ -232,11 +334,12 @@ func localSource() discovery.Source {
 // Если namespace содержит путь к команде с subcommands — показывает subcommands.
 // Иначе — показывает непосредственных детей namespace, или всё поддерево при recurse.
 // При verbose=true добавляет колонку PATH.
-func runList(w io.Writer, source discovery.Source, namespace string, verbose, recurse bool) error {
+// loader используется для загрузки модулей (с кэшем или без).
+func runList(w io.Writer, source discovery.Source, namespace string, verbose, recurse bool, loader modulerunner.ModuleLoader) error {
 	// Сначала пробуем резолвить как модуль
 	manifestPath, moduleRoot, err := source.Resolve(namespace)
 	if err == nil {
-		return printCommands(w, manifestPath, moduleRoot, verbose)
+		return printCommands(w, manifestPath, moduleRoot, verbose, loader)
 	}
 
 	// Не модуль — пробуем progressive resolution для subcommands
@@ -251,7 +354,7 @@ func runList(w io.Writer, source discovery.Source, namespace string, verbose, re
 				continue
 			}
 
-			mod, err := execmodule.LoadModule(manifestPath, moduleRoot)
+			mod, err := loadModule(loader, manifestPath, moduleRoot)
 			if err != nil {
 				return fmt.Errorf("list: %w", err)
 			}
@@ -262,7 +365,7 @@ func runList(w io.Writer, source discovery.Source, namespace string, verbose, re
 			}
 
 			if len(cmd.Commands) > 0 {
-				return renderCommandTable(w, cmd.Commands, manifestPath, verbose)
+				return renderCommandTable(w, cmd.Commands, manifestPath, verbose, cmd.Cmd)
 			}
 
 			return fmt.Errorf("list: command %q has no subcommands", strings.Join(commandPath, " "))
@@ -284,21 +387,50 @@ func runList(w io.Writer, source discovery.Source, namespace string, verbose, re
 		fmt.Fprintln(w, "No modules found.")
 		return nil
 	}
-	return printChildren(w, children, verbose)
+	return printChildren(w, children, verbose, loader)
 }
 
-func printCommands(w io.Writer, manifestPath, moduleRoot string, verbose bool) error {
-	mod, err := execmodule.LoadModule(manifestPath, moduleRoot)
+func printCommands(w io.Writer, manifestPath, moduleRoot string, verbose bool, loader modulerunner.ModuleLoader) error {
+	mod, err := loadModule(loader, manifestPath, moduleRoot)
 	if err != nil {
 		return fmt.Errorf("list: %w", err)
 	}
-	return renderCommandTable(w, mod.Commands, manifestPath, verbose)
+	return renderCommandTable(w, mod.Commands, manifestPath, verbose, mod.Cmd)
+}
+
+// runValidate загружает модуль и выводит отчёт валидации схемы.
+// Использует ParseModule (без валидации) + Validate() для получения полного
+// списка ошибок и предупреждений за один проход.
+// Возвращает error только если есть errors (warnings не блокируют).
+func runValidate(w io.Writer, source discovery.Source, namespace string) error {
+	manifestPath, moduleRoot, err := source.Resolve(namespace)
+	if err != nil {
+		return fmt.Errorf("validate: %w", err)
+	}
+
+	// ParseModule — raw парсинг без валидации. LoadModule здесь не подходит,
+	// т.к. он падает на первой ошибке, а validate должен показать все.
+	mod, err := execmodule.ParseModule(manifestPath, moduleRoot)
+	if err != nil {
+		return fmt.Errorf("validate: %w", err)
+	}
+
+	errors, warnings := mod.Validate()
+	report, hasErrors := execmodule.FormatValidateReport(errors, warnings)
+	fmt.Fprint(w, report)
+
+	if hasErrors {
+		return fmt.Errorf("validate: module %q has %d error(s)", namespace, len(errors))
+	}
+	return nil
 }
 
 // renderCommandTable выводит map команд в виде отсортированной таблицы.
 // Используется для top-level команд модуля и для subcommands.
-func renderCommandTable(w io.Writer, commands map[string]*execmodule.Command, manifestPath string, verbose bool) error {
-	if len(commands) == 0 {
+// defaultCmd — если не пустой, добавляет строку (default) первой в таблице
+// (для отображения default cmd модуля или fallback cmd subcommand).
+func renderCommandTable(w io.Writer, commands map[string]*execmodule.Command, manifestPath string, verbose bool, defaultCmd string) error {
+	if len(commands) == 0 && defaultCmd == "" {
 		fmt.Fprintln(w, "No commands found.")
 		return nil
 	}
@@ -316,6 +448,16 @@ func renderCommandTable(w io.Writer, commands map[string]*execmodule.Command, ma
 		return rows[i][0] < rows[j][0]
 	})
 
+	if defaultCmd != "" {
+		var defaultRow []string
+		if verbose {
+			defaultRow = []string{"(default)", "", manifestPath}
+		} else {
+			defaultRow = []string{"(default)", ""}
+		}
+		rows = append([][]string{defaultRow}, rows...)
+	}
+
 	tw := tablewriter.NewTable(w)
 	if verbose {
 		tw.Header("COMMAND", "DESCRIPTION", "PATH")
@@ -328,13 +470,13 @@ func renderCommandTable(w io.Writer, commands map[string]*execmodule.Command, ma
 	return tw.Render()
 }
 
-func printChildren(w io.Writer, children []discovery.Child, verbose bool) error {
+func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader modulerunner.ModuleLoader) error {
 	var rows [][]string
 	for _, c := range children {
 		var desc, path string
 		if c.Type == "module" {
 			path = c.ManifestPath
-			if mod, err := execmodule.LoadModule(c.ManifestPath, c.ModuleRoot); err == nil {
+			if mod, err := loadModule(loader, c.ManifestPath, c.ModuleRoot); err == nil {
 				desc = mod.Description
 			}
 		}
@@ -372,11 +514,17 @@ USAGE
   futi <namespace>                    Invoke module's default command (if defined)
   futi <namespace...> list [flags]
   futi list [flags]
+  futi <namespace...> validate        Validate module schema
+  futi init <name> [flags]            Create a new module from template
+  futi cache refresh                  Refresh module cache
   futi -h | --help
 
 The last positional argument (without --) is the command; everything before
 it is the namespace, joined with dots. Example: "futi dev deploy staging"
 resolves to namespace "dev.deploy", command "staging".
+
+"list" and "validate" are reserved words — they cannot be used as command
+names in a module.
 
 Arguments after "--" are passed to the command's template as {{.args}}
 (space-joined string) and {{.args_list}} (array). Example:
@@ -424,6 +572,37 @@ LISTING
   futi list -v, --verbose          Add a PATH column (manifest location)
   futi <ns> list -r -v             Flags combine
 
+  The (default) marker in command listings indicates the module's default
+  command (cmd field), invoked when no command is specified.
+
+VALIDATION
+  futi <ns> validate               Validate module schema (all commands and
+                                   params, recursively). Prints a report with
+                                   ERROR and WARNING lines, or "OK" if clean.
+                                   Exit code: 0 if no errors, 1 otherwise.
+
+                                   Errors (block module loading):
+                                     - command without cmd and commands
+                                     - duplicate param names in a command
+                                     - invalid param type (not string/bool/int)
+
+                                   Warnings (do not block):
+                                     - command with subcommands but no cmd
+                                       (calling without subcommand fails)
+
+INIT
+  futi init <name>                 Create a new module in ./.futi/<name>.yaml
+  futi init <ns>/<name>            Create with namespace (./.futi/<ns>/<name>.yaml)
+  futi init <name> --global        Create in ~/.config/futi/modules/<name>.yaml
+
+  --desc <text>                    Module description (default: "My tool")
+  --default-cmd <cmd>              Add cmd at module level (default command)
+  --command <name>                 Add a command (repeatable)
+  --global                         Create in global modules directory
+
+  The generated module is valid and immediately discoverable by futi.
+  If the file already exists, an error is returned (no overwrite).
+
 PARAMETERS
   --param value                    Pass a string parameter
   --param=value                    Alternative syntax
@@ -432,14 +611,6 @@ PARAMETERS
 
   Boolean values are normalized: "false", "0", "no", "" are falsy;
   "true", "1", "yes" are truthy. Use {{if .flag}}...{{end}} in templates.
-
-TEMPLATING
-  Commands use Go text/template syntax:
-    {{.name}}                       Substitute a parameter value
-    {{if .follow}}...{{end}}        Conditional block (for bool params)
-
-  Quote values with spaces in the template:
-    cmd: "echo \"{{.msg}}\""        --msg "hello world" works correctly
 
 MODULE SCHEMA (YAML)
   name: docker                     Optional, defaults to file/dir name
@@ -486,6 +657,8 @@ TEMPLATING
     {{.name}}                       Substitute a parameter value
     {{.args}}                       All args after "--" (space-joined string)
     {{index .args_list 0}}          Nth arg after "--" (array access)
+    {{.env.FOO}}                    Environment variable FOO (error if unset)
+    {{if index .env "FOO"}}...{{end}}  Conditional on env var presence
     {{if .follow}}...{{end}}        Conditional block (for bool params)
 
   Quote values with spaces in the template:
@@ -537,20 +710,81 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Быстрый путь: -h/--help не требует config/source/cache.
+	if os.Args[1] == "-h" || os.Args[1] == "--help" {
+		printUsage()
+		return
+	}
+
+	// Быстрый путь: futi init не требует config/source/cache.
+	if os.Args[1] == "init" {
+		if err := runInit(os.Stdout, os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "init: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Создаём глобальный source и загружаем config (один раз — REVIEW #5, #12).
+	cfg, globalSource, err := createGlobalSource()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "source: %v\n", err)
+		os.Exit(1)
+	}
+
+	// `futi cache <subcommand>` — fast path ДО cache.Start, чтобы избежать
+	// двойного Refresh (Start с AlwaysPolicy + runCacheRefresh). Для refresh:
+	// cache.Load() загружает с диска без Refresh, затем runCacheRefresh —
+	// единственный Refresh с корректным mtime+size сравнением.
+	if subcmd, ok := cacheSubcommand(os.Args[1:]); ok {
+		cache := newCacheFromConfig(cfg)
+		switch subcmd {
+		case "refresh":
+			cache.Load() // load from disk without Refresh
+			if err := runCacheRefresh(os.Stdout, cache, globalSource); err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "":
+			fmt.Fprintln(os.Stderr, `error: cache requires a subcommand (try "cache refresh")`)
+			os.Exit(1)
+		default:
+			fmt.Fprintf(os.Stderr, "error: unknown cache subcommand %q (try \"cache refresh\")\n", subcmd)
+			os.Exit(1)
+		}
+	}
+
+	// Создаём и запускаем кэш. Ошибки кэша не фатальны — CLI работает и без него.
+	cache := newCacheFromConfig(cfg)
+	if err := cache.Start(globalSource); err != nil {
+		fmt.Fprintf(os.Stderr, "cache: %v (continuing without cache)\n", err)
+	}
+
 	pa, err := parseArgs(os.Args[1:])
 	if err != nil {
-		var req *listRequest
+		var listReq *listRequest
+		var valReq *validateRequest
 		switch {
-		case errors.As(err, &req):
-			source := createSource()
-			if listErr := runList(os.Stdout, source, req.namespace, req.verbose, req.recurse); listErr != nil {
+		case errors.As(err, &listReq):
+			source, err := createSource(cache, globalSource)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "source: %v\n", err)
+				os.Exit(1)
+			}
+			if listErr := runList(os.Stdout, source, listReq.namespace, listReq.verbose, listReq.recurse, cache); listErr != nil {
 				log.Fatalf("list: %v", listErr)
 			}
 			return
-		case errors.Is(err, errListCommand):
-			source := createSource()
-			if listErr := runList(os.Stdout, source, "", false, false); listErr != nil {
-				log.Fatalf("list: %v", listErr)
+		case errors.As(err, &valReq):
+			source, err := createSource(cache, globalSource)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "source: %v\n", err)
+				os.Exit(1)
+			}
+			if valErr := runValidate(os.Stdout, source, valReq.namespace); valErr != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", valErr)
+				os.Exit(1)
 			}
 			return
 		case errors.Is(err, errHelp):
@@ -561,8 +795,12 @@ func main() {
 		}
 	}
 
-	source := createSource()
-	if err := modulerunner.Run(context.Background(), source, pa.namespace, pa.command, pa.params, pa.args, pa.argsList, nil, nil); err != nil {
+	source, err := createSource(cache, globalSource)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "source: %v\n", err)
+		os.Exit(1)
+	}
+	if err := modulerunner.Run(context.Background(), source, pa.namespace, pa.command, pa.params, pa.args, pa.argsList, nil, nil, cache); err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		os.Exit(exitCodeFromError(err))
 	}

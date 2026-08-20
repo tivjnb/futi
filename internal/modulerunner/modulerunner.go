@@ -14,6 +14,23 @@ import (
 	"github.com/google/shlex"
 )
 
+// ModuleLoader загружает модуль из манифеста по пути.
+// Реализации: *modulecache.Cache (с кэшированием) — передаётся из main.go;
+// nil-fallback в тестах использует execmodule.LoadModule напрямую.
+type ModuleLoader interface {
+	LoadModule(manifestPath, moduleRoot string) (*execmodule.Module, error)
+}
+
+// loadModule вызывает loader.LoadModule, либо fallback на execmodule.LoadModule
+// при nil-loader. Fallback сохраняет обратную совместимость для тестов и
+// вызовов без кэша.
+func loadModule(loader ModuleLoader, manifestPath, moduleRoot string) (*execmodule.Module, error) {
+	if loader == nil {
+		return execmodule.LoadModule(manifestPath, moduleRoot)
+	}
+	return loader.LoadModule(manifestPath, moduleRoot)
+}
+
 // Run находит модуль через source, загружает его, валидирует параметры,
 // рендерит cmd-шаблон и выполняет команду.
 // Поддерживает subcommands: progressive resolution пробует резолвить модуль
@@ -21,6 +38,7 @@ import (
 // args — строка после `--` (для {{.args}}), argsList — массив (для {{.args_list}}).
 // command="" означает вызов default cmd модуля (Module.Cmd).
 // stdout/stderr — опциональные writers для перехвата вывода (nil = os.Stdout/os.Stderr).
+// loader — опциональный загрузчик модулей с кэшем (nil = без кэша, прямой LoadModule).
 func Run(
 	ctx context.Context,
 	source discovery.Source,
@@ -29,6 +47,7 @@ func Run(
 	args string,
 	argsList []string,
 	stdout, stderr io.Writer,
+	loader ModuleLoader,
 ) error {
 	// Реконструкция positional args из namespace + command.
 	var positional []string
@@ -53,7 +72,7 @@ func Run(
 			continue
 		}
 
-		mod, err := execmodule.LoadModule(manifestPath, moduleRoot)
+		mod, err := loadModule(loader, manifestPath, moduleRoot)
 		if err != nil {
 			return fmt.Errorf("modulerunner: %w", err)
 		}
@@ -117,13 +136,14 @@ type CommandInfo struct {
 
 // ListCommands находит модуль через source, загружает его и возвращает
 // список команд с описаниями.
-func ListCommands(source discovery.Source, namespace string) ([]CommandInfo, error) {
+// loader — опциональный загрузчик с кэшем (nil = прямой LoadModule).
+func ListCommands(source discovery.Source, namespace string, loader ModuleLoader) ([]CommandInfo, error) {
 	manifestPath, moduleRoot, err := source.Resolve(namespace)
 	if err != nil {
 		return nil, fmt.Errorf("modulerunner: %w", err)
 	}
 
-	mod, err := execmodule.LoadModule(manifestPath, moduleRoot)
+	mod, err := loadModule(loader, manifestPath, moduleRoot)
 	if err != nil {
 		return nil, fmt.Errorf("modulerunner: %w", err)
 	}
