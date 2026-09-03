@@ -666,3 +666,78 @@ commands:
 		t.Fatalf("expected exactly 1 loader call, got %d", spy.calls)
 	}
 }
+
+// TestLoadModuleExported проверяет, что экспортированная LoadModule
+// делегирует в loader и fallback-ит на execmodule.LoadModule при nil
+// (фикс #35 — дублирование с main.go устранено).
+func TestLoadModuleExported(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "mod.yaml")
+	if err := os.WriteFile(manifestPath, []byte(`name: mod
+cmd: "echo hi"`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// nil loader → fallback на execmodule.LoadModule
+	mod, err := LoadModule(nil, manifestPath, dir)
+	if err != nil {
+		t.Fatalf("LoadModule with nil loader: %v", err)
+	}
+	if mod.Name != "mod" {
+		t.Fatalf("expected name=mod, got %q", mod.Name)
+	}
+
+	// stub loader → делегирует
+	stub := &stubLoader{mod: &execmodule.Module{Name: "stubbed"}}
+	mod2, err := LoadModule(stub, manifestPath, dir)
+	if err != nil {
+		t.Fatalf("LoadModule with stub: %v", err)
+	}
+	if mod2.Name != "stubbed" {
+		t.Fatalf("expected name=stubbed, got %q", mod2.Name)
+	}
+	if stub.calls != 1 {
+		t.Fatalf("expected 1 stub call, got %d", stub.calls)
+	}
+}
+
+func TestRunPositionalMinEnforced(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell scripts not supported in this test on Windows")
+	}
+
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "pos.yaml")
+	manifest := []byte(`
+name: pos
+commands:
+  greet:
+    cmd: "echo {{index .args_list 0}}"
+    positional:
+      min: 1
+`)
+	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	source := discovery.NewGlobalSource(dir)
+
+	// Достаточно аргументов → выполняется.
+	var stdout bytes.Buffer
+	err := Run(context.Background(), source, "pos", "greet", map[string]string{}, "hello", []string{"hello"}, &stdout, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := stdout.String(); got != "hello\n" {
+		t.Fatalf("unexpected output: %q", got)
+	}
+
+	// Мало аргументов → ошибка про required positional.
+	err = Run(context.Background(), source, "pos", "greet", map[string]string{}, "", []string{}, &stdout, nil, nil)
+	if err == nil {
+		t.Fatal("expected error for missing positional arg")
+	}
+	if !strings.Contains(err.Error(), "at least 1") {
+		t.Fatalf("expected 'at least 1' in error, got: %v", err)
+	}
+}

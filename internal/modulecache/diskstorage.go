@@ -71,6 +71,11 @@ func (d *DiskStorage) Save(cf cacheFile) error {
 		tmp.Close()
 		return fmt.Errorf("modulecache: encode cache file: %w", err)
 	}
+	// #36: fsync перед close — данные попадают на диск, а не остаются в page cache.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("modulecache: sync cache file: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("modulecache: close temp file: %w", err)
 	}

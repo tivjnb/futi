@@ -54,16 +54,53 @@ func (c *Command) Validate(provided map[string]string) (map[string]string, error
 	return resolved, nil
 }
 
+// ValidatePositional проверяет количество позиционных аргументов (после "--")
+// против требования positional.min. Возвращает ошибку с понятным сообщением,
+// если аргументов меньше минимума. При min==0 (не задано) — всегда проходит.
+func (c *Command) ValidatePositional(argsList []string) error {
+	if c.Positional.Min == 0 {
+		return nil
+	}
+	if len(argsList) < c.Positional.Min {
+		noun := "argument"
+		if c.Positional.Min != 1 {
+			noun = "arguments"
+		}
+		return fmt.Errorf(
+			"command requires at least %d positional %s after \"--\", got %d",
+			c.Positional.Min, noun, len(argsList),
+		)
+	}
+	return nil
+}
+
+// TemplateError — ошибка парсинга или выполнения cmd-шаблона.
+// Несёт сам шаблон и системную причину. CLI форматирует её дружелюбно,
+// скрывая длинную цепочку обёрток и технический трейс text/template.
+type TemplateError struct {
+	Cmd   string
+	Cause error
+}
+
+// Error возвращает короткое сообщение с шаблоном и причиной.
+func (e *TemplateError) Error() string {
+	return fmt.Sprintf("failed to render template %q: %v", e.Cmd, e.Cause)
+}
+
+// Unwrap возвращает системную причину (для errors.As/Is).
+func (e *TemplateError) Unwrap() error { return e.Cause }
+
 // Render подставляет значения параметров, args и env в cmd-шаблон.
 // Использует Go text/template: {{.var}} для подстановки params,
 // {{.args}} для строки args, {{index .args_list N}} для элемента массива args,
 // {{if .bool}}...{{end}} для условных блоков.
 // {{.env.FOO}} — доступ к переменной окружения FOO (error если не задана,
 // для optional-проверки используйте {{if index .env "FOO"}}).
+// Ошибки парсинга и выполнения шаблона возвращаются как *TemplateError.
 func (c *Command) Render(params map[string]string, args string, argsList []string) (string, error) {
 	tmpl, err := template.New("cmd").Option("missingkey=error").Parse(c.Cmd)
 	if err != nil {
-		return "", fmt.Errorf("execmodule: parse template %q: %w", c.Cmd, err)
+		return "", &TemplateError{Cmd: c.Cmd, Cause: err}
 	}
 
 	data := make(map[string]interface{}, len(params)+3)
@@ -75,21 +112,25 @@ func (c *Command) Render(params map[string]string, args string, argsList []strin
 		argsList = []string{}
 	}
 	data["args_list"] = argsList
-	data["env"] = envMap()
+	data["env"] = envMapFn()
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("execmodule: render template %q: %w", c.Cmd, err)
+		return "", &TemplateError{Cmd: c.Cmd, Cause: err}
 	}
 
 	return buf.String(), nil
 }
 
-// envMap возвращает map переменных окружения процесса из os.Environ().
-// Используется в Render для доступа к {{.env.FOO}} в шаблонах.
-// Несуществующие переменные вызывают error при missingkey=error —
-// для optional-проверки используйте {{if index .env "FOO"}}.
-func envMap() map[string]string {
+// envMapFn возвращает map переменных окружения процесса из os.Environ().
+// Package-level var — позволяет заменить реализацию для кэширования
+// (HTTP server) или тестирования (фикс #43).
+var envMapFn = defaultEnvMap
+
+// defaultEnvMap читает os.Environ() при каждом вызове.
+// Для CLI (один Render за запуск) — незаметно. Для HTTP server —
+// замените envMapFn на кэшированную реализацию.
+func defaultEnvMap() map[string]string {
 	m := make(map[string]string)
 	for _, kv := range os.Environ() {
 		if i := strings.Index(kv, "="); i >= 0 {

@@ -25,8 +25,8 @@ func TestRunInitCreatesLocalFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected .futi/mytool.yaml to exist: %v", err)
 	}
-	if !strings.Contains(string(data), "name: mytool") {
-		t.Fatalf("expected 'name: mytool' in file:\n%s", data)
+	if !strings.Contains(string(data), `name: "mytool"`) {
+		t.Fatalf("expected 'name: \"mytool\"' in file:\n%s", data)
 	}
 	if !strings.Contains(buf.String(), "mytool.yaml") {
 		t.Fatalf("expected file path in output: %s", buf.String())
@@ -133,8 +133,8 @@ func TestRunInitWithDesc(t *testing.T) {
 	}
 
 	data, _ := os.ReadFile(".futi/mytool.yaml")
-	if !strings.Contains(string(data), "description: My awesome tool") {
-		t.Fatalf("expected description in file:\n%s", data)
+	if !strings.Contains(string(data), `description: "My awesome tool"`) {
+		t.Fatalf("expected quoted description in file:\n%s", data)
 	}
 }
 
@@ -269,11 +269,11 @@ func TestRunInitGlobalModuleDiscoverable(t *testing.T) {
 // TestGenerateModuleYAMLMinimal проверяет генерацию минимального шаблона.
 func TestGenerateModuleYAMLMinimal(t *testing.T) {
 	yaml := generateModuleYAML("mytool", "My tool", "", nil)
-	if !strings.Contains(yaml, "name: mytool") {
-		t.Fatalf("expected 'name: mytool':\n%s", yaml)
+	if !strings.Contains(yaml, `name: "mytool"`) {
+		t.Fatalf("expected 'name: \"mytool\"':\n%s", yaml)
 	}
-	if !strings.Contains(yaml, "description: My tool") {
-		t.Fatalf("expected 'description: My tool':\n%s", yaml)
+	if !strings.Contains(yaml, `description: "My tool"`) {
+		t.Fatalf("expected 'description: \"My tool\"':\n%s", yaml)
 	}
 	if !strings.Contains(yaml, "hello") {
 		t.Fatalf("expected default 'hello' command:\n%s", yaml)
@@ -301,5 +301,207 @@ func TestGenerateModuleYAMLWithCommands(t *testing.T) {
 		if strings.HasPrefix(trimmed, "cmd:") && !strings.Contains(trimmed, "echo") {
 			// cmd внутри команды — OK
 		}
+	}
+}
+
+// --- #40: path traversal via .. in path ---
+
+// TestRunInitPathTraversalError проверяет, что path с .. отклоняется.
+func TestRunInitPathTraversalError(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Chdir(t.TempDir())
+
+	var buf bytes.Buffer
+	err := runInit(&buf, []string{"../../etc/passwd", "--global"})
+	if err == nil {
+		t.Fatal("expected error for path traversal")
+	}
+	if !strings.Contains(err.Error(), "outside") {
+		t.Fatalf("expected error about path outside base dir, got: %v", err)
+	}
+}
+
+// TestRunInitPathTraversalLocal проверяет, что path с .. отклоняется локально тоже.
+func TestRunInitPathTraversalLocal(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var buf bytes.Buffer
+	err := runInit(&buf, []string{"../escape"})
+	if err == nil {
+		t.Fatal("expected error for path traversal in local mode")
+	}
+}
+
+// --- #41: YAML injection via description ---
+
+// TestGenerateModuleYAMLDescriptionQuoted проверяет, что description всегда
+// квотируется (фикс #41 — YAML-инъекция через перевод строки).
+func TestGenerateModuleYAMLDescriptionQuoted(t *testing.T) {
+	yaml := generateModuleYAML("mytool", "simple desc", "", nil)
+	if !strings.Contains(yaml, `description: "simple desc"`) {
+		t.Fatalf("expected quoted description:\n%s", yaml)
+	}
+}
+
+// TestGenerateModuleYAMLDescriptionWithNewline проверяет, что description с
+// переводом строки квотируется и не позволяет YAML-инъекцию.
+func TestGenerateModuleYAMLDescriptionWithNewline(t *testing.T) {
+	malicious := "foo\ncommands:\n  evil:\n    cmd: rm -rf /"
+	yaml := generateModuleYAML("mytool", malicious, "", nil)
+	// description должно быть в кавычках — evil не должно стать отдельным ключом
+	if !strings.Contains(yaml, `description: "foo`) {
+		t.Fatalf("expected quoted description with newline:\n%s", yaml)
+	}
+	// Проверяем, что "evil" не появился как отдельная команда на верхнем уровне
+	lines := strings.Split(yaml, "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "evil:" {
+			t.Fatalf("YAML injection detected — 'evil:' found as top-level key:\n%s", yaml)
+		}
+	}
+}
+
+// --- #45: double .yaml extension ---
+
+// TestRunInitDoubleYamlExtension проверяет, что futi init mytool.yaml не
+// создаёт mytool.yaml.yaml (фикс #45).
+func TestRunInitDoubleYamlExtension(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var buf bytes.Buffer
+	if err := runInit(&buf, []string{"mytool.yaml"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := os.Stat(".futi/mytool.yaml"); err != nil {
+		t.Fatalf("expected .futi/mytool.yaml to exist: %v", err)
+	}
+	if _, err := os.Stat(".futi/mytool.yaml.yaml"); err == nil {
+		t.Fatal("expected .futi/mytool.yaml.yaml to NOT exist (double extension)")
+	}
+}
+
+// TestRunInitDoubleYmlExtension проверяет тоже для .yml.
+func TestRunInitDoubleYmlExtension(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var buf bytes.Buffer
+	if err := runInit(&buf, []string{"mytool.yml"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := os.Stat(".futi/mytool.yml"); err != nil {
+		t.Fatalf("expected .futi/mytool.yml to exist: %v", err)
+	}
+}
+
+// --- #46: name not quoted ---
+
+// TestGenerateModuleYAMLNameQuoted проверяет, что name всегда квотируется
+// (фикс #46 — name с спецсимволами ломает YAML).
+func TestGenerateModuleYAMLNameQuoted(t *testing.T) {
+	yaml := generateModuleYAML("mytool", "desc", "", nil)
+	if !strings.Contains(yaml, `name: "mytool"`) {
+		t.Fatalf("expected quoted name:\n%s", yaml)
+	}
+}
+
+// TestGenerateModuleYAMLNameWithSpecialChars проверяет, что name с двоеточием
+// квотируется и не ломает YAML.
+func TestGenerateModuleYAMLNameWithSpecialChars(t *testing.T) {
+	yaml := generateModuleYAML("my:tool", "desc", "", nil)
+	if !strings.Contains(yaml, `name: "my:tool"`) {
+		t.Fatalf("expected quoted name with colon:\n%s", yaml)
+	}
+}
+
+// --- #47: command name not sanitized as YAML key ---
+
+// TestGenerateModuleYAMLCommandKeyQuoted проверяет, что имя команды квотируется
+// как YAML-ключ (фикс #47).
+func TestGenerateModuleYAMLCommandKeyQuoted(t *testing.T) {
+	yaml := generateModuleYAML("mytool", "desc", "", []string{"greet"})
+	if !strings.Contains(yaml, `"greet":`) {
+		t.Fatalf("expected quoted command key:\n%s", yaml)
+	}
+}
+
+// TestGenerateModuleYAMLCommandKeyWithSpecialChars проверяет, что имя команды
+// с двоеточием квотируется.
+func TestGenerateModuleYAMLCommandKeyWithSpecialChars(t *testing.T) {
+	yaml := generateModuleYAML("mytool", "desc", "", []string{"my:cmd"})
+	if !strings.Contains(yaml, `"my:cmd":`) {
+		t.Fatalf("expected quoted command key with colon:\n%s", yaml)
+	}
+}
+
+// --- #48: --desc captures next flag ---
+
+// TestParseInitArgsDescDoesNotCaptureFlag проверяет, что --desc --global
+// возвращает ошибку, а не захватывает --global как значение (фикс #48).
+func TestParseInitArgsDescDoesNotCaptureFlag(t *testing.T) {
+	_, err := parseInitArgs([]string{"mytool", "--desc", "--global"})
+	if err == nil {
+		t.Fatal("expected error when --desc is followed by --global")
+	}
+	if !strings.Contains(err.Error(), "--desc") {
+		t.Fatalf("expected error mentioning --desc, got: %v", err)
+	}
+}
+
+// TestParseInitArgsDefaultCmdDoesNotCaptureFlag проверяет тоже для --default-cmd.
+func TestParseInitArgsDefaultCmdDoesNotCaptureFlag(t *testing.T) {
+	_, err := parseInitArgs([]string{"mytool", "--default-cmd", "--global"})
+	if err == nil {
+		t.Fatal("expected error when --default-cmd is followed by --global")
+	}
+}
+
+// TestParseInitArgsCommandDoesNotCaptureFlag проверяет тоже для --command.
+func TestParseInitArgsCommandDoesNotCaptureFlag(t *testing.T) {
+	_, err := parseInitArgs([]string{"mytool", "--command", "--global"})
+	if err == nil {
+		t.Fatal("expected error when --command is followed by --global")
+	}
+}
+
+// --- #49: reserved name ---
+
+// TestRunInitReservedNameList проверяет, что futi init list возвращает ошибку
+// (фикс #49 — конфликт с зарезервированным словом).
+func TestRunInitReservedNameList(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var buf bytes.Buffer
+	err := runInit(&buf, []string{"list"})
+	if err == nil {
+		t.Fatal("expected error for reserved name 'list'")
+	}
+	if !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("expected error about reserved name, got: %v", err)
+	}
+}
+
+// TestRunInitReservedNameValidate проверяет, что futi init validate возвращает ошибку.
+func TestRunInitReservedNameValidate(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var buf bytes.Buffer
+	err := runInit(&buf, []string{"validate"})
+	if err == nil {
+		t.Fatal("expected error for reserved name 'validate'")
+	}
+}
+
+// TestRunInitReservedNameCache проверяет, что futi init cache возвращает ошибку.
+func TestRunInitReservedNameCache(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var buf bytes.Buffer
+	err := runInit(&buf, []string{"cache"})
+	if err == nil {
+		t.Fatal("expected error for reserved name 'cache'")
 	}
 }

@@ -22,9 +22,24 @@ type initConfig struct {
 // parseInitArgs разбирает аргументы команды futi init.
 // Позиционный аргумент — path (обязательный). Флаги:
 // --global, --desc <value>, --default-cmd <value>, --command <name> (repeatable).
+// Флаги, требующие значение (--desc, --default-cmd, --command), отклоняют
+// значения, начинающиеся с -- (фикс #48).
 func parseInitArgs(args []string) (*initConfig, error) {
 	cfg := &initConfig{}
 	var positional []string
+
+	// requireValue извлекает значение для флага и проверяет, что оно не
+	// начинается с -- (фикс #48 — --desc --global не должно захватывать --global).
+	requireValue := func(flagName string, i int) (string, error) {
+		if i+1 >= len(args) {
+			return "", fmt.Errorf("%s requires a value", flagName)
+		}
+		val := args[i+1]
+		if strings.HasPrefix(val, "--") {
+			return "", fmt.Errorf("%s requires a value, got flag %s", flagName, val)
+		}
+		return val, nil
+	}
 
 	i := 0
 	for i < len(args) {
@@ -33,26 +48,29 @@ func parseInitArgs(args []string) (*initConfig, error) {
 		case arg == "--global":
 			cfg.global = true
 		case arg == "--desc":
-			if i+1 >= len(args) {
-				return nil, fmt.Errorf("--desc requires a value")
+			val, err := requireValue("--desc", i)
+			if err != nil {
+				return nil, err
 			}
-			cfg.description = args[i+1]
+			cfg.description = val
 			i++
 		case strings.HasPrefix(arg, "--desc="):
 			cfg.description = strings.TrimPrefix(arg, "--desc=")
 		case arg == "--default-cmd":
-			if i+1 >= len(args) {
-				return nil, fmt.Errorf("--default-cmd requires a value")
+			val, err := requireValue("--default-cmd", i)
+			if err != nil {
+				return nil, err
 			}
-			cfg.defaultCmd = args[i+1]
+			cfg.defaultCmd = val
 			i++
 		case strings.HasPrefix(arg, "--default-cmd="):
 			cfg.defaultCmd = strings.TrimPrefix(arg, "--default-cmd=")
 		case arg == "--command":
-			if i+1 >= len(args) {
-				return nil, fmt.Errorf("--command requires a value")
+			val, err := requireValue("--command", i)
+			if err != nil {
+				return nil, err
 			}
-			cfg.commands = append(cfg.commands, args[i+1])
+			cfg.commands = append(cfg.commands, val)
 			i++
 		case strings.HasPrefix(arg, "--command="):
 			cfg.commands = append(cfg.commands, strings.TrimPrefix(arg, "--command="))
@@ -72,6 +90,15 @@ func parseInitArgs(args []string) (*initConfig, error) {
 	}
 	cfg.path = positional[0]
 
+	// #49: проверка конфликта с зарезервированными именами.
+	name := filepath.Base(cfg.path)
+	name = strings.TrimSuffix(name, ".yaml")
+	name = strings.TrimSuffix(name, ".yml")
+	switch name {
+	case "list", "validate", "cache", "init":
+		return nil, fmt.Errorf("%q is a reserved name, choose a different module name", name)
+	}
+
 	if cfg.description == "" {
 		cfg.description = "My tool"
 	}
@@ -82,6 +109,8 @@ func parseInitArgs(args []string) (*initConfig, error) {
 // targetFilePath возвращает путь к файлу модуля.
 // Локально: ./.futi/<path>.yaml (доступен через auto-discovery).
 // Глобально: ~/.config/futi/modules/<path>.yaml.
+// #40: отклоняет path с .. (path traversal за пределы base).
+// #45: не добавляет .yaml, если path уже заканчивается на .yaml/.yml.
 func targetFilePath(cfg *initConfig) (string, error) {
 	base := ".futi"
 	if cfg.global {
@@ -95,28 +124,47 @@ func targetFilePath(cfg *initConfig) (string, error) {
 		}
 		base = modDir
 	}
-	return filepath.Join(base, cfg.path+".yaml"), nil
+
+	// #45: не добавляем .yaml, если уже есть расширение.
+	path := cfg.path
+	if !strings.HasSuffix(path, ".yaml") && !strings.HasSuffix(path, ".yml") {
+		path += ".yaml"
+	}
+
+	fullPath := filepath.Join(base, path)
+
+	// #40: проверяем, что результат внутри base (нет path traversal).
+	rel, err := filepath.Rel(base, fullPath)
+	if err != nil {
+		return "", fmt.Errorf("path: %w", err)
+	}
+	if strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("path %q is outside the modules directory", cfg.path)
+	}
+
+	return fullPath, nil
 }
 
 // generateModuleYAML генерирует YAML-шаблон модуля.
 // name — имя модуля (из последнего сегмента path).
-// description — описание (без кавычек для простых значений, чище для редактирования).
+// description — описание (квотируется для безопасности — фикс #41).
 // defaultCmd — cmd на уровне модуля (пусто = не добавлять).
 // commands — имена команд (если пусто — одна команда hello по умолчанию).
+// #46: name квотируется. #47: ключи команд квотируются.
 func generateModuleYAML(name, description, defaultCmd string, commands []string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "name: %s\n", name)
-	fmt.Fprintf(&b, "description: %s\n", description)
+	fmt.Fprintf(&b, "name: %s\n", quoteYAMLValue(name))
+	fmt.Fprintf(&b, "description: %s\n", quoteYAMLValue(description))
 	if defaultCmd != "" {
 		fmt.Fprintf(&b, "cmd: %s\n", quoteYAMLValue(defaultCmd))
 	}
 	b.WriteString("commands:\n")
 	if len(commands) > 0 {
 		for _, cmd := range commands {
-			fmt.Fprintf(&b, "  %s:\n    cmd: %s\n", cmd, quoteYAMLValue("echo "+cmd))
+			fmt.Fprintf(&b, "  %s:\n    cmd: %s\n", quoteYAMLValue(cmd), quoteYAMLValue("echo "+cmd))
 		}
 	} else {
-		b.WriteString("  hello:\n    cmd: \"echo hello\"\n")
+		b.WriteString("  \"hello\":\n    cmd: \"echo hello\"\n")
 	}
 	return b.String()
 }
@@ -130,6 +178,7 @@ func quoteYAMLValue(s string) string {
 // runInit создаёт новый модуль с шаблоном YAML.
 // Парсит path + флаги, генерирует шаблон, пишет файл.
 // Возвращает ошибку при существующем файле (без перезаписи).
+// #44: использует O_EXCL вместо Stat+WriteFile для атомарной проверки.
 func runInit(w io.Writer, args []string) error {
 	cfg, err := parseInitArgs(args)
 	if err != nil {
@@ -148,15 +197,25 @@ func runInit(w io.Writer, args []string) error {
 		}
 	}
 
-	if _, err := os.Stat(targetPath); err == nil {
-		return fmt.Errorf("%s already exists", targetPath)
-	}
-
 	name := filepath.Base(cfg.path)
+	name = strings.TrimSuffix(name, ".yaml")
+	name = strings.TrimSuffix(name, ".yml")
 	yaml := generateModuleYAML(name, cfg.description, cfg.defaultCmd, cfg.commands)
 
-	if err := os.WriteFile(targetPath, []byte(yaml), 0644); err != nil {
+	// #44: O_EXCL — атомарная проверка существования без TOCTOU race.
+	f, err := os.OpenFile(targetPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("%s already exists", targetPath)
+		}
+		return fmt.Errorf("create file: %w", err)
+	}
+	if _, err := f.Write([]byte(yaml)); err != nil {
+		f.Close()
 		return fmt.Errorf("write file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close file: %w", err)
 	}
 
 	fmt.Fprintf(w, "Created: %s\n", targetPath)

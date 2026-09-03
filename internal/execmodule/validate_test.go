@@ -254,3 +254,23 @@ commands:
 		t.Fatalf("unexpected error for valid module: %v", err)
 	}
 }
+
+func TestValidateNegativePositionalMin(t *testing.T) {
+	mod := &Module{
+		Name: "bad",
+		Commands: map[string]*Command{
+			"run": {
+				Cmd:        "echo hi",
+				Positional: Positional{Min: -1},
+			},
+		},
+	}
+	errors, warnings := mod.Validate()
+	if len(errors) == 0 {
+		t.Fatal("expected error for negative positional min")
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+}
+

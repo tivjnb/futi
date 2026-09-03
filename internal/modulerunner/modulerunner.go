@@ -21,10 +21,11 @@ type ModuleLoader interface {
 	LoadModule(manifestPath, moduleRoot string) (*execmodule.Module, error)
 }
 
-// loadModule вызывает loader.LoadModule, либо fallback на execmodule.LoadModule
+// LoadModule вызывает loader.LoadModule, либо fallback на execmodule.LoadModule
 // при nil-loader. Fallback сохраняет обратную совместимость для тестов и
 // вызовов без кэша.
-func loadModule(loader ModuleLoader, manifestPath, moduleRoot string) (*execmodule.Module, error) {
+// Экспортирована для переиспользования в cmd/futi (фикс #35 — дедупликация).
+func LoadModule(loader ModuleLoader, manifestPath, moduleRoot string) (*execmodule.Module, error) {
 	if loader == nil {
 		return execmodule.LoadModule(manifestPath, moduleRoot)
 	}
@@ -72,7 +73,7 @@ func Run(
 			continue
 		}
 
-		mod, err := loadModule(loader, manifestPath, moduleRoot)
+		mod, err := LoadModule(loader, manifestPath, moduleRoot)
 		if err != nil {
 			return fmt.Errorf("modulerunner: %w", err)
 		}
@@ -93,6 +94,11 @@ func Run(
 
 		resolved, err := cmd.Validate(params)
 		if err != nil {
+			return fmt.Errorf("modulerunner: %w", err)
+		}
+
+		// Проверка обязательного минимума позиционных аргументов (после "--").
+		if err := cmd.ValidatePositional(argsList); err != nil {
 			return fmt.Errorf("modulerunner: %w", err)
 		}
 
@@ -143,7 +149,7 @@ func ListCommands(source discovery.Source, namespace string, loader ModuleLoader
 		return nil, fmt.Errorf("modulerunner: %w", err)
 	}
 
-	mod, err := loadModule(loader, manifestPath, moduleRoot)
+	mod, err := LoadModule(loader, manifestPath, moduleRoot)
 	if err != nil {
 		return nil, fmt.Errorf("modulerunner: %w", err)
 	}

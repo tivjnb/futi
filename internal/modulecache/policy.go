@@ -18,6 +18,9 @@ type RefreshPolicy interface {
 	// ShouldRefresh возвращает true если кэш нужно обновить.
 	// state — текущее состояние cacheFile (LastRefreshTime, Entries).
 	ShouldRefresh(state cacheFile) bool
+
+	// String возвращает имя политики (для futi cache status).
+	String() string
 }
 
 // AlwaysPolicy — обновлять при каждом запуске CLI.
@@ -25,6 +28,9 @@ type AlwaysPolicy struct{}
 
 // ShouldRefresh всегда возвращает true.
 func (AlwaysPolicy) ShouldRefresh(_ cacheFile) bool { return true }
+
+// String возвращает имя политики.
+func (AlwaysPolicy) String() string { return "every_time" }
 
 // EveryTMinPolicy — обновлять раз в T времени.
 // Использует LastRefreshTime из cacheFile.
@@ -48,11 +54,17 @@ func (p EveryTMinPolicy) ShouldRefresh(state cacheFile) bool {
 	return elapsed > p.T
 }
 
+// String возвращает имя политики.
+func (EveryTMinPolicy) String() string { return "every_t_min" }
+
 // ForceOnlyPolicy — никогда автоматически. CLI молча использует кэш как есть.
 type ForceOnlyPolicy struct{}
 
 // ShouldRefresh всегда возвращает false.
 func (ForceOnlyPolicy) ShouldRefresh(_ cacheFile) bool { return false }
+
+// String возвращает имя политики.
+func (ForceOnlyPolicy) String() string { return "force_only" }
 
 // NewPolicyFromConfig создаёт RefreshPolicy по config-значениям.
 //
@@ -73,6 +85,11 @@ func NewPolicyFromConfig(refresh, timeStr string) (RefreshPolicy, error) {
 		d, err := parseDuration(timeStr)
 		if err != nil {
 			return nil, fmt.Errorf("cache: invalid time %q: %w", timeStr, err)
+		}
+		// #38: верхний предел — 365 дней. Экстремальные T эквивалентны
+		// force_only, но без явного заявления — отклоняем.
+		if d > 365*24*time.Hour {
+			return nil, fmt.Errorf("cache: time %q exceeds 365 days (use force_only instead)", timeStr)
 		}
 		return EveryTMinPolicy{T: d}, nil
 	case "force_only":

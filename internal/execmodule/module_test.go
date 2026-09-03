@@ -258,3 +258,73 @@ func writeFile(t *testing.T, path, content string) {
 		t.Fatalf("write file %q: %v", path, err)
 	}
 }
+
+func TestLoadModuleParsesPositional(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "greet.yaml")
+	writeFile(t, manifestPath, `
+name: greet
+commands:
+  hello:
+    cmd: "echo {{index .args_list 0}}"
+    positional:
+      min: 1
+`)
+
+	mod, err := LoadModule(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	hello := mod.Commands["hello"]
+	if hello == nil {
+		t.Fatal("command 'hello' not found")
+	}
+	if hello.Positional.Min != 1 {
+		t.Fatalf("unexpected positional min: %d, want 1", hello.Positional.Min)
+	}
+}
+
+func TestLoadModulePositionalDefaultZero(t *testing.T) {
+	// Если positional не задан — min должен быть 0 (по умолчанию).
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "mod.yaml")
+	writeFile(t, manifestPath, `
+name: mod
+commands:
+  run:
+    cmd: "echo hi"
+`)
+
+	mod, err := LoadModule(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := mod.Commands["run"].Positional.Min; got != 0 {
+		t.Fatalf("unexpected positional min: %d, want 0", got)
+	}
+}
+
+func TestLoadModuleParsesParamDescription(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "mod.yaml")
+	writeFile(t, manifestPath, `
+name: mod
+commands:
+  run:
+    params:
+      - name: tag
+        type: string
+        required: true
+        description: Image tag
+    cmd: "echo {{.tag}}"
+`)
+
+	mod, err := LoadModule(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	run := mod.Commands["run"]
+	if run.Params[0].Description != "Image tag" {
+		t.Fatalf("unexpected param description: %q", run.Params[0].Description)
+	}
+}

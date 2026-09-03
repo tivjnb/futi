@@ -24,7 +24,9 @@ var (
 
 // fakeStorage — in-memory реализация Storage для тестов.
 // Записывает Save-вызовы и возвращает заданные данные при Load.
+// Потокобезопасен (Save вызывается вне лока Cache — #14).
 type fakeStorage struct {
+	mu       sync.Mutex
 	loadData cacheFile
 	loadErr  error
 	saveErr  error
@@ -33,6 +35,8 @@ type fakeStorage struct {
 }
 
 func (f *fakeStorage) Load() (cacheFile, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.loadErr != nil {
 		return cacheFile{}, f.loadErr
 	}
@@ -40,6 +44,8 @@ func (f *fakeStorage) Load() (cacheFile, error) {
 }
 
 func (f *fakeStorage) Save(cf cacheFile) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.saves++
 	f.lastSave = cf
 	if f.saveErr != nil {
@@ -166,9 +172,9 @@ func TestCacheLoadModuleDoesNotAddToPersistentPaths(t *testing.T) {
 	}
 }
 
-// TestCacheSaveToStorageOnlyPersistsGlobalModules проверяет, что saveToStorage
+// TestCacheBuildCacheFileOnlyPersistsGlobalModules проверяет, что buildCacheFile
 // сохраняет только persistent (глобальные) модули, не локальные.
-func TestCacheSaveToStorageOnlyPersistsGlobalModules(t *testing.T) {
+func TestCacheBuildCacheFileOnlyPersistsGlobalModules(t *testing.T) {
 	storage := &fakeStorage{}
 	cache := New(storage, AlwaysPolicy{})
 
@@ -191,10 +197,11 @@ func TestCacheSaveToStorageOnlyPersistsGlobalModules(t *testing.T) {
 	}
 	cache.persistentPaths[globalPath] = true
 	cache.lastRefresh = time.Now()
+	cf := cache.buildCacheFile()
 	cache.mu.Unlock()
 
-	if err := cache.saveToStorage(); err != nil {
-		t.Fatalf("saveToStorage: %v", err)
+	if err := storage.Save(cf); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
 
 	saved := storage.lastSave
@@ -948,6 +955,189 @@ func TestCacheLoadDoesNotRefresh(t *testing.T) {
 	if _, ok := cache.entries[modPath]; ok {
 		t.Fatal("expected module NOT loaded by Load (no Refresh), but it's in entries")
 	}
+}
+
+// --- #42: Load() logs storage error ---
+
+// TestCacheLoadLogsStorageError проверяет, что Load() логирует ошибку storage.Load()
+// через log.Printf, а не молча возвращает пустую cacheFile. Непоследовательно с
+// Save, который логируется.
+func TestCacheLoadLogsStorageError(t *testing.T) {
+	storage := &fakeStorage{loadErr: errCorruptedForTest}
+	cache := New(storage, ForceOnlyPolicy{})
+
+	var buf bytes.Buffer
+	oldOut := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(oldOut)
+
+	cf := cache.Load()
+
+	if cf.Version != 0 {
+		t.Fatalf("expected Version=0 for corrupted storage, got %d", cf.Version)
+	}
+	logOutput := buf.String()
+	if !strings.Contains(logOutput, errCorruptedForTest.Error()) {
+		t.Fatalf("expected log to mention Load error %q, got: %q", errCorruptedForTest.Error(), logOutput)
+	}
+	if !strings.Contains(logOutput, "load") {
+		t.Fatalf("expected log to mention 'load', got: %q", logOutput)
+	}
+}
+
+// --- #15: RefreshResult details (updated/skipped module lists) ---
+
+// TestCacheRefreshResultContainsUpdatedModules проверяет, что RefreshResult
+// содержит список путей обновлённых модулей (для --verbose).
+func TestCacheRefreshResultContainsUpdatedModules(t *testing.T) {
+	dir := t.TempDir()
+	modPath := filepath.Join(dir, "app.yaml")
+	writeFile(t, modPath, `name: app`)
+
+	src := discovery.NewGlobalSource(dir)
+	cache := newTestCache()
+
+	result, err := cache.Refresh(src)
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if len(result.UpdatedModules) != 1 {
+		t.Fatalf("expected 1 UpdatedModule, got %d", len(result.UpdatedModules))
+	}
+	if result.UpdatedModules[0] != modPath {
+		t.Fatalf("expected UpdatedModule %q, got %q", modPath, result.UpdatedModules[0])
+	}
+}
+
+// TestCacheRefreshResultContainsSkippedModules проверяет, что RefreshResult
+// содержит список пропущенных модулей с причиной (для --verbose).
+func TestCacheRefreshResultContainsSkippedModules(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "good.yaml"), `name: good`)
+	writeFile(t, filepath.Join(dir, "bad.yaml"), `name: bad
+commands:
+  empty: {}`)
+
+	src := discovery.NewGlobalSource(dir)
+	cache := newTestCache()
+	restore := suppressLog(t)
+	defer restore()
+
+	result, err := cache.Refresh(src)
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if len(result.SkippedModules) != 1 {
+		t.Fatalf("expected 1 SkippedModule, got %d", len(result.SkippedModules))
+	}
+	badPath := filepath.Join(dir, "bad.yaml")
+	if result.SkippedModules[0].Path != badPath {
+		t.Fatalf("expected SkippedModule Path %q, got %q", badPath, result.SkippedModules[0].Path)
+	}
+	if result.SkippedModules[0].Reason == "" {
+		t.Fatal("expected non-empty Reason for skipped module")
+	}
+}
+
+// --- #17: Cache introspection methods ---
+
+// TestCacheLastRefresh проверяет, что LastRefresh() возвращает время последнего
+// обновления (для futi cache status).
+func TestCacheLastRefresh(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "app.yaml"), `name: app`)
+
+	src := discovery.NewGlobalSource(dir)
+	cache := newTestCache()
+
+	if !cache.LastRefresh().IsZero() {
+		t.Fatal("expected zero LastRefresh before Refresh")
+	}
+
+	before := time.Now()
+	if _, err := cache.Refresh(src); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	lr := cache.LastRefresh()
+	if lr.IsZero() || lr.Before(before) {
+		t.Fatalf("expected LastRefresh >= %v, got %v", before, lr)
+	}
+}
+
+// TestCacheModuleCount проверяет, что ModuleCount() возвращает количество
+// модулей в in-memory кэше (для futi cache status).
+func TestCacheModuleCount(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a.yaml"), `name: a`)
+	writeFile(t, filepath.Join(dir, "b.yaml"), `name: b`)
+
+	src := discovery.NewGlobalSource(dir)
+	cache := newTestCache()
+
+	if cache.ModuleCount() != 0 {
+		t.Fatalf("expected 0 modules before Refresh, got %d", cache.ModuleCount())
+	}
+
+	if _, err := cache.Refresh(src); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if cache.ModuleCount() != 2 {
+		t.Fatalf("expected 2 modules after Refresh, got %d", cache.ModuleCount())
+	}
+}
+
+// TestCachePolicyName проверяет, что PolicyName() возвращает имя политики
+// (для futi cache status).
+func TestCachePolicyName(t *testing.T) {
+	tests := []struct {
+		policy RefreshPolicy
+		want   string
+	}{
+		{AlwaysPolicy{}, "every_time"},
+		{EveryTMinPolicy{T: 30 * time.Minute}, "every_t_min"},
+		{ForceOnlyPolicy{}, "force_only"},
+	}
+	for _, tc := range tests {
+		cache := New(&fakeStorage{}, tc.policy)
+		got := cache.PolicyName()
+		if got != tc.want {
+			t.Fatalf("PolicyName() = %q, want %q", got, tc.want)
+		}
+	}
+}
+
+// --- #11: RWMutex — concurrent LoadModule with Refresh ---
+
+// TestCacheConcurrentLoadModuleAndRefresh проверяет, что параллельные вызовы
+// LoadModule и Refresh не вызывают data races и не падают.
+// Запускать с -race: go test -race -run TestCacheConcurrentLoadModuleAndRefresh
+func TestCacheConcurrentLoadModuleAndRefresh(t *testing.T) {
+	dir := t.TempDir()
+	modPath := filepath.Join(dir, "echo_mod.yaml")
+	writeFile(t, modPath, `name: echo_mod
+cmd: "echo {{.args}}"`)
+
+	src := discovery.NewGlobalSource(dir)
+	cache := newTestCache()
+
+	var wg sync.WaitGroup
+	const goroutines = 5
+
+	// Половина горутин — LoadModule, половина — Refresh
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < 20; i++ {
+				if id%2 == 0 {
+					_, _ = cache.LoadModule(modPath, dir)
+				} else {
+					_, _ = cache.Refresh(src)
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
 }
 
 // --- Group 5: Concurrent LoadModule (#29) ---

@@ -160,3 +160,24 @@ func TestEveryTMinPolicyClocksBackRefreshes(t *testing.T) {
 		t.Fatal("expected true when LastRefreshTime is in the future (clocks went back)")
 	}
 }
+
+// TestNewPolicyFromConfigEveryTMinTooLarge проверяет, что T > 365 дней
+// отклоняется (фикс #38 — экстремальные T эквивалентны force_only без явного
+// заявления).
+func TestNewPolicyFromConfigEveryTMinTooLarge(t *testing.T) {
+	_, err := NewPolicyFromConfig("every_t_min", "366d")
+	if err == nil {
+		t.Fatal("expected error for T > 365 days, got nil")
+	}
+}
+
+// TestNewPolicyFromConfigEveryTMinMaxAllowed проверяет, что 365d принимается.
+func TestNewPolicyFromConfigEveryTMinMaxAllowed(t *testing.T) {
+	p, err := NewPolicyFromConfig("every_t_min", "365d")
+	if err != nil {
+		t.Fatalf("365d should be accepted, got: %v", err)
+	}
+	if _, ok := p.(EveryTMinPolicy); !ok {
+		t.Fatalf("expected EveryTMinPolicy, got %T", p)
+	}
+}

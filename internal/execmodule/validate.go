@@ -48,6 +48,11 @@ func validateCommand(path string, cmd *Command, errors *[]error, warnings *[]str
 		*warnings = append(*warnings, fmt.Sprintf("command %q: has subcommands but no cmd (calling without subcommand will fail)", path))
 	}
 
+	// Проверка positional: min не может быть отрицательным.
+	if cmd.Positional.Min < 0 {
+		*errors = append(*errors, fmt.Errorf("command %q: positional min must be >= 0, got %d", path, cmd.Positional.Min))
+	}
+
 	// Проверка params: дубликаты имён и невалидные типы.
 	seen := make(map[string]bool)
 	for _, p := range cmd.Params {

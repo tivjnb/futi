@@ -1,0 +1,188 @@
+package main
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"futi/internal/discovery"
+	"futi/internal/modulecache"
+)
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %q: %v", path, err)
+	}
+}
+
+// testSourceBuilder создаёт GlobalSource над временной директорией с демо-модулями.
+func testSourceBuilder(t *testing.T) discovery.Source {
+	t.Helper()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "docker.yaml"), `
+name: docker
+description: Docker management
+commands:
+  ps:
+    description: List containers
+    cmd: "docker ps"
+  build:
+    description: Build image
+    params:
+      - name: tag
+        type: string
+        required: true
+      - name: force
+        type: bool
+        default: false
+    cmd: "docker build -t {{.tag}}"
+`)
+	writeFile(t, filepath.Join(dir, "git.yaml"), `
+name: git
+description: Git shortcuts
+commands:
+  commit:
+    cmd: "git commit"
+`)
+	return discovery.NewGlobalSource(dir)
+}
+
+func TestRunCompleteOutputFormat(t *testing.T) {
+	src := testSourceBuilder(t)
+	var out, errBuf bytes.Buffer
+
+	// args=["docker"], toComplete="" → команды модуля docker.
+	err := runComplete(&out, &errBuf, src, nil, []string{"docker", ""})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("unexpected lines: %v", lines)
+	}
+	if lines[0] != "build\tBuild image" {
+		t.Fatalf("unexpected first match: %q", lines[0])
+	}
+	if lines[len(lines)-1] != ":4" {
+		t.Fatalf("unexpected directive line: %q, want :4", lines[len(lines)-1])
+	}
+	if !strings.Contains(errBuf.String(), "Completion ended with directive") {
+		t.Fatalf("expected stderr debug message, got %q", errBuf.String())
+	}
+}
+
+func TestRunCompleteDirectiveDefault(t *testing.T) {
+	src := testSourceBuilder(t)
+	var out bytes.Buffer
+
+	// После "--" — directive Default (0), подсказок нет.
+	err := runComplete(&out, nil, src, nil, []string{"docker", "ps", "--", "x"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.String() != ":0\n" {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestRunCompleteNoMatches(t *testing.T) {
+	src := testSourceBuilder(t)
+	var out bytes.Buffer
+	err := runComplete(&out, nil, src, nil, []string{"nope", ""})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.String() != ":4\n" {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestRunCompleteMissingArg(t *testing.T) {
+	src := testSourceBuilder(t)
+	var out bytes.Buffer
+	err := runComplete(&out, nil, src, nil, []string{})
+	if err == nil {
+		t.Fatal("expected error for missing toComplete")
+	}
+}
+
+func TestRunCompletionShells(t *testing.T) {
+	cases := []struct {
+		shell  string
+		marker string
+	}{
+		{completionBash, `complete -o default -F _futi futi`},
+		{completionZsh, `#compdef futi`},
+		{completionFish, `complete -c futi -f`},
+	}
+	for _, c := range cases {
+		t.Run(c.shell, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := runCompletion(&out, c.shell); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !strings.Contains(out.String(), "__complete") {
+				t.Fatalf("script for %s missing __complete call", c.shell)
+			}
+			if !strings.Contains(out.String(), c.marker) {
+				t.Fatalf("script for %s missing marker %q", c.shell, c.marker)
+			}
+		})
+	}
+}
+
+func TestRunCompletionUnknownShell(t *testing.T) {
+	var out bytes.Buffer
+	err := runCompletion(&out, "zz")
+	if err == nil {
+		t.Fatal("expected error for unknown shell")
+	}
+	for _, s := range validCompletionShells {
+		if !strings.Contains(err.Error(), s) {
+			t.Fatalf("error should list valid shell %q, got %v", s, err)
+		}
+	}
+}
+
+func TestCompletionNeedsRefreshEmpty(t *testing.T) {
+	// Пустой кэш (не прогревался) → нужен refresh.
+	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
+	if !completionNeedsRefresh(cache) {
+		t.Fatal("expected refresh needed for empty cache")
+	}
+}
+
+func TestCompletionNeedsRefreshNeverRefreshed(t *testing.T) {
+	// Кэш с entries, но never-refreshed (LoadModule без Refresh) → нужен refresh.
+	src := testSourceBuilder(t)
+	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
+	// Загружаем реальный модуль из source напрямую (без Refresh).
+	manifest, root, err := src.Resolve("docker")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := cache.LoadModule(manifest, root); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !completionNeedsRefresh(cache) {
+		t.Fatal("expected refresh needed for cache with entries but no last refresh")
+	}
+}
+
+func TestCompletionNeedsRefreshFresh(t *testing.T) {
+	// Кэш со свежим lastRefresh → refresh не нужен.
+	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
+	if _, err := cache.Refresh(testSourceBuilder(t)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if completionNeedsRefresh(cache) {
+		t.Fatal("expected no refresh needed for fresh cache")
+	}
+}

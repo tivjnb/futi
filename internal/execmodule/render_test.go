@@ -1,6 +1,7 @@
 package execmodule
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -149,6 +150,48 @@ func TestRenderMissingVariableReturnsError(t *testing.T) {
 	_, err := cmd.Render(map[string]string{}, "", nil)
 	if err == nil {
 		t.Fatal("expected error for missing variable in template")
+	}
+}
+
+func TestRenderIndexOutOfRangeReturnsTemplateError(t *testing.T) {
+	// Доступ к несуществующему индексу args_list → TemplateError с шаблоном и причиной.
+	cmd := &Command{
+		Cmd: "echo {{index .args_list 0}}",
+	}
+	_, err := cmd.Render(map[string]string{}, "", nil) // args_list пуст
+	if err == nil {
+		t.Fatal("expected error for index out of range")
+	}
+	var tmplErr *TemplateError
+	if !errors.As(err, &tmplErr) {
+		t.Fatalf("expected *TemplateError, got %T", err)
+	}
+	if tmplErr.Cmd != "echo {{index .args_list 0}}" {
+		t.Fatalf("unexpected Cmd: %q", tmplErr.Cmd)
+	}
+	if tmplErr.Cause == nil {
+		t.Fatal("expected non-nil Cause")
+	}
+	if !strings.Contains(tmplErr.Cause.Error(), "out of range") {
+		t.Fatalf("expected 'out of range' in cause, got %q", tmplErr.Cause.Error())
+	}
+}
+
+func TestRenderParseErrorReturnsTemplateError(t *testing.T) {
+	// Невалидный синтаксис шаблона → TemplateError.
+	cmd := &Command{
+		Cmd: "echo {{.name",
+	}
+	_, err := cmd.Render(map[string]string{}, "", nil)
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	var tmplErr *TemplateError
+	if !errors.As(err, &tmplErr) {
+		t.Fatalf("expected *TemplateError, got %T", err)
+	}
+	if tmplErr.Cmd != "echo {{.name" {
+		t.Fatalf("unexpected Cmd: %q", tmplErr.Cmd)
 	}
 }
 
@@ -355,5 +398,53 @@ func TestRenderEnvVarWithParams(t *testing.T) {
 	expected := "deploy --token secret123 --env staging"
 	if rendered != expected {
 		t.Fatalf("expected %q, got %q", expected, rendered)
+	}
+}
+
+// TestEnvMapFnOverridable проверяет, что envMapFn — package-level var,
+// которую можно заменить (фикс #43 — кэширование для HTTP server).
+func TestEnvMapFnOverridable(t *testing.T) {
+	original := envMapFn
+	defer func() { envMapFn = original }()
+
+	envMapFn = func() map[string]string {
+		return map[string]string{"CUSTOM": "value"}
+	}
+
+	cmd := &Command{Cmd: "echo {{.env.CUSTOM}}"}
+	rendered, err := cmd.Render(map[string]string{}, "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rendered != "echo value" {
+		t.Fatalf("expected 'echo value', got %q", rendered)
+	}
+}
+
+func TestValidatePositionalOK(t *testing.T) {
+	cmd := &Command{Positional: Positional{Min: 2}}
+	if err := cmd.ValidatePositional([]string{"a", "b"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := cmd.ValidatePositional([]string{"a", "b", "c"}); err != nil {
+		t.Fatalf("more args than min should pass: %v", err)
+	}
+}
+
+func TestValidatePositionalTooFew(t *testing.T) {
+	cmd := &Command{Positional: Positional{Min: 2}}
+	err := cmd.ValidatePositional([]string{"a"})
+	if err == nil {
+		t.Fatal("expected error for too few positional args")
+	}
+	if !strings.Contains(err.Error(), "at least 2") {
+		t.Fatalf("expected min in error, got: %v", err)
+	}
+}
+
+func TestValidatePositionalMinZero(t *testing.T) {
+	cmd := &Command{Positional: Positional{Min: 0}}
+	if err := cmd.ValidatePositional(nil); err != nil {
+		t.Fatalf("min 0 should always pass: %v", err)
 	}
 }

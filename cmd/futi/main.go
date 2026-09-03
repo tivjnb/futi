@@ -21,16 +21,6 @@ import (
 	"github.com/olekukonko/tablewriter"
 )
 
-// loadModule загружает модуль через loader, либо fallback на execmodule.LoadModule
-// при nil-loader. Fallback сохраняет обратную совместимость для тестов и
-// вызовов без кэша.
-func loadModule(loader modulerunner.ModuleLoader, manifestPath, moduleRoot string) (*execmodule.Module, error) {
-	if loader == nil {
-		return execmodule.LoadModule(manifestPath, moduleRoot)
-	}
-	return loader.LoadModule(manifestPath, moduleRoot)
-}
-
 var (
 	errListCommand     = errors.New("list command requested")
 	errValidateCommand = errors.New("validate command requested")
@@ -64,6 +54,16 @@ type validateRequest struct {
 func (e *validateRequest) Error() string { return "validate command requested" }
 func (e *validateRequest) Unwrap() error { return errValidateCommand }
 
+// helpRequest сигнализирует, что запрошена справка (последний аргумент "help").
+// positional — все сегменты до "help" (namespace + command path). Диспетчер
+// решает: если "<positional> help" резолвится как user-defined команда —
+// выполнить её, иначе системная справка.
+type helpRequest struct {
+	positional []string
+}
+
+func (e *helpRequest) Error() string { return "help requested" }
+
 // parseArgs разбирает позиционные аргументы и флаги.
 // Правило: позиционные аргументы (без --) = namespace... + command
 // (последний = команда, остальное = namespace через ".").
@@ -74,6 +74,7 @@ func parseArgs(args []string) (*parsedArgs, error) {
 	params := make(map[string]string)
 	var positional []string
 	var argsList []string
+	var verbose, recurse bool
 
 	i := 0
 	doubleDashSeen := false
@@ -97,13 +98,13 @@ func parseArgs(args []string) (*parsedArgs, error) {
 		}
 
 		if arg == "-v" || arg == "--verbose" {
-			params["verbose"] = "true"
+			verbose = true
 			i++
 			continue
 		}
 
 		if arg == "-r" || arg == "--recurse" {
-			params["recurse"] = "true"
+			recurse = true
 			i++
 			continue
 		}
@@ -141,8 +142,8 @@ func parseArgs(args []string) (*parsedArgs, error) {
 		ns := strings.Join(positional[:len(positional)-1], ".")
 		return nil, &listRequest{
 			namespace: ns,
-			verbose:   params["verbose"] == "true",
-			recurse:   params["recurse"] == "true",
+			verbose:   verbose,
+			recurse:   recurse,
 		}
 	}
 
@@ -152,6 +153,13 @@ func parseArgs(args []string) (*parsedArgs, error) {
 		}
 		ns := strings.Join(positional[:len(positional)-1], ".")
 		return nil, &validateRequest{namespace: ns}
+	}
+
+	// "help" как последний позиционный аргумент — запрос справки.
+	// В отличие от list/validate, help НЕ зарезервирован: диспетчер проверяет,
+	// нет ли user-defined команды "help" (см. runHelp).
+	if positional[len(positional)-1] == "help" {
+		return nil, &helpRequest{positional: positional[:len(positional)-1]}
 	}
 
 	if len(positional) < 2 {
@@ -247,7 +255,7 @@ func localSource(loader modulerunner.ModuleLoader) (discovery.Source, error) {
 	if _, err := os.Stat("futi.yaml"); err == nil {
 		abs, _ := filepath.Abs("futi.yaml")
 		absRoot, _ := filepath.Abs(".")
-		mod, err := loadModule(loader, abs, absRoot)
+		mod, err := modulerunner.LoadModule(loader, abs, absRoot)
 		if err != nil {
 			return nil, fmt.Errorf("local source: %w", err)
 		}
@@ -316,7 +324,9 @@ func cacheSubcommand(args []string) (subcommand string, present bool) {
 
 // runCacheRefresh явно обновляет кэш: обходит globalSource, перечитывает
 // изменившиеся модули, сохраняет на диск. Выводит статистику.
-func runCacheRefresh(w io.Writer, cache *modulecache.Cache, globalSource discovery.Source) error {
+// При verbose=true дополнительно выводит списки обновлённых и пропущенных
+// модулей (фикс #15).
+func runCacheRefresh(w io.Writer, cache *modulecache.Cache, globalSource discovery.Source, verbose bool) error {
 	result, err := cache.Refresh(globalSource)
 	if err != nil {
 		return fmt.Errorf("cache refresh: %w", err)
@@ -326,6 +336,57 @@ func runCacheRefresh(w io.Writer, cache *modulecache.Cache, globalSource discove
 		fmt.Fprintf(w, ", %d skipped", result.Skipped)
 	}
 	fmt.Fprintln(w)
+
+	if verbose {
+		if len(result.UpdatedModules) > 0 {
+			fmt.Fprintln(w, "Updated:")
+			for _, path := range result.UpdatedModules {
+				fmt.Fprintf(w, "  %s\n", path)
+			}
+		}
+		if len(result.SkippedModules) > 0 {
+			fmt.Fprintln(w, "Skipped:")
+			for _, sm := range result.SkippedModules {
+				fmt.Fprintf(w, "  %s (%s)\n", sm.Path, sm.Reason)
+			}
+		}
+	}
+	return nil
+}
+
+// runCacheStatus выводит текущее состояние кэша: политику, время последнего
+// обновления, количество модулей, путь к gob-файлу (фикс #17).
+func runCacheStatus(w io.Writer, cache *modulecache.Cache, cachePath string) error {
+	fmt.Fprintf(w, "Policy: %s\n", cache.PolicyName())
+
+	lr := cache.LastRefresh()
+	if lr.IsZero() {
+		fmt.Fprintln(w, "Last refresh: never")
+	} else {
+		fmt.Fprintf(w, "Last refresh: %s\n", lr.Format("2006-01-02 15:04:05"))
+	}
+
+	fmt.Fprintf(w, "Modules: %d\n", cache.ModuleCount())
+
+	if cachePath == "" {
+		fmt.Fprintln(w, "Storage: in-memory (no persistent cache)")
+	} else {
+		fmt.Fprintf(w, "Cache file: %s\n", cachePath)
+	}
+	return nil
+}
+
+// runCacheClear удаляет gob-файл кэша с диска (фикс #17).
+// In-memory кэш не очищается — он живёт только в текущем процессе.
+func runCacheClear(w io.Writer, cachePath string) error {
+	if cachePath == "" {
+		fmt.Fprintln(w, "cache: in-memory only, nothing to clear")
+		return nil
+	}
+	if err := os.Remove(cachePath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("cache clear: remove %s: %w", cachePath, err)
+	}
+	fmt.Fprintf(w, "Cache cleared: %s\n", cachePath)
 	return nil
 }
 
@@ -354,7 +415,7 @@ func runList(w io.Writer, source discovery.Source, namespace string, verbose, re
 				continue
 			}
 
-			mod, err := loadModule(loader, manifestPath, moduleRoot)
+			mod, err := modulerunner.LoadModule(loader, manifestPath, moduleRoot)
 			if err != nil {
 				return fmt.Errorf("list: %w", err)
 			}
@@ -391,7 +452,7 @@ func runList(w io.Writer, source discovery.Source, namespace string, verbose, re
 }
 
 func printCommands(w io.Writer, manifestPath, moduleRoot string, verbose bool, loader modulerunner.ModuleLoader) error {
-	mod, err := loadModule(loader, manifestPath, moduleRoot)
+	mod, err := modulerunner.LoadModule(loader, manifestPath, moduleRoot)
 	if err != nil {
 		return fmt.Errorf("list: %w", err)
 	}
@@ -476,7 +537,7 @@ func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader
 		var desc, path string
 		if c.Type == "module" {
 			path = c.ManifestPath
-			if mod, err := loadModule(loader, c.ManifestPath, c.ModuleRoot); err == nil {
+			if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err == nil {
 				desc = mod.Description
 			}
 		}
@@ -517,6 +578,7 @@ USAGE
   futi <namespace...> validate        Validate module schema
   futi init <name> [flags]            Create a new module from template
   futi cache refresh                  Refresh module cache
+  futi completion <bash|zsh|fish>     Generate a shell completion script
   futi -h | --help
 
 The last positional argument (without --) is the command; everything before
@@ -574,6 +636,22 @@ LISTING
 
   The (default) marker in command listings indicates the module's default
   command (cmd field), invoked when no command is specified.
+
+CACHE
+  futi cache refresh               Reload modules from source into cache
+  futi cache refresh -v, --verbose Show which modules were updated/skipped
+  futi cache status                Show cache policy, last refresh, module count
+  futi cache clear                 Remove the persistent cache file from disk
+
+COMPLETION
+  futi completion bash|zsh|fish    Print a shell completion script to stdout.
+                                   Pipe it into your shell's completion setup:
+                                     bash:  futi completion bash > /etc/bash_completion.d/futi
+                                     zsh:   futi completion zsh > "${fpath[1]}/_futi"
+                                     fish:  futi completion fish > ~/.config/fish/completions/futi.fish
+                                   Completion suggests modules, namespaces,
+                                   commands, subcommands, parameter names and
+                                   boolean values (true/false).
 
 VALIDATION
   futi <ns> validate               Validate module schema (all commands and
@@ -704,6 +782,21 @@ func exitCodeFromError(err error) int {
 	return 1
 }
 
+// formatRunError форматирует ошибку выполнения команды для вывода в stderr.
+// Для *execmodule.TemplateError (ошибка парсинга/выполнения cmd-шаблона) даёт
+// дружелюбное многострочное сообщение без длинной цепочки обёрток и технического
+// трейса text/template. Для остальных ошибок — "run: <err>" как раньше.
+func formatRunError(err error) string {
+	var tmplErr *execmodule.TemplateError
+	if errors.As(err, &tmplErr) {
+		return fmt.Sprintf(
+			"error: failed to render template.\n  Template: %s\n  Cause: %v",
+			tmplErr.Cmd, tmplErr.Cause,
+		)
+	}
+	return fmt.Sprintf("run: %v", err)
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -725,11 +818,33 @@ func main() {
 		return
 	}
 
+	// Быстрый путь: futi completion <shell> — только генерация скрипта,
+	// без config/source/cache.
+	if os.Args[1] == "completion" {
+		if len(os.Args) < 3 {
+			fmt.Fprintf(os.Stderr, "error: completion requires a shell (valid: %s)\n", strings.Join(validCompletionShells, ", "))
+			os.Exit(1)
+		}
+		if err := runCompletion(os.Stdout, os.Args[2]); err != nil {
+			fmt.Fprintf(os.Stderr, "completion: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Создаём глобальный source и загружаем config (один раз — REVIEW #5, #12).
 	cfg, globalSource, err := createGlobalSource()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "source: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Быстрый путь: futi __complete <args...> — hidden-обработчик completion.
+	// ДО cache.Start: __complete сам решает, нужно ли прогревать кэш
+	// (самообновление при холодном/устаревшем), и не запускает Refresh по политике
+	// на каждый TAB.
+	if os.Args[1] == "__complete" {
+		os.Exit(runCompleteMain(os.Stdout, os.Stderr, cfg, globalSource, os.Args[2:]))
 	}
 
 	// `futi cache <subcommand>` — fast path ДО cache.Start, чтобы избежать
@@ -738,19 +853,46 @@ func main() {
 	// единственный Refresh с корректным mtime+size сравнением.
 	if subcmd, ok := cacheSubcommand(os.Args[1:]); ok {
 		cache := newCacheFromConfig(cfg)
+		cachePath, pathErr := defaultCachePath()
 		switch subcmd {
 		case "refresh":
+			// Парсим --verbose/-v из оставшихся аргументов.
+			verbose := false
+			for _, a := range os.Args[3:] {
+				if a == "-v" || a == "--verbose" {
+					verbose = true
+				}
+			}
 			cache.Load() // load from disk without Refresh
-			if err := runCacheRefresh(os.Stdout, cache, globalSource); err != nil {
+			if err := runCacheRefresh(os.Stdout, cache, globalSource, verbose); err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "status":
+			cache.Load() // populate from disk for accurate module count
+			if pathErr != nil {
+				cachePath = ""
+			}
+			if err := runCacheStatus(os.Stdout, cache, cachePath); err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "clear":
+			if pathErr != nil {
+				cachePath = ""
+			}
+			if err := runCacheClear(os.Stdout, cachePath); err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
 			}
 			return
 		case "":
-			fmt.Fprintln(os.Stderr, `error: cache requires a subcommand (try "cache refresh")`)
+			fmt.Fprintln(os.Stderr, `error: cache requires a subcommand (try "cache refresh", "cache status", or "cache clear")`)
 			os.Exit(1)
 		default:
-			fmt.Fprintf(os.Stderr, "error: unknown cache subcommand %q (try \"cache refresh\")\n", subcmd)
+			fmt.Fprintf(os.Stderr, "error: unknown cache subcommand %q (try \"cache refresh\", \"cache status\", or \"cache clear\")\n", subcmd)
 			os.Exit(1)
 		}
 	}
@@ -765,6 +907,7 @@ func main() {
 	if err != nil {
 		var listReq *listRequest
 		var valReq *validateRequest
+		var helpReq *helpRequest
 		switch {
 		case errors.As(err, &listReq):
 			source, err := createSource(cache, globalSource)
@@ -787,6 +930,17 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case errors.As(err, &helpReq):
+			source, err := createSource(cache, globalSource)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "source: %v\n", err)
+				os.Exit(1)
+			}
+			if helpErr := runHelp(os.Stdout, source, cache, helpReq.positional); helpErr != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", helpErr)
+				os.Exit(1)
+			}
+			return
 		case errors.Is(err, errHelp):
 			printUsage()
 			return
@@ -801,7 +955,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err := modulerunner.Run(context.Background(), source, pa.namespace, pa.command, pa.params, pa.args, pa.argsList, nil, nil, cache); err != nil {
-		fmt.Fprintf(os.Stderr, "run: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%s\n", formatRunError(err))
 		os.Exit(exitCodeFromError(err))
 	}
 }

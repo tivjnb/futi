@@ -26,16 +26,25 @@ type Module struct {
 type Command struct {
 	Description string
 	Params      []Param
+	Positional  Positional
 	Cmd         string
 	Commands    map[string]*Command
 }
 
 // Param — параметр команды.
 type Param struct {
-	Name     string
-	Type     string
-	Required bool
-	Default  string
+	Name        string
+	Type        string
+	Required    bool
+	Default     string
+	Description string
+}
+
+// Positional — требования к позиционным аргументам команды (после "--").
+// В MVP поддерживается только Min — обязательный минимум позиционных аргументов.
+// Ограничения (max, сравнения, остаток) и defaults — план (см. NEXT_STEPS).
+type Positional struct {
+	Min int
 }
 
 // moduleYAML — промежуточная структура для парсинга YAML.
@@ -49,15 +58,21 @@ type moduleYAML struct {
 type commandYAML struct {
 	Description string                 `yaml:"description"`
 	Params      []paramYAML            `yaml:"params"`
+	Positional  positionalYAML         `yaml:"positional"`
 	Cmd         string                 `yaml:"cmd"`
 	Commands    map[string]commandYAML `yaml:"commands"`
 }
 
+type positionalYAML struct {
+	Min int `yaml:"min"`
+}
+
 type paramYAML struct {
-	Name     string `yaml:"name"`
-	Type     string `yaml:"type"`
-	Required bool   `yaml:"required"`
-	Default  string `yaml:"default"`
+	Name        string `yaml:"name"`
+	Type        string `yaml:"type"`
+	Required    bool   `yaml:"required"`
+	Default     string `yaml:"default"`
+	Description string `yaml:"description"`
 }
 
 // LoadModule загружает манифест модуля из YAML-файла и валидирует схему.
@@ -112,17 +127,19 @@ func ParseModule(manifestPath, moduleRoot string) (*Module, error) {
 func parseCommand(c commandYAML) *Command {
 	params := make([]Param, len(c.Params))
 	for i, p := range c.Params {
-		params[i] = Param{
-			Name:     p.Name,
-			Type:     p.Type,
-			Required: p.Required,
-			Default:  p.Default,
-		}
+	params[i] = Param{
+		Name:        p.Name,
+		Type:        p.Type,
+		Required:    p.Required,
+		Default:     p.Default,
+		Description: p.Description,
+	}
 	}
 
 	cmd := &Command{
 		Description: c.Description,
 		Params:      params,
+		Positional:  Positional{Min: c.Positional.Min},
 		Cmd:         c.Cmd,
 	}
 

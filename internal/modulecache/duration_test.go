@@ -42,6 +42,8 @@ func TestParseDurationSupportsDays(t *testing.T) {
 		{"1d4h", 28 * time.Hour},
 		{"1d2h30m", 26*time.Hour + 30*time.Minute},
 		{"3d12h", 84 * time.Hour},
+		{"1d0h", 24 * time.Hour}, // #32: zero-duration rest should be accepted
+		{"1d0m", 24 * time.Hour}, // #32: same for 0m
 	}
 	for _, tc := range cases {
 		t.Run(tc.input, func(t *testing.T) {
@@ -83,5 +85,14 @@ func TestParseDurationInvalidReturnsError(t *testing.T) {
 				t.Fatalf("expected error for %q, got nil", tc)
 			}
 		})
+	}
+}
+
+// TestParseDurationDayWordGivesClearError проверяет, что "1day" даёт понятное
+// сообщение об ошибке (фикс #33 — strings.Contains(s, "d") ловил "1day").
+func TestParseDurationDayWordGivesClearError(t *testing.T) {
+	_, err := parseDuration("1day")
+	if err == nil {
+		t.Fatal("expected error for '1day'")
 	}
 }

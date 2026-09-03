@@ -24,6 +24,7 @@ futi deploy staging
 - [Валидация](#валидация)
 - [Создание модулей](#создание-модулей)
 - [Кэш модулей](#кэш-модулей)
+- [Автодополнение](#автодополнение)
 - [Примеры](#примеры)
 - [ROADMAP](#roadmap)
 - [Лицензия](#лицензия)
@@ -160,11 +161,14 @@ commands:
 | `commands.<name>.description` | string | Описание команды (опционально) |
 | `commands.<name>.cmd` | string | Шаблон команды (если есть `commands` — fallback) |
 | `commands.<name>.params` | list | Параметры команды (опционально) |
+| `commands.<name>.positional` | block | Требования к позиционным аргументам (опционально) |
 | `commands.<name>.commands` | map | Вложенные команды (опционально) |
 | `params[].name` | string | Имя параметра (обязательно) |
 | `params[].type` | string | Тип: `string` (по умолчанию), `bool` или `int` |
 | `params[].required` | bool | Обязательный параметр (по умолчанию `false`) |
 | `params[].default` | string | Значение по умолчанию |
+| `params[].description` | string | Описание параметра (опционально, показывается в help) |
+| `positional.min` | int | Обязательный минимум позиционных аргументов после `--` (по умолчанию `0`) |
 
 ---
 
@@ -285,6 +289,17 @@ Bool-параметры нормализуются: `false`, `0`, `no`, `""` →
 - `required: true` и параметр не передан → ошибка
 - `default` применяется, если параметр не передан
 - Неизвестный параметр (нет в схеме) → ошибка
+- `positional.min` и аргументов после `--` меньше минимума → ошибка
+
+Пример `positional`:
+
+```yaml
+commands:
+  greet:
+    cmd: "echo {{index .args_list 0}}"
+    positional:
+      min: 1       # требует минимум 1 позиционный аргумент после --
+```
 
 ### Важно: пробелы в значениях
 
@@ -368,6 +383,8 @@ futi <namespace...> list -r                 # рекурсивный обход 
 futi <namespace...> validate                # валидация схемы модуля
 futi init <name> [flags]                    # создать модуль с шаблоном
 futi cache refresh                          # явное обновление кэша модулей
+futi completion <bash|zsh|fish>             # сгенерировать скрипт автодополнения
+futi __complete <args...>                   # hidden: подсказки для completion (внутр.)
 futi -h | --help                            # справка
 ```
 
@@ -671,6 +688,54 @@ cache:
 
 ---
 
+## Автодополнение
+
+futi поддерживает автодополнение для **bash**, **zsh** и **fish**. Имена модулей,
+namespace'ов, команд, подкоманд и параметров (`--tag`, `--force`) — динамические,
+поэтому completion запрашивает подсказки у futi на лету через скрытую команду
+`futi __complete <args...>` (протокол, совместимый с cobra).
+
+### Установка
+
+```bash
+# bash
+futi completion bash > /etc/bash_completion.d/futi   # system-wide
+source <(futi completion bash)                        # сессия
+
+# zsh
+futi completion zsh > "${fpath[1]}/_futi"
+autoload -U compinit && compinit
+
+# fish
+futi completion fish > ~/.config/fish/completions/futi.fish
+```
+
+### Что дополняется
+
+- **Модули и namespaces** — `futi <TAB>`, `futi dev <TAB>`
+- **Команды и subcommands** — `futi docker <TAB>`, `futi docker migrate <TAB>`
+- **Имена параметров** — `futi docker build --<TAB>` → `--tag`, `--force`
+- **Bool-значения** — `futi docker build --force <TAB>` → `true`/`false`
+- **Обязательные параметры** — на листовой команде показываются сразу (без ввода `--`): `futi docker build <TAB>` → `--tag` (с меткой `(required)` в zsh)
+- **Builtins** — `futi cache <TAB>` → `refresh`/`status`/`clear`; `futi completion <TAB>` → `bash`/`zsh`/`fish`
+- **Подсказка `help`** — `help` предлагается на каждом уровне (модуль/команда/subcommand): `futi demo <TAB>`, `futi demo db <TAB>`, `futi demo greet <TAB>`. Если в модуле уже определена команда `help` (user-defined), она и предлагается — системная не дублируется.
+
+Значения строковых/числовых параметров (обычно user-supplied, например `--tag myapp`)
+не угадываются и не дополняются. После `--` (args команды) futi разрешает
+дополнение файлов.
+
+zsh выводит описания команд/модулей рядом с подсказками.
+
+### Кэш и completion
+
+`__complete` использует persistent кэш модулей (как обычный CLI), поэтому работает
+быстро — без обхода source на каждый TAB. Чтобы подсказки не были пустыми на
+холодном кэше (первый запуск) или устаревшими, `__complete` **самообновляет** кэш,
+если он пуст, никогда не обновлялся или обновлялся более часа назад. В остальных
+случаях берёт данные из кэша без Refresh.
+
+---
+
 ## Примеры
 
 ### Echo-модуль (args + default cmd)
@@ -818,7 +883,10 @@ futi находится на стадии PRE PRE MVP. Ниже — направ
 
 - **Типы параметров** — расширение за пределы `int`: `file`, `json`, `secret` (безопасная передача через env, не args; базовый доступ к env vars уже есть через `{{.env.FOO}}`)
 - **Гибридный args-парсинг** — позиционные args для листовых команд без явного `--`
-- **Shell completion** — автодополнение для bash/zsh/fish
+- ~~**Shell completion** — автодополнение для bash/zsh/fish~~ ✅ реализовано (см. раздел «Автодополнение»)
+- ~~**Help-система** — модульная/командная справка через `help`~~ ✅ реализовано (`futi <ns> help`, `futi <ns> <cmd> help`; user-defined `help` выигрывает)
+- **Descriptions в bash/fish** — zsh выводит описания уже сейчас; bash/fish — roadmap
+- **PowerShell** — 4-й shell после стабилизации bash/zsh/fish
 
 ### Unified I/O
 
