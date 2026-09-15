@@ -13,6 +13,8 @@
 package modulecache
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"log"
 	"os"
@@ -81,6 +83,58 @@ func (c *Cache) LoadModule(manifestPath, moduleRoot string) (*execmodule.Module,
 	}
 	c.entries[manifestPath] = entry{Module: mod}
 	return mod, nil
+}
+
+// LoadModuleVerified возвращает модуль, гарантируя его свежесть и аутентичность
+// относительно файла манифеста на диске. Используется при ИСПОЛНЕНИИ команды
+// (run), где отравленный/устаревший кэш мог бы привести к выполнению чужого кода.
+//
+// Механизм «чексумма как замок»: на cache-hit читается содержимое файла,
+// считается SHA-256 и сравнивается с сохранённым в entry.Hash.
+//   - Hash совпал → модуль не менялся, возвращается из кэша (экономит YAML-парсинг).
+//   - Hash не совпал → файл изменился или подменён → перечитывается с диска,
+//     entry обновляется с новым Hash.
+//   - Hash пуст (старый формат кэша, запись добавлена через LoadModule) → запись
+//     недоверенна, модуль перечитывается с диска.
+//
+// В отличие от LoadModule (быстрый, для list/completion/help), эта проверка
+// читает файл при каждом cache-hit — применима только на горячем пути исполнения.
+func (c *Cache) LoadModuleVerified(manifestPath, moduleRoot string) (*execmodule.Module, error) {
+	h, err := hashFile(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+
+	c.mu.RLock()
+	if e, ok := c.entries[manifestPath]; ok && len(e.Hash) > 0 && bytes.Equal(e.Hash, h) {
+		c.mu.RUnlock()
+		return e.Module, nil
+	}
+	c.mu.RUnlock()
+
+	mod, err := execmodule.LoadModule(manifestPath, moduleRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Double-check: другая горутина могла обновить entry.
+	if e, ok := c.entries[manifestPath]; ok && len(e.Hash) > 0 && bytes.Equal(e.Hash, h) {
+		return e.Module, nil
+	}
+	c.entries[manifestPath] = entry{Module: mod, Hash: h}
+	return mod, nil
+}
+
+// hashFile возвращает SHA-256 содержимого файла.
+func hashFile(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(data)
+	return sum[:], nil
 }
 
 // Load загружает entries из storage без вызова Refresh. Возвращает cacheFile
@@ -205,7 +259,19 @@ func (c *Cache) Refresh(globalSource discovery.Source) (RefreshResult, error) {
 			}
 		}
 
-		// Файл изменился (или новый) — перечитываем.
+		// Файл изменился (или новый) — перечитываем. Считаем SHA-256 содержимого
+		// для строгой проверки при исполнении (LoadModuleVerified).
+		h, err := hashFile(child.ManifestPath)
+		if err != nil {
+			result.Skipped++
+			result.SkippedModules = append(result.SkippedModules, SkippedModule{
+				Path:   child.ManifestPath,
+				Reason: fmt.Sprintf("hash: %v", err),
+			})
+			log.Printf("modulecache: refresh: hash %q: %v", child.ManifestPath, err)
+			continue
+		}
+
 		mod, err := execmodule.LoadModule(child.ManifestPath, child.ModuleRoot)
 		if err != nil {
 			result.Skipped++
@@ -221,6 +287,7 @@ func (c *Cache) Refresh(globalSource discovery.Source) (RefreshResult, error) {
 			Module:  mod,
 			ModTime: info.ModTime(),
 			Size:    info.Size(),
+			Hash:    h,
 		}
 		c.persistentPaths[child.ManifestPath] = true
 		result.Updated++

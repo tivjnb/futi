@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/google/shlex"
 )
 
 func TestValidateRequiredParamMissing(t *testing.T) {
@@ -446,5 +448,101 @@ func TestValidatePositionalMinZero(t *testing.T) {
 	cmd := &Command{Positional: Positional{Min: 0}}
 	if err := cmd.ValidatePositional(nil); err != nil {
 		t.Fatalf("min 0 should always pass: %v", err)
+	}
+}
+// --- {{quote}} (REV-004: защита от argv/flag-инъекции через re-shlex) ---
+
+// TestQuoteShlexRoundTrip проверяет, что quoteShlex(v) после shlex.Split
+// возвращает ровно [v]: значение с любыми кавычками/метасимволами остаётся
+// одним argv-токеном. Это контракт совместимости POSIX-экранирования с
+// используемым shlex-парсером.
+func TestQuoteShlexRoundTrip(t *testing.T) {
+	values := []string{
+		"hello",
+		"hello world",
+		`x" --force "y`,
+		"it's quoted",
+		`$HOME`,
+		"; rm -rf /tmp/pwn",
+		"",
+		`back\slash`,
+		"'quoted'",
+		"'" + `mix'"ed` + "'",
+		"a\tb",
+	}
+	for _, v := range values {
+		quoted := quoteShlex(v)
+		parts, err := shlex.Split(quoted)
+		if err != nil {
+			t.Fatalf("quoteShlex(%q) = %q: shlex.Split error: %v", v, quoted, err)
+		}
+		if len(parts) != 1 || parts[0] != v {
+			t.Fatalf("quoteShlex(%q) = %q: shlex.Split = %v, want [%q]", v, quoted, parts, v)
+		}
+	}
+}
+
+// TestRenderQuotePreventsFlagInjection проверяет сценарий REV-004:
+// пользователь передаёт значение с кавычками и флагом, шаблон использует
+// {{quote .msg}} — значение НЕ пробивает границы argv, флаг --force
+// остаётся частью значения, а не отдельным argv.
+func TestRenderQuotePreventsFlagInjection(t *testing.T) {
+	cmd := &Command{Cmd: `echo {{quote .msg}}`}
+	rendered, err := cmd.Render(map[string]string{"msg": `x" --force "y`}, "", nil)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	parts, err := shlex.Split(rendered)
+	if err != nil {
+		t.Fatalf("shlex.Split(%q): %v", rendered, err)
+	}
+	want := []string{"echo", `x" --force "y`}
+	if len(parts) != len(want) {
+		t.Fatalf("argv = %v, want %v (flag injection!)", parts, want)
+	}
+	for i := range want {
+		if parts[i] != want[i] {
+			t.Fatalf("argv = %v, want %v (flag injection!)", parts, want)
+		}
+	}
+
+	// Явная проверка: --force не стал отдельным argv-токеном.
+	for _, p := range parts[1:] {
+		if p == "--force" {
+			t.Fatalf("flag injection: --force became a separate argv token in %v", parts)
+		}
+	}
+}
+
+// TestRenderQuoteArgsList проверяет использование quote с элементом args_list:
+// {{quote (index .args_list 0)}} — аргумент с пробелами/кавычками после "--"
+// остаётся одним argv-токеном.
+func TestRenderQuoteArgsList(t *testing.T) {
+	cmd := &Command{Cmd: `echo {{quote (index .args_list 0)}}`}
+	rendered, err := cmd.Render(map[string]string{}, "", []string{`a b "c --force`})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	parts, err := shlex.Split(rendered)
+	if err != nil {
+		t.Fatalf("shlex.Split(%q): %v", rendered, err)
+	}
+	want := []string{"echo", `a b "c --force`}
+	if len(parts) != 2 || parts[0] != "echo" || parts[1] != want[1] {
+		t.Fatalf("argv = %v, want %v", parts, want)
+	}
+}
+
+// TestRenderQuotePlainValue проверяет, что quote не портит обычные значения.
+func TestRenderQuotePlainValue(t *testing.T) {
+	cmd := &Command{Cmd: `echo {{quote .msg}}`}
+	rendered, err := cmd.Render(map[string]string{"msg": "hello"}, "", nil)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if rendered != `echo 'hello'` {
+		t.Fatalf("rendered = %q, want %q", rendered, `echo 'hello'`)
 	}
 }

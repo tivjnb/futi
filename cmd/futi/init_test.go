@@ -505,3 +505,72 @@ func TestRunInitReservedNameCache(t *testing.T) {
 		t.Fatal("expected error for reserved name 'cache'")
 	}
 }
+
+// TestRunInitThroughSymlinkShowsResolvedPath проверяет честный UX при записи
+// через симлинк-директорию (dotfiles-репо, dev-симлинк): файл физически
+// создаётся в целевом каталоге симлинка, и "Created:" показывает
+// РЕЗОЛВНУТЫЙ путь, а не лексический (который скрывал реальное место записи).
+func TestRunInitThroughSymlinkShowsResolvedPath(t *testing.T) {
+	base := t.TempDir()
+	realDir := filepath.Join(t.TempDir(), "realpkg")
+	if err := os.MkdirAll(realDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "linkedpkg")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	t.Setenv("FUTI_MODULES_DIR", base)
+	t.Chdir(t.TempDir())
+
+	var buf bytes.Buffer
+	if err := runInit(&buf, []string{"linkedpkg/newmod", "--global"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	out := buf.String()
+	// Вывод показывает резолвнутый путь (реальное место записи).
+	resolvedPath := filepath.Join(realDir, "newmod.yaml")
+	if !strings.Contains(out, resolvedPath) {
+		t.Fatalf("output should show resolved path %q, got %q", resolvedPath, out)
+	}
+	// Файл физически в целевом каталоге симлинка.
+	if _, err := os.Stat(resolvedPath); err != nil {
+		t.Fatalf("expected file at resolved path %s: %v", resolvedPath, err)
+	}
+}
+
+// TestRunInitReservedNames проверяет, что ВСЕ зарезервированные имена
+// отклоняются (REV-008: раньше completion/__complete отсутствовали в списке —
+// futi init completion молча создавал модуль, который никогда не вызовется:
+// fast-path main.go перехватывает completion до резолва модулей).
+func TestRunInitReservedNames(t *testing.T) {
+	reserved := []string{"list", "validate", "cache", "init", "completion", "__complete"}
+	for _, name := range reserved {
+		t.Run(name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			var buf bytes.Buffer
+			err := runInit(&buf, []string{name})
+			if err == nil {
+				t.Fatalf("expected error for reserved name %q", name)
+			}
+			if !strings.Contains(err.Error(), "reserved") {
+				t.Fatalf("error should mention reserved: %v", err)
+			}
+		})
+	}
+
+	// Проверка того же через canonical-список (защита от рассинхрона
+	// теста и реализации).
+	for name := range reservedModuleNames {
+		found := false
+		for _, r := range reserved {
+			if r == name {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("reservedModuleNames contains %q not covered by test", name)
+		}
+	}
+}

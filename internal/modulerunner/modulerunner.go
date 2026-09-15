@@ -21,6 +21,15 @@ type ModuleLoader interface {
 	LoadModule(manifestPath, moduleRoot string) (*execmodule.Module, error)
 }
 
+// VerifiedLoader — опциональное расширение ModuleLoader: загрузка с гарантией
+// свежести/аутентичности модуля относительно файла манифеста (проверка SHA-256).
+// Реализует *modulecache.Cache (LoadModuleVerified). Используется при ИСПОЛНЕНИИ
+// команды (run), где отравленный/устаревший кэш мог бы привести к выполнению
+// чужого кода. list/completion/help используют обычный LoadModule (быстрый).
+type VerifiedLoader interface {
+	LoadModuleVerified(manifestPath, moduleRoot string) (*execmodule.Module, error)
+}
+
 // LoadModule вызывает loader.LoadModule, либо fallback на execmodule.LoadModule
 // при nil-loader. Fallback сохраняет обратную совместимость для тестов и
 // вызовов без кэша.
@@ -30,6 +39,17 @@ func LoadModule(loader ModuleLoader, manifestPath, moduleRoot string) (*execmodu
 		return execmodule.LoadModule(manifestPath, moduleRoot)
 	}
 	return loader.LoadModule(manifestPath, moduleRoot)
+}
+
+// LoadModuleVerified загружает модуль со строгой проверкой свежести/аутентичности
+// (см. VerifiedLoader). Если loader реализует VerifiedLoader — использует его
+// LoadModuleVerified; иначе fallback на обычный LoadModule (например, при
+// nil-loader или в тестах без кэша).
+func LoadModuleVerified(loader ModuleLoader, manifestPath, moduleRoot string) (*execmodule.Module, error) {
+	if v, ok := loader.(VerifiedLoader); ok {
+		return v.LoadModuleVerified(manifestPath, moduleRoot)
+	}
+	return LoadModule(loader, manifestPath, moduleRoot)
 }
 
 // Run находит модуль через source, загружает его, валидирует параметры,
@@ -73,7 +93,9 @@ func Run(
 			continue
 		}
 
-		mod, err := LoadModule(loader, manifestPath, moduleRoot)
+		// Исполняемый модуль загружаем со строгой проверкой свежести/аутентичности
+		// (SHA-256). list/completion/help используют обычный LoadModule (быстрый).
+		mod, err := LoadModuleVerified(loader, manifestPath, moduleRoot)
 		if err != nil {
 			return fmt.Errorf("modulerunner: %w", err)
 		}

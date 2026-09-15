@@ -186,3 +186,62 @@ func TestCompletionNeedsRefreshFresh(t *testing.T) {
 		t.Fatal("expected no refresh needed for fresh cache")
 	}
 }
+
+// TestCompletionFishNoEval — регрессионный тест REV-003: fish-скрипт не должен
+// использовать eval для вызова __complete. eval парсит склеенную из токенов
+// commandline строку как fish-код: $() и ';' из набранной пользователем строки
+// исполняются уже при TAB, пробельные токены распадаются. Прямой вызов
+// ($args[1] __complete $args[2..-1]) передаёт токены как отдельные argv без
+// повторного парсинга (поведение подтверждено на fish 3.7.0).
+func TestCompletionFishNoEval(t *testing.T) {
+	if strings.Contains(fishCompletionScript, "eval") {
+		t.Fatal("fish completion script must not use eval (REV-003 regression)")
+	}
+	if !strings.Contains(fishCompletionScript, "($args[1] __complete $args[2..-1]") {
+		t.Fatal("fish completion script missing direct __complete call without eval")
+	}
+}
+
+// TestRunCompleteSanitizesSpecialChars проверяет санитизацию кандидатов
+// (REV-010): управляющие символы в тексте/описании (\t, \n, \r) заменяются
+// на пробел — иначе \n разлагает кандидата на строки и ломает построчный
+// протокол __complete, а \t искажает формат "text\tdescription".
+func TestRunCompleteSanitizesSpecialChars(t *testing.T) {
+	dir := t.TempDir()
+	// YAML double-quoted scalar разворачивает \n/\t/\r в управляющие символы.
+	writeFile(t, filepath.Join(dir, "weird.yaml"), "name: weird\ndescription: \"line1\\nline2\\twith\\ttabs\\r\"\ncmd: \"echo hi\"\n")
+	writeFile(t, filepath.Join(dir, "normal.yaml"), "name: normal\ndescription: Normal module\ncmd: \"echo ok\"\n")
+	src := discovery.NewGlobalSource(dir)
+
+	var out bytes.Buffer
+	err := runComplete(&out, nil, src, nil, []string{""})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 5 builtin (cache/completion/init/list/validate) + normal + weird + directive.
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 8 {
+		t.Fatalf("expected 8 lines (5 builtins + 2 modules + directive), got %d: %q", len(lines), out.String())
+	}
+	for _, ln := range lines {
+		if strings.Contains(ln, "\r") {
+			t.Fatalf("line %q contains CR", ln)
+		}
+		// Ровно один таб-разделитель "text\tdescription" допустим; второй
+		// таб означает несанитизированный \t внутри текста/описания.
+		if strings.Count(ln, "\t") > 1 {
+			t.Fatalf("line %q contains tab inside text/description", ln)
+		}
+	}
+	// Многострочное описание склеено пробелами в одну строку.
+	found := false
+	for _, ln := range lines {
+		if ln == "weird\tline1 line2 with tabs" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected sanitized line %q, got %q", "weird\tline1 line2 with tabs", out.String())
+	}
+}

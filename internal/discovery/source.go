@@ -83,6 +83,12 @@ func (s *GlobalSource) Resolve(namespace string) (string, string, error) {
 // List обходит RootDir и находит все модули:
 //   - *.yaml файлы на любом уровне вложенности
 //   - */config.yaml (пакеты)
+//
+// Симлинки поддерживаются (dotfiles-менеджеры, dev-симлинки из репо):
+// симлинк на .yaml-файл и симлинк на директорию (namespace или пакет)
+// обрабатываются так же, как реальные файлы/директории. Циклы симлинков
+// (a → b → a) и повторный обход алиасов отсекаются по резолвнутому пути.
+// Битые симлинки (цель недоступна) пропускаются.
 func (s *GlobalSource) List() ([]ModuleInfo, error) {
 	// Non-existent root = no modules (fresh install)
 	if _, err := os.Stat(s.RootDir); err != nil {
@@ -93,42 +99,78 @@ func (s *GlobalSource) List() ([]ModuleInfo, error) {
 	}
 
 	var modules []ModuleInfo
+	s.walkModules(s.RootDir, "", &modules, make(map[string]bool))
+	return modules, nil
+}
 
-	err := filepath.WalkDir(s.RootDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if d.Name() != "config.yaml" && !strings.HasSuffix(d.Name(), ".yaml") {
-			return nil
-		}
+// walkModules рекурсивно обходит dir и собирает модули в *modules.
+// nsPrefix — namespace-префикс ("" для корня). visited — множество
+// резолвнутых (EvalSymlinks) путей уже обойдённых директорий: защита от
+// циклов симлинков и повторного обхода алиасов на один каталог.
+// Семантика обхода соответствует filepath.WalkDir: внутрь пакетов
+// (директорий с config.yaml) тоже заходим.
+func (s *GlobalSource) walkModules(dir, nsPrefix string, modules *[]ModuleInfo, visited map[string]bool) {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return // недоступная директория — пропускаем
+	}
+	if visited[real] {
+		return
+	}
+	visited[real] = true
 
-		rel, err := filepath.Rel(s.RootDir, path)
-		if err != nil {
-			return fmt.Errorf("discovery: list: %w", err)
-		}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
 
-		var name string
-		if d.Name() == "config.yaml" {
-			name = strings.ReplaceAll(filepath.ToSlash(filepath.Dir(rel)), "/", ".")
-		} else {
-			name = strings.ReplaceAll(strings.TrimSuffix(filepath.ToSlash(rel), ".yaml"), "/", ".")
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		if entryIsDir(path, entry) {
+			// config.yaml внутри → директория (возможно, симлинк) — пакет.
+			if fileExists(filepath.Join(path, "config.yaml")) {
+				*modules = append(*modules, ModuleInfo{
+					Name:         nsName(nsPrefix, entry.Name()),
+					ManifestPath: filepath.Join(path, "config.yaml"),
+					ModuleRoot:   path,
+				})
+			}
+			s.walkModules(path, nsPrefix+entry.Name()+".", modules, visited)
+			continue
 		}
-
-		modules = append(modules, ModuleInfo{
-			Name:         name,
+		name := entry.Name()
+		if name == "config.yaml" || !strings.HasSuffix(name, ".yaml") {
+			continue
+		}
+		*modules = append(*modules, ModuleInfo{
+			Name:         nsName(nsPrefix, strings.TrimSuffix(name, ".yaml")),
 			ManifestPath: path,
 			ModuleRoot:   filepath.Dir(path),
 		})
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("discovery: list: %w", err)
 	}
+}
 
-	return modules, nil
+// entryIsDir определяет, является ли entry директорией, следуя симлинкам.
+// Битый симлинк (цель недоступна) трактуется как файл: если имя *.yaml,
+// он остаётся в listing'е как модуль — цель может стать доступной позже
+// (кэш сохраняет запись при временной ошибке Stat).
+func entryIsDir(path string, entry os.DirEntry) bool {
+	if entry.Type()&os.ModeSymlink == 0 {
+		return entry.IsDir()
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false // битый симлинк — трактуем как файл
+	}
+	return info.IsDir()
+}
+
+// nsName строит имя модуля с namespace-префиксом.
+func nsName(prefix, name string) string {
+	if prefix == "" {
+		return name
+	}
+	return prefix + name
 }
 
 func fileExists(path string) bool {
@@ -166,8 +208,9 @@ func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {
 
 	var children []Child
 	for _, entry := range entries {
-		if entry.IsDir() {
-			childDir := filepath.Join(dir, entry.Name())
+		entryPath := filepath.Join(dir, entry.Name())
+		if entryIsDir(entryPath, entry) {
+			childDir := entryPath
 			configPath := filepath.Join(childDir, "config.yaml")
 			if fileExists(configPath) {
 				children = append(children, Child{
@@ -224,26 +267,39 @@ func (s *GlobalSource) ListChildrenRecursive(namespace string) ([]Child, error) 
 	}
 
 	var result []Child
-	s.walkChildrenRecursive(dir, "", &result)
+	s.walkChildrenRecursive(dir, "", &result, make(map[string]bool))
 	return result, nil
 }
 
 // walkChildrenRecursive обходит директорию dir. prefix — префикс для
 // детей текущего уровня: при "" дети не получают префикса, иначе
 // fullName = prefix + "." + childName.
-func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child) {
+// visited — множество резолвнутых путей уже обойдённых директорий:
+// защита от циклов симлинков (a → b → a) — обход каждого реального
+// каталога выполняется один раз (первым встреченным путём).
+func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child, visited map[string]bool) {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return // недоступная директория — пропускаем
+	}
+	if visited[real] {
+		return
+	}
+	visited[real] = true
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		entryPath := filepath.Join(dir, entry.Name())
+		if !entryIsDir(entryPath, entry) {
 			name := entry.Name()
 			if name == "config.yaml" || !strings.HasSuffix(name, ".yaml") {
 				continue
 			}
-			childPath := filepath.Join(dir, name)
+			childPath := entryPath
 			childName := strings.TrimSuffix(name, ".yaml")
 			fullName := childName
 			if prefix != "" {
@@ -256,7 +312,7 @@ func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child
 				ModuleRoot:   dir,
 			})
 		} else {
-			childDir := filepath.Join(dir, entry.Name())
+			childDir := entryPath
 			configPath := filepath.Join(childDir, "config.yaml")
 			childName := entry.Name()
 			fullName := childName
@@ -276,7 +332,7 @@ func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child
 					Name: fullName,
 					Type: "namespace",
 				})
-				s.walkChildrenRecursive(childDir, fullName, result)
+				s.walkChildrenRecursive(childDir, fullName, result, visited)
 			}
 		}
 	}

@@ -96,9 +96,14 @@ func (e *TemplateError) Unwrap() error { return e.Cause }
 // {{if .bool}}...{{end}} для условных блоков.
 // {{.env.FOO}} — доступ к переменной окружения FOO (error если не задана,
 // для optional-проверки используйте {{if index .env "FOO"}}).
+// {{quote .x}} — безопасная вставка значения как ОДНОГО argv-токена
+// (экранирует кавычки/пробелы/метасимволы, см. quoteShlex).
 // Ошибки парсинга и выполнения шаблона возвращаются как *TemplateError.
 func (c *Command) Render(params map[string]string, args string, argsList []string) (string, error) {
-	tmpl, err := template.New("cmd").Option("missingkey=error").Parse(c.Cmd)
+	tmpl, err := template.New("cmd").
+		Funcs(template.FuncMap{"quote": quoteShlex}).
+		Option("missingkey=error").
+		Parse(c.Cmd)
 	if err != nil {
 		return "", &TemplateError{Cmd: c.Cmd, Cause: err}
 	}
@@ -120,6 +125,22 @@ func (c *Command) Render(params map[string]string, args string, argsList []strin
 	}
 
 	return buf.String(), nil
+}
+
+// quoteShlex возвращает s в форме, которую shlex.Split интерпретирует как
+// один argv-токен, даже если s содержит пробелы, кавычки или метасимволы.
+// POSIX-стиль: обёртка в одинарные кавычки; каждая внутренняя одинарная
+// кавычка заменяется на '\'': закрывающая кавычка, экранированная кавычка,
+// открывающая кавычка.
+//
+// Назначение (REV-004): cmd-шаблон рендерится в строку и затем разбивается
+// shlex.Split, поэтому значение, вставленное как {{.msg}}, интерпретируется
+// shlex-ом повторно — кавычки из значения пробивают границы argv и позволяют
+// пользователю добавить произвольные флаги (--force, --amend). Функция
+// {{quote .msg}} в шаблоне экранирует значение так, что оно гарантированно
+// становится одним argv-токеном.
+func quoteShlex(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // envMapFn возвращает map переменных окружения процесса из os.Environ().

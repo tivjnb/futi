@@ -3,6 +3,12 @@ package main
 // fishCompletionScript — статичный fish-скрипт автодополнения для futi.
 // Адаптирован из cobra (BSD-3-Clause). fish всегда отключает файловое
 // дополнение (-f), что соответствует NoFileComp по умолчанию для futi.
+//
+// REV-003: бинарь вызывается напрямую с массивом аргументов, без eval.
+// В fish переменные в позиции команды раскрываются в отдельные argv без
+// повторного парсинга как кода, поэтому токены с $(...), ';', '>' из
+// набранной строки не исполняются при TAB, а пробельные токены не
+// распадаются (в отличие от eval, который парсит склеенную строку как код).
 const fishCompletionScript = `# fish completion for futi
 # Adapted from cobra (BSD-3-Clause).
 
@@ -15,7 +21,7 @@ function __futi_perform_completion
         set args $args ""
     end
 
-    set -l results (eval "$args[1] __complete $args[2..-1]" 2>/dev/null)
+    set -l results ($args[1] __complete $args[2..-1] 2>/dev/null)
 
     set -l directive 0
     if set -q results[-1]

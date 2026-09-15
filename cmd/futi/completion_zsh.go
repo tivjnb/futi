@@ -33,7 +33,12 @@ _futi() {
             completions_with_descriptions+=("${comp}")
         elif [[ "$comp" == *$'\t'* ]]; then
             # "text\tdescription" — split for _describe.
-            completions_with_descriptions+=("${comp%%$'\t'*}:${comp#*$'\t'}")
+            # REV-010: ':' экранируется в text и description — _describe
+            # использует ':' как разделитель, неэкранированное двоеточие
+            # в кандидате искажает подсказку.
+            local ctext="${comp%%$'\t'*}"
+            local cdesc="${comp#*$'\t'}"
+            completions_with_descriptions+=("${ctext//:/\\:}:${cdesc//:/\\:}")
         else
             completions+=("${comp}")
         fi

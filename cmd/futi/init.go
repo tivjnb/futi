@@ -19,6 +19,28 @@ type initConfig struct {
 	commands    []string // имена команд для шаблона
 }
 
+// reservedModuleNames — имена, которые нельзя давать модулям: все они
+// перехватываются в main.go ДО резолва модулей (cache/init/completion/
+// __complete — fast-path по первому аргументу; list/validate — builtin
+// subcommands по последнему позиционному), поэтому модуль с таким именем
+// никогда не будет вызван. При добавлении новой builtin-команды в main.go —
+// добавить имя сюда.
+// REV-008: раньше completion/__complete отсутствовали в списке —
+// futi init completion молча создавал нерабочий модуль.
+var reservedModuleNames = map[string]bool{
+	"list":        true,
+	"validate":    true,
+	"cache":       true,
+	"init":        true,
+	"completion":  true,
+	"__complete":  true,
+}
+
+// isReservedModuleName проверяет имя модуля по canonical-списку.
+func isReservedModuleName(name string) bool {
+	return reservedModuleNames[name]
+}
+
 // parseInitArgs разбирает аргументы команды futi init.
 // Позиционный аргумент — path (обязательный). Флаги:
 // --global, --desc <value>, --default-cmd <value>, --command <name> (repeatable).
@@ -91,11 +113,15 @@ func parseInitArgs(args []string) (*initConfig, error) {
 	cfg.path = positional[0]
 
 	// #49: проверка конфликта с зарезервированными именами.
+	// REV-008: единый canonical-список. completion и __complete тоже
+	// перехватываются fast-path'ами в main.go ДО резолва модулей —
+	// модуль с таким именем был бы создан, но никогда не вызван.
+	// ROADMAP (README): в будущем имя completion может быть отдано
+	// модулям через smart-роутинг.
 	name := filepath.Base(cfg.path)
 	name = strings.TrimSuffix(name, ".yaml")
 	name = strings.TrimSuffix(name, ".yml")
-	switch name {
-	case "list", "validate", "cache", "init":
+	if isReservedModuleName(name) {
 		return nil, fmt.Errorf("%q is a reserved name, choose a different module name", name)
 	}
 
@@ -218,6 +244,13 @@ func runInit(w io.Writer, args []string) error {
 		return fmt.Errorf("close file: %w", err)
 	}
 
-	fmt.Fprintf(w, "Created: %s\n", targetPath)
+	// Показываем реальный путь записи: EvalSymlinks резолвит симлинки.
+	// При записи через симлинк-директорию (dotfiles-репо, dev-симлинк)
+	// файл физически попадает в целевой каталог симлинка — сообщаем его.
+	displayPath := targetPath
+	if resolved, err := filepath.EvalSymlinks(targetPath); err == nil {
+		displayPath = resolved
+	}
+	fmt.Fprintf(w, "Created: %s\n", displayPath)
 	return nil
 }

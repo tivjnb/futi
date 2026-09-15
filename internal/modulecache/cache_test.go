@@ -1186,3 +1186,129 @@ cmd: "echo {{.args}}"`)
 		}
 	}
 }
+
+// --- LoadModuleVerified (строгая проверка свежести/аутентичности) ---
+
+// TestLoadModuleVerifiedReturnsCachedWhenUnchanged проверяет, что при неизменном
+// файле (SHA-256 совпал) LoadModuleVerified возвращает кэшированный модуль
+// (тот же *Module), не перечитывая YAML с диска.
+func TestLoadModuleVerifiedReturnsCachedWhenUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "m.yaml")
+	writeFile(t, manifestPath, "name: m\ncmd: \"echo hi\"\n")
+
+	cache := newTestCache()
+
+	mod1, err := cache.LoadModuleVerified(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("first verified load: %v", err)
+	}
+	mod2, err := cache.LoadModuleVerified(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("second verified load: %v", err)
+	}
+	if mod1 != mod2 {
+		t.Fatalf("expected same *Module (hash match, cache hit), got %p and %p", mod1, mod2)
+	}
+}
+
+// TestLoadModuleVerifiedReloadsWhenFileChanged проверяет, что при изменении файла
+// (SHA-256 не совпал) LoadModuleVerified перечитывает модуль с диска и возвращает
+// актуальное содержимое (новый *Module).
+func TestLoadModuleVerifiedReloadsWhenFileChanged(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "m.yaml")
+	writeFile(t, manifestPath, "name: m\ncmd: \"echo v1\"\n")
+
+	cache := newTestCache()
+
+	mod1, err := cache.LoadModuleVerified(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("first verified load: %v", err)
+	}
+	if mod1.Cmd != "echo v1" {
+		t.Fatalf("expected cmd v1, got %q", mod1.Cmd)
+	}
+
+	// Меняем содержимое файла.
+	writeFile(t, manifestPath, "name: m\ncmd: \"echo v2\"\n")
+
+	mod2, err := cache.LoadModuleVerified(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("second verified load: %v", err)
+	}
+	if mod2.Cmd != "echo v2" {
+		t.Fatalf("expected reloaded cmd v2, got %q", mod2.Cmd)
+	}
+	if mod1 == mod2 {
+		t.Fatal("expected a different *Module after file change (reload from disk)")
+	}
+}
+
+// TestLoadModuleVerifiedReloadsWhenHashEmpty проверяет, что запись без Hash
+// (старый формат кэша или entry, добавленная через LoadModule) не доверяется:
+// LoadModuleVerified перечитывает модуль с диска.
+func TestLoadModuleVerifiedReloadsWhenHashEmpty(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "m.yaml")
+	writeFile(t, manifestPath, "name: m\ncmd: \"echo hi\"\n")
+
+	cache := newTestCache()
+
+	// Обычный LoadModule создаёт entry БЕЗ Hash.
+	if _, err := cache.LoadModule(manifestPath, dir); err != nil {
+		t.Fatalf("plain load: %v", err)
+	}
+
+	// Verified должен перечитать (hash пуст), но вернуть валидный модуль.
+	mod, err := cache.LoadModuleVerified(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("verified load after plain: %v", err)
+	}
+	if mod.Name != "m" {
+		t.Fatalf("expected module m, got %q", mod.Name)
+	}
+
+	// После verified entry должна иметь Hash.
+	cache.mu.RLock()
+	e, ok := cache.entries[manifestPath]
+	cache.mu.RUnlock()
+	if !ok {
+		t.Fatal("expected entry to exist")
+	}
+	if len(e.Hash) == 0 {
+		t.Fatal("expected entry to have a Hash after LoadModuleVerified")
+	}
+}
+
+// TestLoadModuleVerifiedReloadsWhenCacheTampered проверяет защиту от подмены кэша:
+// если в entry вставлен чужой Module (и неверный Hash), LoadModuleVerified
+// перечитывает модуль с диска и возвращает реальное содержимое, а не подменённое.
+func TestLoadModuleVerifiedReloadsWhenCacheTampered(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "m.yaml")
+	writeFile(t, manifestPath, "name: m\ncmd: \"echo legit\"\n")
+
+	cache := newTestCache()
+
+	if _, err := cache.LoadModuleVerified(manifestPath, dir); err != nil {
+		t.Fatalf("initial verified load: %v", err)
+	}
+
+	// Подмена кэша: вставляем чужой Module с Cmd атакующего и заведомо неверным Hash.
+	evil := &execmodule.Module{Name: "m", Cmd: "echo PWNED", Root: dir}
+	cache.mu.Lock()
+	cache.entries[manifestPath] = entry{Module: evil, Hash: []byte("deadbeef")}
+	cache.mu.Unlock()
+
+	mod, err := cache.LoadModuleVerified(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("verified load after tamper: %v", err)
+	}
+	if mod.Cmd != "echo legit" {
+		t.Fatalf("expected legit cmd from disk, got %q (cache not trusted)", mod.Cmd)
+	}
+	if mod == evil {
+		t.Fatal("returned the tampered module; expected reload from disk")
+	}
+}

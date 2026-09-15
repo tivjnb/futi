@@ -48,6 +48,19 @@ func runCompletion(w io.Writer, shell string) error {
 	return nil
 }
 
+// sanitizeCompletionText подготавливает текст/описание кандидата к построчному
+// выводу в __complete. Управляющие символы (\t, \n, \r) заменяются на пробел:
+// таб искажает формат "text\tdescription", перевод строки разлагает кандидата
+// на несколько строк и ломает протокол (bash/zsh/fish парсят вывод построчно).
+// REV-010: значения приходят из имён файлов и YAML-полей — не доверяем им.
+func sanitizeCompletionText(s string) string {
+	s = strings.ReplaceAll(s, "\t", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	// Висящие пробелы после замены (например, хвостовой \r) — обрезаем.
+	return strings.TrimSpace(s)
+}
+
 // runComplete — hidden-обработчик `futi __complete <args...>`.
 // Возвращает подсказки построчно в stdout; последняя строка — ":N" (directive).
 // Вход args — все аргументы после `futi __complete`; последний = toComplete
@@ -64,10 +77,12 @@ func runComplete(w io.Writer, stderr io.Writer, source discovery.Source, loader 
 
 	matches, directive := completion.Complete(source, loader, completeArgs, toComplete)
 	for _, m := range matches {
-		if m.Description != "" {
-			fmt.Fprintf(w, "%s\t%s\n", m.Text, m.Description)
+		text := sanitizeCompletionText(m.Text)
+		desc := sanitizeCompletionText(m.Description)
+		if desc != "" {
+			fmt.Fprintf(w, "%s\t%s\n", text, desc)
 		} else {
-			fmt.Fprintln(w, m.Text)
+			fmt.Fprintln(w, text)
 		}
 	}
 	fmt.Fprintf(w, ":%d\n", int(directive))

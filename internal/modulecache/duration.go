@@ -2,6 +2,7 @@ package modulecache
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"time"
@@ -22,6 +23,12 @@ var daysRe = regexp.MustCompile(`^(\d+)d`)
 //
 // Отрицательные значения не поддерживаются — интервал обновления не может быть
 // отрицательным. Возвращает ошибку при невалидном формате.
+// maxDays — максимум days-компоненты без переполнения int64 наносекунд.
+// time.Duration хранит int64 ns: максимум ~2562047h47m ≈ 106751d.
+// #REV-007: большие значения раньше молча переполнялись (крошечный или
+// отрицательный интервал, обходящий лимит every_t_min в policy).
+const maxDays = int(math.MaxInt64 / int64(24*time.Hour))
+
 func parseDuration(s string) (time.Duration, error) {
 	if s == "" {
 		return 0, fmt.Errorf("modulecache: empty duration")
@@ -51,6 +58,11 @@ func parseDuration(s string) (time.Duration, error) {
 	if days <= 0 {
 		return 0, fmt.Errorf("modulecache: days in %q must be > 0", s)
 	}
+	// REV-007: проверяем ДО умножения — time.Duration(days)*24h переполняет
+	// int64 для days > maxDays (Atoi принимает до 2^63-1).
+	if days > maxDays {
+		return 0, fmt.Errorf("modulecache: days in %q too large (max %dd)", s, maxDays)
+	}
 
 	total := time.Duration(days) * 24 * time.Hour
 
@@ -65,6 +77,11 @@ func parseDuration(s string) (time.Duration, error) {
 			return 0, fmt.Errorf("modulecache: duration %q must be > 0", s)
 		}
 		total += restDur
+		// REV-007: сложение с rest могло переполнить int64 — отрицательный
+		// итог отклоняем.
+		if total <= 0 {
+			return 0, fmt.Errorf("modulecache: duration %q too large", s)
+		}
 	}
 
 	return total, nil

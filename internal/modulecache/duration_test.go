@@ -96,3 +96,52 @@ func TestParseDurationDayWordGivesClearError(t *testing.T) {
 		t.Fatal("expected error for '1day'")
 	}
 }
+
+// TestParseDurationOverflowRejected проверяет, что экстремальные значения
+// days-компоненты отклоняются ДО умножения (REV-007): раньше молча
+// переполнялся int64 — получался крошечный или отрицательный интервал,
+// обходящий лимит 365 дней в policy (ShouldRefresh = всегда true).
+func TestParseDurationOverflowRejected(t *testing.T) {
+	// maxDays = math.MaxInt64 / int64(24h) = 106751.
+	cases := []string{
+		"107000d",                  // чуть больше максимума
+		"1000000000d",              // 10^9 — раньше давало отрицательный интервал
+		"1000000000000000000d",     // 10^18 — раньше переполнение в крошечное значение
+		"9223372036854775807d",     // MaxInt64 дней
+		"106751d24h",               // days валиден, но сложение с rest переполняет
+		"10000000000000000000000d", // больше MaxInt64 — Atoi должен отклонить
+	}
+	for _, tc := range cases {
+		t.Run(tc, func(t *testing.T) {
+			d, err := parseDuration(tc)
+			if err == nil {
+				t.Fatalf("parseDuration(%q) = %v, want error", tc, d)
+			}
+			if d != 0 {
+				t.Fatalf("parseDuration(%q) returned nonzero duration with error", tc)
+			}
+		})
+	}
+}
+
+// TestParseDurationMaxDaysAccepted проверяет границу: максимум days-компоненты
+// без переполнения принимается (ревью REV-007 — лимит 365 дней остаётся в
+// policy, parser валидирует только математику int64).
+func TestParseDurationMaxDaysAccepted(t *testing.T) {
+	d, err := parseDuration("106751d")
+	if err != nil {
+		t.Fatalf("parseDuration(\"106751d\") unexpected error: %v", err)
+	}
+	if d <= 0 {
+		t.Fatalf("parseDuration(\"106751d\") = %v, want > 0", d)
+	}
+
+	// Максимум + rest в пределах int64 тоже принимается.
+	d, err = parseDuration("106751d23h")
+	if err != nil {
+		t.Fatalf("parseDuration(\"106751d23h\") unexpected error: %v", err)
+	}
+	if d <= 0 {
+		t.Fatalf("parseDuration(\"106751d23h\") = %v, want > 0", d)
+	}
+}

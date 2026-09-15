@@ -25,6 +25,7 @@ futi deploy staging
 - [Создание модулей](#создание-модулей)
 - [Кэш модулей](#кэш-модулей)
 - [Автодополнение](#автодополнение)
+- [Безопасность](#безопасность)
 - [Примеры](#примеры)
 - [ROADMAP](#roadmap)
 - [Лицензия](#лицензия)
@@ -85,7 +86,7 @@ EOF
 futi init hello --desc "Demo module" --command greet
 ```
 
-Вызовите:
+Вызовите (модуль, созданный вручную, принимает `--name`):
 
 ```bash
 $ futi hello greet --name world
@@ -97,6 +98,14 @@ $ futi list
 ├────────┼───────┼─────────────┤
 │ module │ hello │ Demo module │
 └────────┴───────┴─────────────┘
+```
+
+Модуль из `futi init` создаёт команды-заглушки без параметров — параметры
+дописываются в YAML вручную (см. [Структура модуля](#структура-модуля)):
+
+```bash
+$ futi hello greet
+greet
 ```
 
 ---
@@ -205,6 +214,62 @@ namespace формируется из пути: `dev/deploy.yaml` → `dev.deplo
 
 **Конфликт имён:** если для одного namespace существуют и `.yaml`, и `/config.yaml` — ошибка. Уберите одно из двух.
 
+### Симлинки
+
+Симлинки в каталоге модулей поддерживаются и обрабатываются так же, как
+реальные файлы и директории: симлинк на `.yaml`-файл, на пакет-директорию
+(с `config.yaml`) и на namespace — везде листятся, резолвятся и исполняются.
+
+Это удобно для dotfiles-менеджеров (stow, chezmoi) и для разработки:
+модуль можно держать в git-репо и подключить симлинком:
+
+```bash
+ln -s ~/projects/my-modules/deploy ~/.config/futi/modules/deploy
+futi deploy   # пакет-симлинк листится и исполняется как обычный
+```
+
+Нюансы:
+
+- Циклы симлинков (`a → b → a`) безопасны: обход отсекается по реальному
+  пути, каждый каталог обрабатывается один раз (первым встреченным путём).
+- Битый симлинк с именем `*.yaml` остаётся в listing'е как файл — цель может
+  стать доступной позже (например, примонтированный volume); кэш сохраняет
+  запись при временной ошибке чтения.
+- `futi init` при записи через симлинк-директорию создаёт файл в целевом
+  каталоге симлинка и показывает **реальный** (резолвнутый) путь в выводе.
+
+### Локальные модули проекта
+
+Помимо глобального каталога, futi автоматически подхватывает модули из текущей
+директории проекта:
+
+- `./.futi/` — каталог модулей с той же структурой (yaml-файлы, пакеты,
+  namespaces);
+- `./futi.yaml` — одиночный модуль проекта (имя берётся из поля `name`).
+
+При наличии обоих — `./.futi/` имеет приоритет. Локальные модули **перекрывают
+глобальные** с тем же именем: удобно переопределять поведение под конкретный
+проект (свои `deploy`, `test`, `build` в репо — без правки глобальных модулей).
+
+```
+myproject/
+├── futi.yaml          # модуль проекта целиком
+├── .futi/             # или каталог локальных модулей
+│   ├── deploy.yaml
+│   └── test.yaml
+└── src/
+```
+
+```bash
+cd myproject
+futi list              # видны и локальные, и глобальные модули
+futi deploy            # вызван локальный .futi/deploy.yaml
+```
+
+Локальные модули живут только in-memory (не попадают в persistent кэш) —
+каждый запуск читает их заново, поэтому изменения подхватываются сразу.
+Невалидный `futi.yaml` — ошибка при старте (ранняя диагностика).
+
 ### Конфиг-файл: несколько источников
 
 Файл `~/.config/futi/config.yaml` задаёт источники модулей с mountpoint'ами:
@@ -250,6 +315,12 @@ futi docker logs mycontainer --follow=false
 - `--bool-flag` — без значения (=`true`)
 - `--bool-flag=false` — явный false
 
+> **Важно:** bare-флаг и следующий позиционный аргумент неоднозначны —
+> `futi mod cmd --force positional` трактует `positional` как значение
+> `--force`. При смешении булевых флагов с позиционными аргументами
+> используйте явные формы: `--force=true`, `--force positional` (флаг со
+> значением) или передавайте позиционные до флага.
+
 ### Шаблонизация
 
 futi использует Go `text/template`:
@@ -257,6 +328,7 @@ futi использует Go `text/template`:
 | Синтаксис | Описание |
 |---|---|
 | `{{.name}}` | Подстановка значения параметра |
+| `{{quote .name}}` | Безопасная вставка значения как **одного** аргумента (экранирует кавычки/пробелы/метасимволы) |
 | `{{.args}}` | Все аргументы после `--` (строка, пробел-joined) |
 | `{{index .args_list 0}}` | N-й аргумент после `--` (доступ к массиву) |
 | `{{if .follow}}...{{end}}` | Условный блок (для bool) |
@@ -301,15 +373,29 @@ commands:
       min: 1       # требует минимум 1 позиционный аргумент после --
 ```
 
-### Важно: пробелы в значениях
+### Важно: пробелы и кавычки в значениях
 
-Если значение параметра содержит пробелы, квотируйте в шаблоне:
+Если значение параметра содержит пробелы, используйте `{{quote}}`:
 
 ```yaml
-cmd: "echo \"{{.msg}}\""   # --msg "hello world" → echo "hello world"
+cmd: "echo {{quote .msg}}"   # --msg "hello world" → один аргумент: hello world
 ```
 
-Без кавычек `shlex` разобьёт строку на отдельные аргументы.
+`{{quote}}` экранирует значение так, что оно становится ровно **одним**
+аргументом команды, даже если содержит пробелы, кавычки или метасимволы.
+
+Паттерн с ручными кавычками (`cmd: "echo \"{{.msg}}\""`) тоже работает,
+но небезопасен: значение проходит повторный разбор `shlex`, поэтому
+пользователь может «пробить» кавычки и добавить произвольные флаги:
+
+```bash
+futi mod --msg 'x" --force "y'
+# cmd: "echo \"{{.msg}}\""  → echo "x" --force "y"  → --force стал отдельным аргументом!
+# cmd: "echo {{quote .msg}}" → echo 'x" --force "y' → --force остался частью значения
+```
+
+Для значений в опасных позициях (`git commit -m`, `docker run`, любые
+`--flag {{.param}}`) всегда используйте `{{quote}}`.
 
 ### Переменные окружения в шаблонах
 
@@ -381,8 +467,11 @@ futi <namespace...> list                    # содержимое namespace и�
 futi <namespace...> list -v                 # то же, с колонкой PATH
 futi <namespace...> list -r                 # рекурсивный обход поддерева
 futi <namespace...> validate                # валидация схемы модуля
+futi <namespace...> help                    # справка по модулю/команде
 futi init <name> [flags]                    # создать модуль с шаблоном
 futi cache refresh                          # явное обновление кэша модулей
+futi cache status                           # статистика кэша
+futi cache clear                            # удалить persistent кэш с диска
 futi completion <bash|zsh|fish>             # сгенерировать скрипт автодополнения
 futi __complete <args...>                   # hidden: подсказки для completion (внутр.)
 futi -h | --help                            # справка
@@ -390,7 +479,10 @@ futi -h | --help                            # справка
 
 Парсинг: последний позиционный аргумент (до `--`) — команда, всё до него — namespace (сегменты через `.`). Аргументы после `--` передаются в шаблон команды как `{{.args}}` (строка) и `{{.args_list}}` (массив).
 
-`list` и `validate` — зарезервированные слова, их нельзя использовать как имена команд в модуле.
+**Зарезервированные имена** — нельзя использовать как имена модулей и команд:
+`list`, `validate`, `cache`, `init`, `completion`, `__complete` (перехватываются
+CLI до резолва модулей). `help` — исключение: если в модуле определена своя
+команда `help`, вызывается она.
 
 ```bash
 futi docker build --tag myapp        # namespace=docker, command=build
@@ -498,6 +590,50 @@ $ futi images list -r                # от контекста images
 ```
 
 `-r` игнорируется для модулей (показывает команды как обычно). Можно комбинировать: `futi list -r -v`.
+
+### Справка через `help`
+
+`help` — контекстная справка на любом уровне, без выхода в README:
+
+```bash
+futi demo help                 # справка по модулю
+futi demo build help           # справка по команде
+futi demo migrate help         # справка по ветке команд
+```
+
+Модульная справка — описание, default cmd и список команд:
+
+```bash
+$ futi demo help
+demo — Demo module
+default: echo default
+commands:
+  build    Build the project
+  migrate  Database migrations
+```
+
+Командная справка — USAGE с параметрами (тип, required, default, описание),
+позиционные требования и итоговый шаблон команды:
+
+```bash
+$ futi demo build help
+demo build — Build the project
+
+USAGE
+  futi demo build [--tag value] [--file value] [--push] [-- args]
+
+PARAMETERS
+  --tag   (string, required)  Image tag
+  --file  (string, default: Dockerfile)  Dockerfile path
+  --push  (bool, default: false)
+
+CMD
+  docker build -t {{.tag}} -f {{.file}} .
+```
+
+`help` подсказывается автодополнением на каждом уровне (модуль/команда/
+subcommand). Если в модуле определена собственная команда `help` — вызывается
+она, системная справка не перехватывает user-defined имена.
 
 ---
 
@@ -652,6 +788,34 @@ $ futi cache foo
 error: unknown cache subcommand "foo" (try "cache refresh")
 ```
 
+### `futi cache status` / `futi cache clear`
+
+```bash
+$ futi cache status
+Policy: every_time
+Last refresh: 2026-09-14 17:24:54
+Modules: 5
+Cache file: /home/user/.cache/futi/modulecache.gob
+
+$ futi cache clear
+Cache cleared: /home/user/.cache/futi/modulecache.gob
+```
+
+`status` показывает активную политику, время последнего обновления, число
+модулей в кэше и путь к файлу. `clear` удаляет persistent кэш — при следующем
+запуске он будет перестроен с нуля (полезно при странном поведении или после
+смены версии futi).
+
+### Целостность кэша
+
+Кэш хранит SHA-256 чексумму манифеста каждого модуля. При **исполнении**
+модуля чексумма сверяется с файлом на диске: если манифест изменился или
+запись в кэше не совпадает с файлом — модуль перечитывается с диска, а не
+берётся из кэша. Это защищает от двух сценариев: устаревший кэш (файл
+изменился после Refresh) и повреждённый/подменённый gob-файл. Быстрые
+операции (`list`, completion, help) работают из кэша без сверки — скорость
+важнее.
+
 ### Политики обновления
 
 Стратегия автоматического обновления при старте CLI задаётся в `config.yaml`:
@@ -736,6 +900,51 @@ zsh выводит описания команд/модулей рядом с п
 
 ---
 
+## Безопасность
+
+### Модель доверия
+
+**Модуль — это код.** Кто может писать в каталог модулей (или в конфиг с
+источниками), тот и определяет, какие команды исполняются — это осознанный
+дизайн, как у make, npm scripts или shell-алиасов. futi не пытается
+сандбоксить модули от их владельца. Следствия:
+
+- Симлинки в каталоге модулей разрешены (dotfiles-менеджеры, dev-симлинки) —
+  контроль каталога и так даёт полный контроль.
+- `futi init` пишет только внутри каталога модулей и показывает реальный
+  (резолвнутый) путь записи.
+- Публичный registry скачанных модулей (см. ROADMAP) потребует пересмотра
+  этой модели — доверие к чужим модулям нельзя будет неявно унаследовать.
+
+### Исполнение без shell
+
+Команды исполняются через `exec` с готовым argv — **без** оболочки.
+Метасимволы `;`, `$()`, `` ` `` из параметров не выполняются как shell-код
+(проходят как обычный текст в аргументах). Нужен shell — пишите его явно
+(`sh -c '...'`), передавая пользовательский ввод позиционным аргументом
+с `{{quote}}` (см. примеры).
+
+### `{{quote}}` для пользовательских значений
+
+Значения параметров проходят повторный разбор (shlex) при сборке argv.
+Вставка `{{.param}}` в кавычках (`"{{.msg}}"`) может быть «пробита» значением
+с кавычкой — оно выйдет за кавычки и станет отдельными аргументами
+(flag-инъекция). Для значений в опасных позициях используйте `{{quote .param}}` —
+гарантия ровно одного аргумента (см. [пробелы и кавычки](#важно-пробелы-и-кавычки-в-значениях)).
+
+### Секреты — через окружение
+
+Токены и ключи передавайте через `{{.env.NAME}}`, а не через `--param`:
+параметры видны в `ps` и истории shell, окружение процесса — нет.
+
+### Целостность кэша
+
+Persistent кэш сверяет SHA-256 чексумму манифеста при исполнении модуля —
+устаревший или подменённый кэш не приведёт к исполнению чужой команды
+(см. [Кэш модулей](#кэш-модулей)).
+
+---
+
 ## Примеры
 
 ### Echo-модуль (args + default cmd)
@@ -744,23 +953,27 @@ zsh выводит описания команд/модулей рядом с п
 # ~/.config/futi/modules/echo_mod.yaml
 name: echo_mod
 description: Echo utilities
-cmd: "echo {{.args}}"           # команда по умолчанию
+cmd: "echo {{.args}}"           # команда по умолчанию (без shell)
 commands:
   upper:
     description: Uppercase echo
-    cmd: "echo {{.args}} | tr a-z A-Z"
+    # futi исполняет argv БЕЗ shell: pipes, $() и циклы не работают напрямую.
+    # Нужен shell — пишите его явно (sh -c). Пользовательский ввод передавайте
+    # позиционным аргументом sh ($1) с {{quote}}, чтобы кавычки в значении
+    # не ломали скрипт и не инжектили код.
+    cmd: "sh -c 'echo \"$1\" | tr a-z A-Z' sh {{quote .args}}"
   repeat:
     description: Repeat first arg N times
     params:
       - name: count
         type: int
         required: true
-    cmd: "for i in $(seq 1 {{.count}}); do echo {{index .args_list 0}}; done"
+    cmd: "sh -c 'for i in $(seq 1 {{.count}}); do echo \"$1\"; done' sh {{quote (index .args_list 0)}}"
 ```
 
 ```bash
 futi echo_mod -- hello world         # echo hello world (default cmd)
-futi echo_mod upper -- hello world   # echo hello world | tr a-z A-Z
+futi echo_mod upper -- hello world   # HELLO WORLD (через sh -c | tr)
 futi echo_mod repeat --count 3 -- hi # hi\nhi\nhi
 ```
 
@@ -780,7 +993,7 @@ commands:
       - name: branch
         type: string
         default: main
-    cmd: "git fetch origin && git reset --hard origin/{{.branch}}"
+    cmd: "sh -c 'git fetch origin && git reset --hard origin/\"$1\"' sh {{quote .branch}}"
 
   squash:
     description: Squash last N commits
@@ -791,7 +1004,7 @@ commands:
       - name: message
         type: string
         required: true
-    cmd: "git reset --soft HEAD~{{.count}} && git commit -m \"{{.message}}\""
+    cmd: "sh -c 'git reset --soft HEAD~\"$1\" && git commit -m \"$2\"' sh {{quote .count}} {{quote .message}}"
 ```
 
 ```bash
@@ -809,7 +1022,7 @@ description: Docker utilities
 commands:
   clean:
     description: Remove stopped containers and dangling images
-    cmd: "docker container prune -f && docker image prune -f"
+    cmd: "sh -c 'docker container prune -f && docker image prune -f'"
 
   shell:
     description: Shell into running container
@@ -821,7 +1034,7 @@ commands:
 
   build-all:
     description: Build all images in directory
-    cmd: "for d in */; do docker build -t \"${d%/}\" \"$d\"; done"
+    cmd: "sh -c 'for d in */; do docker build -t \"${d%/}\" \"$d\"; done'"
 ```
 
 ```bash
@@ -887,6 +1100,7 @@ futi находится на стадии PRE PRE MVP. Ниже — направ
 - ~~**Help-система** — модульная/командная справка через `help`~~ ✅ реализовано (`futi <ns> help`, `futi <ns> <cmd> help`; user-defined `help` выигрывает)
 - **Descriptions в bash/fish** — zsh выводит описания уже сейчас; bash/fish — roadmap
 - **PowerShell** — 4-й shell после стабилизации bash/zsh/fish
+- **Модульный completion** — модули сами предоставляют подсказки для автодополнения (динамические кандидаты: имена контейнеров, веток и т.п.); тогда же имя `completion` может быть отдано модулям через smart-роутинг (`futi completion bash|zsh|fish` остаётся builtin-генерацией скрипта, остальные вызовы — резолв модуля). Сейчас `completion`/`__complete` зарезервированы (см. `futi init`)
 
 ### Unified I/O
 
