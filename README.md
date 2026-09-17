@@ -166,6 +166,8 @@ commands:
 | `name` | string | Имя модуля (опционально, по умолчанию = имя файла/директории) |
 | `description` | string | Описание модуля (опционально) |
 | `cmd` | string | Команда по умолчанию на уровне модуля (опционально) |
+| `params` | list | Схема команды по умолчанию: параметры (опционально) |
+| `positional` | block | Схема команды по умолчанию: позиционные аргументы (опционально) |
 | `commands` | map | Команды модуля |
 | `commands.<name>.description` | string | Описание команды (опционально) |
 | `commands.<name>.cmd` | string | Шаблон команды (если есть `commands` — fallback) |
@@ -178,6 +180,25 @@ commands:
 | `params[].default` | string | Значение по умолчанию |
 | `params[].description` | string | Описание параметра (опционально, показывается в help) |
 | `positional.min` | int | Обязательный минимум позиционных аргументов после `--` (по умолчанию `0`) |
+
+Верхнеуровневые `params` и `positional` описывают команду по умолчанию (`cmd`):
+валидация, defaults и help работают так же, как у обычных команд.
+
+```yaml
+# meta.yaml — модуль как одна команда со схемой
+name: meta
+cmd: "python scripts/meta.py --files {{quote .args}}{{if .json}} --json{{end}}"
+params:
+  - name: json
+    type: bool
+    default: "false"
+positional:
+  min: 1
+```
+
+```bash
+futi meta -- photo.jpg --json
+```
 
 ---
 
@@ -454,6 +475,37 @@ futi mytool deploy --env staging
 ```
 
 Скрипты вызываются с `WorkDir` = корень модуля. Указывайте `./` для явного вызова локального скрипта (bare-имя без `/` ищется в `PATH`).
+
+### FUTI_CWD: относительные пути пользователя
+
+Так как скрипт исполняется из корня модуля, относительные пути, переданные
+пользователем (файлы-аргументы, `--out result.png`), от корня модуля не
+разрешатся. Поэтому futi передаёт скриптам переменную окружения `FUTI_CWD` —
+каталог, из которого вызвана команда:
+
+```python
+# scripts/meta.py — резолв файлов от cwd пользователя
+import os
+base = os.environ.get("FUTI_CWD") or os.getcwd()
+path = os.path.join(base, "photo.jpg")
+```
+
+Модуль может держать зависимости рядом с собой — в собственном venv:
+
+```
+~/.config/futi/modules/images/qr/
+├── config.yaml
+├── scripts/
+│   └── make.py
+└── .venv/            # python3 -m venv .venv && .venv/bin/pip install qrcode
+```
+
+```yaml
+# config.yaml — cmd начинается с .venv/bin/python, путь резолвится от корня модуля
+commands:
+  make:
+    cmd: ".venv/bin/python scripts/make.py --text {{quote .text}}"
+```
 
 ---
 
@@ -879,8 +931,11 @@ futi completion fish > ~/.config/fish/completions/futi.fish
 - **Модули и namespaces** — `futi <TAB>`, `futi dev <TAB>`
 - **Команды и subcommands** — `futi docker <TAB>`, `futi docker migrate <TAB>`
 - **Имена параметров** — `futi docker build --<TAB>` → `--tag`, `--force`
+- **Все параметры на команде** — `futi docker build <TAB>` сразу показывает все флаги с пометками: `--tag (required)`, `--force (default: false)` (метки видны в zsh, bash/fish отрезают)
+- **После значения флага** — `futi images qr make --out qr.png <TAB>` подсказывает оставшиеся флаги (`--text`, `--scale`); значение флага не ломает подсказки
+- **Пути в значениях флагов** — при вводе значения не-bool флага (`--out ~/<TAB>`, `--out=~/<TAB>`) shell предлагает файлы/директории; в будущем — только для параметров типа `path` (ROADMAP)
+- **Параметры default-команды** — модуль-однокоманда (`cmd` + `params`, без `commands`) подсказывает свои флаги: `futi meta <TAB>` → `--json`
 - **Bool-значения** — `futi docker build --force <TAB>` → `true`/`false`
-- **Обязательные параметры** — на листовой команде показываются сразу (без ввода `--`): `futi docker build <TAB>` → `--tag` (с меткой `(required)` в zsh)
 - **Builtins** — `futi cache <TAB>` → `refresh`/`status`/`clear`; `futi completion <TAB>` → `bash`/`zsh`/`fish`
 - **Подсказка `help`** — `help` предлагается на каждом уровне (модуль/команда/subcommand): `futi demo <TAB>`, `futi demo db <TAB>`, `futi demo greet <TAB>`. Если в модуле уже определена команда `help` (user-defined), она и предлагается — системная не дублируется.
 
@@ -1094,7 +1149,7 @@ futi находится на стадии PRE PRE MVP. Ниже — направ
 
 ### Ближайшие планы
 
-- **Типы параметров** — расширение за пределы `int`: `file`, `json`, `secret` (безопасная передача через env, не args; базовый доступ к env vars уже есть через `{{.env.FOO}}`)
+- **Типы параметров** — расширение за пределы `int`: `file`, `json`, `secret` (безопасная передача через env, не args; базовый доступ к env vars уже есть через `{{.env.FOO}}`). Для `file`/`path`-типов автокомплит будет предлагать пути только им (сейчас — всем не-bool флагам)
 - **Гибридный args-парсинг** — позиционные args для листовых команд без явного `--`
 - ~~**Shell completion** — автодополнение для bash/zsh/fish~~ ✅ реализовано (см. раздел «Автодополнение»)
 - ~~**Help-система** — модульная/командная справка через `help`~~ ✅ реализовано (`futi <ns> help`, `futi <ns> <cmd> help`; user-defined `help` выигрывает)

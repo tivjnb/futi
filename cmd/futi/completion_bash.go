@@ -12,7 +12,9 @@ __futi_debug() {
 }
 
 __futi_get_completion_results() {
-    local out directive line
+    # directive НЕ local здесь: _futi объявляет его local и читает после
+    # вызова — bash dynamic scoping мутирует переменную вызывающего.
+    local out line
     out="$("futi" __complete "${COMP_WORDS[@]:1}" 2>/dev/null)"
 
     __futi_debug "futi __complete output:"

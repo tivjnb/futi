@@ -32,6 +32,14 @@ function __futi_perform_completion
         end
     end
 
+    # Directive Default (0): futi разрешает файловое дополнение —
+    # значения флагов (пути). fish глобально запретил файлы (-f),
+    # поэтому генерируем кандидатов сами.
+    if test "$directive" = 0
+        __fish_complete_path "$cursor" 2>/dev/null
+        return
+    end
+
     # Print candidates, stripping any description after a tab.
     for r in $results
         set -l parts (string split \t -- $r)

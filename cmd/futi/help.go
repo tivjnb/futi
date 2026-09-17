@@ -110,6 +110,8 @@ func runSystemHelp(w io.Writer, source discovery.Source, loader modulerunner.Mod
 			Name:        mod.Name,
 			Description: cmd.Description,
 			Cmd:         cmd.Cmd,
+			Params:      cmd.Params,
+			Positional:  cmd.Positional,
 			Commands:    cmd.Commands,
 		}
 		fmt.Fprint(w, execmodule.FormatModuleHelp(branch, strings.Join(positional, " ")))

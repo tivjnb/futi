@@ -741,3 +741,124 @@ commands:
 		t.Fatalf("expected 'at least 1' in error, got: %v", err)
 	}
 }
+
+func TestRunDefaultCmdParams(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "meta.yaml")
+	manifest := []byte(`
+name: meta
+cmd: "echo {{.sep}}{{if .upper}} UP{{end}} {{.args}}"
+params:
+  - name: sep
+    type: string
+    default: "|"
+  - name: upper
+    type: bool
+    default: "false"
+positional:
+  min: 1
+`)
+	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	source := discovery.NewGlobalSource(dir)
+
+	var stdout bytes.Buffer
+	err := Run(context.Background(), source, "meta", "", map[string]string{}, "hello", []string{"hello"}, &stdout, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := stdout.String(); got != "| hello\n" {
+		t.Fatalf("unexpected output: %q, want %q", got, "| hello\n")
+	}
+
+	stdout.Reset()
+	err = Run(context.Background(), source, "meta", "", map[string]string{"upper": "true"}, "hello", []string{"hello"}, &stdout, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := stdout.String(); got != "| UP hello\n" {
+		t.Fatalf("unexpected output with bool flag: %q, want %q", got, "| UP hello\n")
+	}
+}
+
+func TestRunDefaultCmdUnknownParamRejected(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "meta.yaml")
+	manifest := []byte(`
+name: meta
+cmd: "echo {{.args}}"
+params:
+  - name: json
+    type: bool
+    default: "false"
+`)
+	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	source := discovery.NewGlobalSource(dir)
+
+	err := Run(context.Background(), source, "meta", "", map[string]string{"bad": "1"}, "", nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected error: unknown param on default cmd")
+	}
+	if !strings.Contains(err.Error(), "unknown param") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunDefaultCmdPositionalMin(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "meta.yaml")
+	manifest := []byte(`
+name: meta
+cmd: "echo {{.args}}"
+positional:
+  min: 1
+`)
+	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	source := discovery.NewGlobalSource(dir)
+
+	err := Run(context.Background(), source, "meta", "", map[string]string{}, "", nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected error: default cmd requires positional args")
+	}
+	if !strings.Contains(err.Error(), "at least 1 positional") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunSetsFutiCwdEnv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("printenv not available on Windows")
+	}
+
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "probe.yaml")
+	manifest := []byte(`
+name: probe
+cmd: "printenv FUTI_CWD"
+`)
+	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	// t.Chdir меняет cwd процесса — Run должен подхватить его как FUTI_CWD.
+	t.Chdir(dir)
+
+	source := discovery.NewGlobalSource(dir)
+
+	var stdout bytes.Buffer
+	err := Run(context.Background(), source, "probe", "", map[string]string{}, "", nil, &stdout, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := strings.TrimRight(stdout.String(), "\n"); got != dir {
+		t.Fatalf("FUTI_CWD = %q, want %q", got, dir)
+	}
+}

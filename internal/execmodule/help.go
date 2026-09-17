@@ -106,6 +106,32 @@ func FormatModuleHelp(mod *Module, ns string) string {
 		fmt.Fprintf(&b, "default: %s\n", mod.Cmd)
 	}
 
+	// Схема default-команды: параметры и позиционные аргументы.
+	if len(mod.Params) > 0 {
+		b.WriteString("default params:\n")
+		max := 0
+		for _, p := range mod.Params {
+			if l := len("--" + p.Name); l > max {
+				max = l
+			}
+		}
+		for _, p := range mod.Params {
+			pad := strings.Repeat(" ", max-len("--"+p.Name))
+			line := fmt.Sprintf("  --%s%s  %s", p.Name, pad, paramMeta(p))
+			if p.Description != "" {
+				line += "  " + p.Description
+			}
+			b.WriteString(line + "\n")
+		}
+	}
+	if mod.Positional.Min > 0 {
+		noun := "argument"
+		if mod.Positional.Min != 1 {
+			noun = "arguments"
+		}
+		fmt.Fprintf(&b, "default positional: at least %d %s after --\n", mod.Positional.Min, noun)
+	}
+
 	if len(mod.Commands) > 0 {
 		b.WriteString("commands:\n")
 		names := make([]string, 0, len(mod.Commands))

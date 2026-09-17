@@ -116,3 +116,26 @@ func TestFormatModuleHelpNoDefaultNoDesc(t *testing.T) {
 		t.Fatalf("expected command run, got:\n%s", out)
 	}
 }
+
+func TestFormatModuleHelpDefaultParams(t *testing.T) {
+	mod := &Module{
+		Name:        "meta",
+		Description: "Image stats",
+		Cmd:         "echo {{.json}}",
+		Params: []Param{
+			{Name: "json", Type: "bool", Description: "JSON output"},
+		},
+		Positional: Positional{Min: 1},
+	}
+	out := FormatModuleHelp(mod, "images meta")
+
+	if !strings.Contains(out, "default params:") {
+		t.Fatalf("expected default params section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "--json") || !strings.Contains(out, "JSON output") {
+		t.Fatalf("expected --json with description, got:\n%s", out)
+	}
+	if !strings.Contains(out, "at least 1 argument") {
+		t.Fatalf("expected positional hint, got:\n%s", out)
+	}
+}

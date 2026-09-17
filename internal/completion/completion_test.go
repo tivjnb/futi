@@ -54,6 +54,18 @@ commands:
         cmd: "migrate down"
 `)
 
+	writeFile(t, filepath.Join(dir, "meta.yaml"), `
+name: meta
+description: Image stats
+cmd: "meta.py --files {{quote .args}}{{if .json}} --json{{end}}"
+params:
+  - name: json
+    type: bool
+    default: "false"
+positional:
+  min: 1
+`)
+
 	writeFile(t, filepath.Join(dir, "git.yaml"), `
 name: git
 description: Git shortcuts
@@ -93,7 +105,7 @@ func TestCompleteEmptyArgsRoot(t *testing.T) {
 	got := text(matches)
 
 	// builtins + корневые модули + namespace (отсортировано по алфавиту).
-	want := []string{"cache", "completion", "dev", "docker", "git", "init", "list", "tools", "validate"}
+	want := []string{"cache", "completion", "dev", "docker", "git", "init", "list", "meta", "tools", "validate"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected matches: %v, want %v", got, want)
 	}
@@ -165,7 +177,7 @@ func TestCompleteLeafCommandRequiredParams(t *testing.T) {
 	src := newTestSource(t)
 	matches, directive := Complete(src, nil, []string{"docker", "build"}, "")
 	got := text(matches)
-	want := []string{"--tag", "help"}
+	want := []string{"--force", "--tag", "help"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected matches: %v, want %v", got, want)
 	}
@@ -217,7 +229,8 @@ func TestCompleteParamEqualsNoSuggest(t *testing.T) {
 	if len(matches) != 0 {
 		t.Fatalf("expected no matches for --param=val, got %v", matches)
 	}
-	if directive != ShellCompDirectiveNoFileComp {
+	// Значение после = — user-supplied путь: разрешаем файловое дополнение.
+	if directive != ShellCompDirectiveDefault {
 		t.Fatalf("unexpected directive: %v", directive)
 	}
 }
@@ -238,7 +251,8 @@ func TestCompleteStringValueNoSuggest(t *testing.T) {
 	if len(matches) != 0 {
 		t.Fatalf("expected no matches for string value, got %v", matches)
 	}
-	if directive != ShellCompDirectiveNoFileComp {
+	// Значение string-флага — user-supplied путь: разрешаем файлы.
+	if directive != ShellCompDirectiveDefault {
 		t.Fatalf("unexpected directive: %v", directive)
 	}
 }
@@ -400,4 +414,96 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func TestCompleteLeafDefaultParamHasDescription(t *testing.T) {
+	// docker build: force (bool, default: false) — пометка (default: ...)
+	// и на пустом toComplete, и в ветке "--".
+	src := newTestSource(t)
+	for _, toComplete := range []string{"", "--"} {
+		matches, _ := Complete(src, nil, []string{"docker", "build"}, toComplete)
+		found := false
+		for _, m := range matches {
+			if m.Text == "--force" {
+				found = true
+				if m.Description != "(default: false)" {
+					t.Fatalf("toComplete=%q: expected (default: false) description, got %q", toComplete, m.Description)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("toComplete=%q: expected --force in matches, got %v", toComplete, matches)
+		}
+	}
+}
+
+func TestCompleteModuleDefaultCmdParams(t *testing.T) {
+	// Модуль-однокоманда (cmd + params, без commands): на пустом
+	// commandPath подсказываем параметры default-команды.
+	src := newTestSource(t)
+	matches, directive := Complete(src, nil, []string{"meta"}, "")
+	got := text(matches)
+	want := []string{"--json", "help"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected matches: %v, want %v", got, want)
+	}
+	if directive != ShellCompDirectiveNoFileComp {
+		t.Fatalf("unexpected directive: %v", directive)
+	}
+
+	// bool-значение: после --json подсказываем true/false.
+	matches, _ = Complete(src, nil, []string{"meta", "--json"}, "")
+	got = text(matches)
+	want = []string{"false", "true"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("bool value matches: %v, want %v", got, want)
+	}
+}
+
+func TestCompleteAfterFlagValue(t *testing.T) {
+	// После введённого значения флага (--out ~/qr.png <TAB>) слово-значение
+	// не должно попадать в command path: подсказываем оставшиеся параметры.
+	src := newTestSource(t)
+	matches, directive := Complete(src, nil, []string{"docker", "build", "--tag", "v1.0"}, "")
+	got := text(matches)
+	want := []string{"--force", "--tag", "help"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("empty toComplete: %v, want %v", got, want)
+	}
+	if directive != ShellCompDirectiveNoFileComp {
+		t.Fatalf("unexpected directive: %v", directive)
+	}
+
+	// То же в ветке "--": после значения флага остаются другие флаги.
+	matches, _ = Complete(src, nil, []string{"docker", "build", "--tag", "v1.0"}, "--")
+	got = text(matches)
+	want = []string{"--force", "--tag"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("-- toComplete: %v, want %v", got, want)
+	}
+}
+
+func TestCompleteFlagValueAllowsFiles(t *testing.T) {
+	// Значение не-bool флага (user-supplied путь/строка): разрешаем шеллу
+	// дефолтное файловое дополнение (директива Default). В будущем —
+	// только для параметров типа PATH (см. NEXT_STEPS).
+	src := newTestSource(t)
+
+	// Курсор на пустом значении: --out <TAB>
+	matches, directive := Complete(src, nil, []string{"docker", "build", "--tag"}, "")
+	if len(matches) != 0 {
+		t.Fatalf("expected no matches, got %v", matches)
+	}
+	if directive != ShellCompDirectiveDefault {
+		t.Fatalf("expected Default directive, got %v", directive)
+	}
+
+	// Курсор в середине значения: --out ~/qr<TAB>
+	matches, directive = Complete(src, nil, []string{"docker", "build", "--tag"}, "~/qr")
+	if len(matches) != 0 {
+		t.Fatalf("expected no matches, got %v", matches)
+	}
+	if directive != ShellCompDirectiveDefault {
+		t.Fatalf("expected Default directive, got %v", directive)
+	}
 }

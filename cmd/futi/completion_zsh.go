@@ -55,6 +55,10 @@ _futi() {
         1) _message 'error occurred during completion' ;;
         2) _message 'no space left' ;;
         4) _message 'no file completion' ;;
+        # Default: futi разрешает файловое дополнение (значения флагов —
+        # пути). Функция завершения полностью контролирует кандидатов,
+        # поэтому генерируем файловые сами.
+        0) _files ;;
         *) ;;
     esac
 

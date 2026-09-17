@@ -328,3 +328,41 @@ commands:
 		t.Fatalf("unexpected param description: %q", run.Params[0].Description)
 	}
 }
+
+func TestLoadModuleDefaultCmdParams(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "meta.yaml")
+	writeFile(t, manifestPath, `
+name: meta
+cmd: "echo {{.sep}} {{.args}}"
+params:
+  - name: sep
+    type: string
+    default: "|"
+  - name: upper
+    type: bool
+    default: "false"
+positional:
+  min: 1
+commands:
+  show:
+    cmd: "echo show"
+`)
+
+	mod, err := LoadModule(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mod.Params) != 2 {
+		t.Fatalf("expected 2 default cmd params, got %d", len(mod.Params))
+	}
+	if mod.Params[0].Name != "sep" || mod.Params[0].Default != "|" {
+		t.Fatalf("unexpected first param: %+v", mod.Params[0])
+	}
+	if mod.Params[1].Name != "upper" || mod.Params[1].Type != "bool" {
+		t.Fatalf("unexpected second param: %+v", mod.Params[1])
+	}
+	if mod.Positional.Min != 1 {
+		t.Fatalf("unexpected default positional min: %d", mod.Positional.Min)
+	}
+}

@@ -23,9 +23,18 @@ var validParamTypes = map[string]bool{
 // Warnings (не блокируют, показываются в futi validate):
 //   - команда с commands, но без cmd (вызов без subcommand падает в runtime)
 //
+// Схема default-команды модуля (params/positional верхнего уровня)
+// проверяется теми же правилами с путём "(default)".
 // Рекурсивно обходит все команды и subcommands. Возвращает ВСЕ ошибки за один
 // проход — автор модуля исправляет всё за итерацию, а не по одной ошибке.
 func (m *Module) Validate() (errors []error, warnings []string) {
+	if m.Cmd != "" {
+		validateCommand("(default)", &Command{
+			Cmd:        m.Cmd,
+			Params:     m.Params,
+			Positional: m.Positional,
+		}, &errors, &warnings)
+	}
 	for name, cmd := range m.Commands {
 		validateCommand(name, cmd, &errors, &warnings)
 	}

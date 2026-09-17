@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -100,13 +101,17 @@ func Run(
 			return fmt.Errorf("modulerunner: %w", err)
 		}
 
-		// commandPath пустой → default cmd модуля
+		// commandPath пустой → default cmd модуля (со схемой: params/positional).
 		var cmd *execmodule.Command
 		if len(commandPath) == 0 {
 			if mod.Cmd == "" {
 				return fmt.Errorf("modulerunner: module %q has no default command; specify one", ns)
 			}
-			cmd = &execmodule.Command{Cmd: mod.Cmd}
+			cmd = &execmodule.Command{
+				Cmd:        mod.Cmd,
+				Params:     mod.Params,
+				Positional: mod.Positional,
+			}
 		} else {
 			cmd, err = mod.ResolveCommand(commandPath)
 			if err != nil {
@@ -143,6 +148,14 @@ func Run(
 		}
 
 		cfg := executor.NewConfig().WithDir(moduleRoot)
+		// FUTI_CWD — исходный рабочий каталог пользователя. Go exec при
+		// Dir != "" перезаписывает PWD на moduleRoot, поэтому без этой
+		// переменной скрипты модулей не могут резолвить относительные
+		// пути, переданные пользователем. Полное окружение обязательно:
+		// cfg.Env заменяет environ дочернего процесса целиком.
+		if cwd, err := os.Getwd(); err == nil {
+			cfg = cfg.WithEnv(append(os.Environ(), "FUTI_CWD="+cwd))
+		}
 		if stdout != nil {
 			cfg = cfg.WithStdout(stdout)
 		}

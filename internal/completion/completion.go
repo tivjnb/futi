@@ -85,15 +85,17 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 				}
 			}
 		}
-		// Значение флага (не bool) — user-supplied, ничего не подсказываем.
-		return nil, ShellCompDirectiveNoFileComp
+		// Значение флага (не bool) — user-supplied. Разрешаем шеллу
+		// дефолтное файловое дополнение (пути в значениях флагов).
+		// В будущем ограничим параметрами типа PATH (см. NEXT_STEPS).
+		return nil, ShellCompDirectiveDefault
 	}
 
 	// Случай: toComplete начинается с "--" — подсказываем имена параметров.
 	if strings.HasPrefix(toComplete, "--") {
-		// `--param=val` — значение user-supplied, не подсказываем.
+		// `--param=val` — значение user-supplied: разрешаем файлы (пути).
 		if strings.Contains(toComplete, "=") {
-			return nil, ShellCompDirectiveNoFileComp
+			return nil, ShellCompDirectiveDefault
 		}
 		if moduleFound {
 			if cmd, err := currentCommand(loader, manifest, root, commandPath); err == nil {
@@ -129,15 +131,41 @@ func resolveModule(source discovery.Source, positionals []string) (manifest, roo
 	return "", "", false, nil
 }
 
+// trimCommandPath обрезает commandPath до первой неизвестной команды.
+// Слова после флагов (их значения, например "--out file.png" → "file.png")
+// не должны резолвиться как subcommands — они отсекаются.
+func trimCommandPath(mod *execmodule.Module, commandPath []string) []string {
+	level := mod.Commands
+	known := 0
+	for _, seg := range commandPath {
+		next, ok := level[seg]
+		if !ok {
+			break
+		}
+		known++
+		level = next.Commands
+	}
+	return commandPath[:known]
+}
+
 // currentCommand загружает модуль и возвращает команду по commandPath.
-// При пустом commandPath возвращает ошибку (у модуля нет params — default cmd).
+// При пустом commandPath возвращает default-команду модуля (cmd + params),
+// если она есть (модуль-однокоманда); иначе notFoundError.
 func currentCommand(loader modulerunner.ModuleLoader, manifest, root string, commandPath []string) (*execmodule.Command, error) {
 	mod, err := modulerunner.LoadModule(loader, manifest, root)
 	if err != nil {
 		return nil, err
 	}
+	commandPath = trimCommandPath(mod, commandPath)
 	if len(commandPath) == 0 {
-		return nil, &notFoundError{"default command has no params"}
+		if mod.Cmd == "" {
+			return nil, &notFoundError{"module has no default command"}
+		}
+		return &execmodule.Command{
+			Cmd:        mod.Cmd,
+			Params:     mod.Params,
+			Positional: mod.Positional,
+		}, nil
 	}
 	return mod.ResolveCommandPath(commandPath)
 }
@@ -156,8 +184,17 @@ func moduleMatches(loader modulerunner.ModuleLoader, manifest, root string, comm
 		return nil, ShellCompDirectiveNoFileComp
 	}
 
+	// Обрезаем commandPath до первой неизвестной команды: значения флагов
+	// ("--out file.png") не резолвятся как subcommands.
+	commandPath = trimCommandPath(mod, commandPath)
+
 	// commandPath пуст → подсказываем команды модуля (+ системную help).
+	// Модуль-однокоманда (без commands, с default cmd) — листовая:
+	// подсказываем параметры default-команды.
 	if len(commandPath) == 0 {
+		if len(mod.Commands) == 0 && mod.Cmd != "" {
+			return filterMatches(withHelp(paramMatches(&execmodule.Command{Params: mod.Params}, "")), toComplete), ShellCompDirectiveNoFileComp
+		}
 		return filterMatches(withHelp(commandMatches(mod.Commands)), toComplete), ShellCompDirectiveNoFileComp
 	}
 
@@ -172,17 +209,10 @@ func moduleMatches(loader modulerunner.ModuleLoader, manifest, root string, comm
 		return filterMatches(withHelp(commandMatches(cmd.Commands)), toComplete), ShellCompDirectiveNoFileComp
 	}
 
-	// Листовая команда — подсказываем обязательные параметры (--name) даже без
-	// ввода "--", плюс системную help. Описание "(required)" выводится в zsh,
-	// в bash/fish не загрязняет ввод.
-	required := requiredParamMatches(cmd, toComplete)
-	if len(required) > 0 {
-		return filterMatches(withHelp(required), toComplete), ShellCompDirectiveNoFileComp
-	}
-
-	// Листовая команда без обязательных параметров — help и дальше только
-	// --param или --.
-	return filterMatches(withHelp(nil), toComplete), ShellCompDirectiveNoFileComp
+	// Листовая команда — подсказываем все параметры (--name) даже без
+	// ввода "--", плюс системную help. Пометки "(required)" / "(default: X)"
+	// выводятся в zsh; в bash/fish не загрязняют ввод.
+	return filterMatches(withHelp(paramMatches(cmd, "")), toComplete), ShellCompDirectiveNoFileComp
 }
 
 // withHelp добавляет системную подсказку "help" к matches, если там ещё нет
@@ -271,29 +301,28 @@ func flagMatches(flags []string, toComplete string) []Match {
 }
 
 // paramMatches отбирает параметры команды по префиксу toComplete (с "--").
+// Каждый параметр несёт пометку: "(required)" или "(default: X)" —
+// zsh показывает её рядом с флагом, bash/fish отрезают при выводе.
 func paramMatches(cmd *execmodule.Command, toComplete string) []Match {
 	prefix := strings.TrimPrefix(toComplete, "--")
 	matches := make([]Match, 0)
 	for _, p := range cmd.Params {
 		if strings.HasPrefix(p.Name, prefix) {
-			matches = append(matches, Match{Text: "--" + p.Name})
+			matches = append(matches, Match{Text: "--" + p.Name, Description: paramHint(p)})
 		}
 	}
 	return matches
 }
 
-// requiredParamMatches возвращает обязательные параметры команды как подсказки
-// "--name" с описанием "(required)". Показываются на листовой команде без ввода
-// "--", чтобы пользователь сразу видел, что команда требует. Описание выводится
-// в zsh; в bash/fish суффикс-описание не загрязняет ввод (обрезается).
-func requiredParamMatches(cmd *execmodule.Command, _ string) []Match {
-	matches := make([]Match, 0)
-	for _, p := range cmd.Params {
-		if p.Required {
-			matches = append(matches, Match{Text: "--" + p.Name, Description: "(required)"})
-		}
+// paramHint формирует компактную пометку параметра для подсказки.
+func paramHint(p execmodule.Param) string {
+	if p.Required {
+		return "(required)"
 	}
-	return matches
+	if p.Default != "" {
+		return "(default: " + p.Default + ")"
+	}
+	return ""
 }
 
 // filterMatches оставляет подсказки, чьи имена начинаются с toComplete

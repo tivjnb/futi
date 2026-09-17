@@ -11,11 +11,15 @@ import (
 // Cmd — опциональная команда по умолчанию: вызывается, если не указана
 // конкретная команда. Позволяет использовать модуль как одну команду:
 // `futi echo_mod -- hello world` выполнит Cmd с args="hello world".
+// Params/Positional — схема команды по умолчанию: валидируются и
+// подставляются так же, как у обычных команд (defaults, типы, min).
 type Module struct {
 	Name        string
 	Description string
 	Root        string
 	Cmd         string
+	Params      []Param
+	Positional  Positional
 	Commands    map[string]*Command
 }
 
@@ -52,6 +56,8 @@ type moduleYAML struct {
 	Name        string                 `yaml:"name"`
 	Description string                 `yaml:"description"`
 	Cmd         string                 `yaml:"cmd"`
+	Params      []paramYAML            `yaml:"params"`
+	Positional  positionalYAML         `yaml:"positional"`
 	Commands    map[string]commandYAML `yaml:"commands"`
 }
 
@@ -118,27 +124,33 @@ func ParseModule(manifestPath, moduleRoot string) (*Module, error) {
 		Description: raw.Description,
 		Root:        moduleRoot,
 		Cmd:         raw.Cmd,
+		Params:      parseParams(raw.Params),
+		Positional:  Positional{Min: raw.Positional.Min},
 		Commands:    commands,
 	}, nil
+}
+
+// parseParams преобразует paramsYAML в Param.
+func parseParams(raw []paramYAML) []Param {
+	params := make([]Param, len(raw))
+	for i, p := range raw {
+		params[i] = Param{
+			Name:        p.Name,
+			Type:        p.Type,
+			Required:    p.Required,
+			Default:     p.Default,
+			Description: p.Description,
+		}
+	}
+	return params
 }
 
 // parseCommand рекурсивно преобразует commandYAML в Command,
 // включая вложенные commands.
 func parseCommand(c commandYAML) *Command {
-	params := make([]Param, len(c.Params))
-	for i, p := range c.Params {
-	params[i] = Param{
-		Name:        p.Name,
-		Type:        p.Type,
-		Required:    p.Required,
-		Default:     p.Default,
-		Description: p.Description,
-	}
-	}
-
 	cmd := &Command{
 		Description: c.Description,
-		Params:      params,
+		Params:      parseParams(c.Params),
 		Positional:  Positional{Min: c.Positional.Min},
 		Cmd:         c.Cmd,
 	}

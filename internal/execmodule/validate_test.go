@@ -274,3 +274,21 @@ func TestValidateNegativePositionalMin(t *testing.T) {
 	}
 }
 
+
+func TestValidateDefaultCmdParams(t *testing.T) {
+	mod := &Module{
+		Name: "meta",
+		Cmd:  "echo {{.json}}",
+		Params: []Param{
+			{Name: "json", Type: "bool"},
+			{Name: "json", Type: "bool"},
+			{Name: "scale", Type: "float"},
+		},
+		Positional: Positional{Min: -1},
+	}
+
+	errors, _ := mod.Validate()
+	if len(errors) != 3 {
+		t.Fatalf("expected 3 errors (duplicate param, invalid type, negative min), got %d: %v", len(errors), errors)
+	}
+}
