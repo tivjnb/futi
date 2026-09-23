@@ -44,6 +44,9 @@ func (MemoryStorage) Load() (cacheFile, error) { return cacheFile{}, nil }
 // Save — no-op. Ничего не сохраняет.
 func (MemoryStorage) Save(cacheFile) error { return nil }
 
+// Clear — no-op: нет persistent состояния.
+func (MemoryStorage) Clear() error { return nil }
+
 // Storage — абстракция над persistent/in-memory хранилищем кэша.
 //
 // Реализации:
@@ -58,4 +61,8 @@ type Storage interface {
 	// Save сохраняет cacheFile целиком (Version, LastRefreshTime, Entries).
 	// Атомарная запись (temp + rename) для DiskStorage.
 	Save(cf cacheFile) error
+
+	// Clear удаляет persistent состояние (файл хранилища).
+	// In-memory записи не затрагивает — ими управляет Cache.
+	Clear() error
 }

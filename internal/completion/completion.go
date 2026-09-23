@@ -22,9 +22,9 @@ type Match struct {
 }
 
 // builtinNames — встроенные команды корневого уровня (до резолва модулей).
-// list/validate зарезервированы и не могут быть командами модуля; cache/init/
-// completion имеют приоритет над одноимёнными модулями на корне.
-var builtinNames = []string{"cache", "completion", "init", "list", "validate"}
+// list/validate зарезервированы и не могут быть командами модуля; cache/
+// modules/completion имеют приоритет над одноимёнными модулями на корне.
+var builtinNames = []string{"cache", "completion", "list", "modules", "validate"}
 
 // cacheSubcommands — подкоманды `futi cache`.
 var cacheSubcommands = []string{"clear", "refresh", "status"}
@@ -32,8 +32,20 @@ var cacheSubcommands = []string{"clear", "refresh", "status"}
 // completionShells — поддерживаемые shell для `futi completion`.
 var completionShells = []string{"bash", "fish", "zsh"}
 
-// initFlags — флаги `futi init`.
-var initFlags = []string{"--command", "--default-cmd", "--desc", "--global"}
+// modulesSubcommands — подкоманды `futi modules`.
+var modulesSubcommands = []string{"add_command", "info", "init", "install", "list", "path", "remove_command", "uninstall", "update"}
+
+// modulesInitFlags — флаги `futi modules init` (бывший futi init).
+var modulesInitFlags = []string{"--command", "--default-cmd", "--desc", "--global"}
+
+// modulesInstallFlags — флаги `futi modules install`.
+var modulesInstallFlags = []string{"--from-archive", "--from-git", "--from-local", "--local", "--namespace", "--ref", "--skip-attach"}
+
+// modulesUninstallFlags — флаги `futi modules uninstall`.
+var modulesUninstallFlags = []string{"--force", "--skip-detach", "--strict-detach", "--yes"}
+
+// modulesUpdateFlags — флаги `futi modules update`.
+var modulesUpdateFlags = []string{"--skip-attach"}
 
 // helpKeyword — системная команда справки, подсказывается на уровнях
 // модуля/команды/subcommand. help НЕ зарезервирован: если в модуле есть
@@ -102,9 +114,22 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 				return filterMatches(paramMatches(cmd, toComplete), toComplete), ShellCompDirectiveNoFileComp
 			}
 		}
-		// Флаги `futi init` (модуль не задействован).
-		if len(positionals) == 1 && positionals[0] == "init" {
-			return filterMatches(flagMatches(initFlags, toComplete), toComplete), ShellCompDirectiveNoFileComp
+		// Флаги `futi modules <sub>` (модуль не задействован).
+		if len(positionals) == 2 && positionals[0] == "modules" {
+			var flags []string
+			switch positionals[1] {
+			case "init":
+				flags = modulesInitFlags
+			case "install":
+				flags = modulesInstallFlags
+			case "uninstall":
+				flags = modulesUninstallFlags
+			case "update":
+				flags = modulesUpdateFlags
+			}
+			if flags != nil {
+				return filterMatches(flagMatches(flags, toComplete), toComplete), ShellCompDirectiveNoFileComp
+			}
 		}
 		return nil, ShellCompDirectiveNoFileComp
 	}
@@ -236,9 +261,8 @@ func namespaceMatches(source discovery.Source, loader modulerunner.ModuleLoader,
 			return filterMatches(strMatches(cacheSubcommands), toComplete), ShellCompDirectiveNoFileComp
 		case "completion":
 			return filterMatches(strMatches(completionShells), toComplete), ShellCompDirectiveNoFileComp
-		case "init":
-			// Флаги init подсказываются в ветке "--" (выше); тут пусто.
-			return nil, ShellCompDirectiveNoFileComp
+		case "modules":
+			return filterMatches(strMatches(modulesSubcommands), toComplete), ShellCompDirectiveNoFileComp
 		}
 	}
 

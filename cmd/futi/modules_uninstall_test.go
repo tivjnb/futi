@@ -1,0 +1,162 @@
+package main
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"futi/internal/discovery"
+	"futi/internal/metayaml"
+)
+
+func TestRunModulesUninstallPackage(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	// Модуль с detach, пишущим маркер за пределы модуля.
+	detachedMarker := filepath.Join(t.TempDir(), "detached.marker")
+	moduleDir := filepath.Join(global, "qr")
+	os.MkdirAll(moduleDir, 0o755)
+	body := "name: qr\ndetach: \"touch " + detachedMarker + "\"\ncommands:\n  run:\n    cmd: echo\n"
+	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644)
+	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
+
+	src := discovery.NewGlobalSource(global)
+	var b bytes.Buffer
+	if err := runModulesUninstall(&b, strings.NewReader("\n"), src, newTestCache(), []string{"qr", "--yes"}); err != nil {
+		t.Fatalf("runModulesUninstall: %v", err)
+	}
+	if _, err := os.Stat(moduleDir); !os.IsNotExist(err) {
+		t.Fatal("module must be removed")
+	}
+	if _, err := os.Stat(detachedMarker); err != nil {
+		t.Fatalf("detach hook did not run: %v", err)
+	}
+}
+
+func TestRunModulesUninstallNoMetaRequiresForce(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	moduleDir := filepath.Join(global, "hand")
+	os.MkdirAll(moduleDir, 0o755)
+	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte("name: hand\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
+
+	src := discovery.NewGlobalSource(global)
+	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), src, newTestCache(), []string{"hand", "--yes"})
+	if err == nil || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("expected no-meta error, got %v", err)
+	}
+
+	if err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), src, newTestCache(), []string{"hand", "--yes", "--force"}); err != nil {
+		t.Fatalf("force uninstall: %v", err)
+	}
+	if _, err := os.Stat(moduleDir); !os.IsNotExist(err) {
+		t.Fatal("module must be removed with --force")
+	}
+}
+
+func TestRunModulesUninstallConfirmDeclined(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	moduleDir := filepath.Join(global, "qr")
+	os.MkdirAll(moduleDir, 0o755)
+	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte("name: qr\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
+	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
+
+	var b bytes.Buffer
+	if err := runModulesUninstall(&b, strings.NewReader("n\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr"}); err != nil {
+		t.Fatalf("runModulesUninstall: %v", err)
+	}
+	if !strings.Contains(b.String(), "Aborted") {
+		t.Fatalf("expected abort: %s", b.String())
+	}
+	if _, err := os.Stat(moduleDir); err != nil {
+		t.Fatal("module must survive declined confirmation")
+	}
+}
+
+func TestRunModulesUninstallStrictDetachAborts(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	moduleDir := filepath.Join(global, "qr")
+	os.MkdirAll(moduleDir, 0o755)
+	body := "name: qr\ndetach: \"exit 2\"\ncommands:\n  run:\n    cmd: echo\n"
+	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644)
+	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
+
+	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "--yes", "--strict-detach"})
+	if err == nil || !strings.Contains(err.Error(), "strict") {
+		t.Fatalf("expected strict-detach error, got %v", err)
+	}
+	if _, statErr := os.Stat(moduleDir); statErr != nil {
+		t.Fatal("module must NOT be deleted on strict detach failure")
+	}
+}
+
+func TestRunModulesUninstallDetachFailureWarns(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	moduleDir := filepath.Join(global, "qr")
+	os.MkdirAll(moduleDir, 0o755)
+	body := "name: qr\ndetach: \"exit 2\"\ncommands:\n  run:\n    cmd: echo\n"
+	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644)
+	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
+
+	if err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "--yes"}); err != nil {
+		t.Fatalf("detach failure must be warning, not error: %v", err)
+	}
+	if _, err := os.Stat(moduleDir); !os.IsNotExist(err) {
+		t.Fatal("module must be removed despite detach failure")
+	}
+}
+
+func TestRunModulesUninstallSingleYamlFile(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	// Два одиночных yaml в одном каталоге; удаляем один — второй цел.
+	os.WriteFile(filepath.Join(global, "one.yaml"), []byte("name: one\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
+	os.WriteFile(filepath.Join(global, "two.yaml"), []byte("name: two\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
+
+	src := discovery.NewGlobalSource(global)
+	if err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), src, newTestCache(), []string{"one", "--yes", "--force"}); err != nil {
+		t.Fatalf("runModulesUninstall: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(global, "one.yaml")); !os.IsNotExist(err) {
+		t.Fatal("one.yaml must be removed")
+	}
+	if _, err := os.Stat(filepath.Join(global, "two.yaml")); err != nil {
+		t.Fatalf("two.yaml must survive: %v", err)
+	}
+}
+
+func TestRunModulesUninstallRefusesOutsideRoot(t *testing.T) {
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	t.Chdir(t.TempDir())
+
+	// Source указывает на каталог ВНЕ allowed roots.
+	outside := t.TempDir()
+	moduleDir := filepath.Join(outside, "qr")
+	os.MkdirAll(moduleDir, 0o755)
+	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte("name: qr\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
+
+	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(outside), newTestCache(), []string{"qr", "--yes", "--force"})
+	if err == nil || !strings.Contains(err.Error(), "outside known futi modules") {
+		t.Fatalf("expected outside-root refusal, got %v", err)
+	}
+	if _, statErr := os.Stat(moduleDir); statErr != nil {
+		t.Fatal("module outside roots must survive")
+	}
+}

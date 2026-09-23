@@ -55,6 +55,13 @@ func (f *fakeStorage) Save(cf cacheFile) error {
 	return nil
 }
 
+func (f *fakeStorage) Clear() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loadData = cacheFile{}
+	return nil
+}
+
 func newTestCache() *Cache {
 	return New(&fakeStorage{}, AlwaysPolicy{})
 }
@@ -1310,5 +1317,57 @@ func TestLoadModuleVerifiedReloadsWhenCacheTampered(t *testing.T) {
 	}
 	if mod == evil {
 		t.Fatal("returned the tampered module; expected reload from disk")
+	}
+}
+
+func TestInvalidateClearsMemoryAndDisk(t *testing.T) {
+	dir := t.TempDir()
+	manifest := filepath.Join(dir, "m.yaml")
+	writeFile(t, manifest, "name: m\ncommands:\n  run:\n    cmd: echo hi\n")
+
+	path := filepath.Join(dir, "cache.gob")
+	storage := NewDiskStorage(path)
+	cache := New(storage, AlwaysPolicy{})
+
+	// In-memory entry + persistent запись на диске.
+	if _, err := cache.LoadModule(manifest, dir); err != nil {
+		t.Fatalf("LoadModule: %v", err)
+	}
+	if err := storage.Save(cacheFile{
+		Version: cacheFileVersion,
+		Entries: map[string]entry{manifest: {Size: 10}},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if err := cache.Invalidate(); err != nil {
+		t.Fatalf("Invalidate: %v", err)
+	}
+
+	if got := cache.ModuleCount(); got != 0 {
+		t.Fatalf("expected 0 in-memory entries, got %d", got)
+	}
+	if !cache.LastRefresh().IsZero() {
+		t.Fatal("expected zero lastRefresh after Invalidate")
+	}
+	cf, err := storage.Load()
+	if err != nil {
+		t.Fatalf("Load after Clear: %v", err)
+	}
+	if len(cf.Entries) != 0 {
+		t.Fatalf("expected empty disk cache, got %d entries", len(cf.Entries))
+	}
+}
+
+func TestMemoryStorageClearIsNoOp(t *testing.T) {
+	if err := (MemoryStorage{}).Clear(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDiskStorageClearMissingFile(t *testing.T) {
+	s := NewDiskStorage(filepath.Join(t.TempDir(), "missing.gob"))
+	if err := s.Clear(); err != nil {
+		t.Fatalf("Clear on missing file must not fail: %v", err)
 	}
 }

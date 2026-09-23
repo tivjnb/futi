@@ -105,7 +105,7 @@ func TestCompleteEmptyArgsRoot(t *testing.T) {
 	got := text(matches)
 
 	// builtins + корневые модули + namespace (отсортировано по алфавиту).
-	want := []string{"cache", "completion", "dev", "docker", "git", "init", "list", "meta", "tools", "validate"}
+	want := []string{"cache", "completion", "dev", "docker", "git", "list", "meta", "modules", "tools", "validate"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected matches: %v, want %v", got, want)
 	}
@@ -308,11 +308,34 @@ func TestCompleteCompletionShells(t *testing.T) {
 	}
 }
 
-func TestCompleteInitFlags(t *testing.T) {
+func TestCompleteModulesInitFlags(t *testing.T) {
 	src := newTestSource(t)
-	matches, _ := Complete(src, nil, []string{"init"}, "--")
+	matches, _ := Complete(src, nil, []string{"modules", "init"}, "--")
 	got := text(matches)
 	want := []string{"--command", "--default-cmd", "--desc", "--global"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected matches: %v, want %v", got, want)
+	}
+}
+
+func TestCompleteModulesSubcommands(t *testing.T) {
+	src := newTestSource(t)
+	matches, directive := Complete(src, nil, []string{"modules"}, "")
+	got := text(matches)
+	want := []string{"add_command", "info", "init", "install", "list", "path", "remove_command", "uninstall", "update"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected matches: %v, want %v", got, want)
+	}
+	if directive != ShellCompDirectiveNoFileComp {
+		t.Fatalf("unexpected directive: %v, want NoFileComp", directive)
+	}
+}
+
+func TestCompleteModulesInstallFlags(t *testing.T) {
+	src := newTestSource(t)
+	matches, _ := Complete(src, nil, []string{"modules", "install"}, "--")
+	got := text(matches)
+	want := []string{"--from-archive", "--from-git", "--from-local", "--local", "--namespace", "--ref", "--skip-attach"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected matches: %v, want %v", got, want)
 	}

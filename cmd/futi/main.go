@@ -576,7 +576,8 @@ USAGE
   futi <namespace...> list [flags]
   futi list [flags]
   futi <namespace...> validate        Validate module schema
-  futi init <name> [flags]            Create a new module from template
+  futi modules init <name> [flags]    Create a new module from template
+  futi modules <subcommand>           Manage modules (install, uninstall, ...)
   futi cache refresh                  Refresh module cache
   futi completion <bash|zsh|fish>     Generate a shell completion script
   futi -h | --help
@@ -668,11 +669,13 @@ VALIDATION
                                      - command with subcommands but no cmd
                                        (calling without subcommand fails)
 
-INIT
-  futi init <name>                 Create a new module in ./.futi/<name>.yaml
-  futi init <ns>/<name>            Create with namespace (./.futi/<ns>/<name>.yaml)
-  futi init <name> --global        Create in ~/.config/futi/modules/<name>.yaml
+MODULES
+  futi modules init <name>         Create a new module in ./.futi/<name>.yaml
+  futi modules init <ns>/<name>    Create with namespace (./.futi/<ns>/<name>.yaml)
+  futi modules init <name> --global
+                                   Create in ~/.config/futi/modules/<name>.yaml
 
+  init flags:
   --desc <text>                    Module description (default: "My tool")
   --default-cmd <cmd>              Add cmd at module level (default command)
   --command <name>                 Add a command (repeatable)
@@ -680,6 +683,38 @@ INIT
 
   The generated module is valid and immediately discoverable by futi.
   If the file already exists, an error is returned (no overwrite).
+
+  futi modules install <source>    Install a module from a local path, git URL
+                                   or archive URL. Writes __futi_meta.yaml
+                                   next to config.yaml and runs the module's
+                                   attach: hook (if defined).
+  futi modules uninstall <name>    Run detach: hook (if defined) and remove
+                                   the installed module. Asks for confirmation.
+  futi modules update [name]       Re-fetch the source and re-run attach:
+                                   (all installed modules when no name given)
+  futi modules info <name>         Show installed module details (from
+                                   __futi_meta.yaml)
+  futi modules list                List installed modules (with __futi_meta.yaml)
+  futi modules path <name>         Print the module's directory (for scripts)
+  futi modules add_command <module> <command>
+                                   Add a command to the module's config.yaml
+  futi modules remove_command <module> <command>
+                                   Remove a command from config.yaml
+
+  install flags:
+  --local                          Install into ./.futi/ instead of the
+                                   global modules directory
+  --namespace <ns>                 Install under a namespace (ns/name)
+  --ref <branch|tag>               Git branch or tag to install from
+  --from-local/--from-git/--from-archive
+                                   Force source type detection
+  --skip-attach                    Skip the attach: hook
+
+  uninstall flags:
+  --force                          Allow removing modules without __futi_meta.yaml
+  --yes, -y                        Skip the confirmation prompt
+  --skip-detach                    Skip the detach: hook
+  --strict-detach                  Abort (do not delete) if detach: fails
 
 PARAMETERS
   --param value                    Pass a string parameter
@@ -809,10 +844,10 @@ func main() {
 		return
 	}
 
-	// Быстрый путь: futi init не требует config/source/cache.
-	if os.Args[1] == "init" {
-		if err := runInit(os.Stdout, os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "init: %v\n", err)
+	// Быстрый путь: futi modules init не требует config/source/cache.
+	if os.Args[1] == "modules" && len(os.Args) > 2 && os.Args[2] == "init" {
+		if err := runModulesInit(os.Stdout, os.Args[3:]); err != nil {
+			fmt.Fprintf(os.Stderr, "modules init: %v\n", err)
 			os.Exit(1)
 		}
 		return
@@ -845,6 +880,23 @@ func main() {
 	// на каждый TAB.
 	if os.Args[1] == "__complete" {
 		os.Exit(runCompleteMain(os.Stdout, os.Stderr, cfg, globalSource, os.Args[2:]))
+	}
+
+	// Быстрый путь: `futi modules <subcommand>` — до cache.Start, чтобы не
+	// гонять Refresh по политике: мутирующие подкоманды сами инвалидируют
+	// кэш, read-only обходятся загрузкой по требованию.
+	if os.Args[1] == "modules" {
+		cache := newCacheFromConfig(cfg)
+		source, err := createSource(cache, globalSource)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "source: %v\n", err)
+			os.Exit(1)
+		}
+		if err := runModules(os.Stdout, os.Stdin, source, cache, os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "modules: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	// `futi cache <subcommand>` — fast path ДО cache.Start, чтобы избежать

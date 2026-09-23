@@ -366,3 +366,50 @@ commands:
 		t.Fatalf("unexpected default positional min: %d", mod.Positional.Min)
 	}
 }
+
+func TestParseModuleAttachDetach(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "qr.yaml")
+	writeFile(t, manifestPath, `
+name: qr
+description: QR codes
+attach: ".venv/bin/python -m pip install -r requirements.txt"
+detach: "rm -rf .venv"
+commands:
+  make:
+    cmd: "echo make"
+`)
+
+	mod, err := ParseModule(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mod.Attach != ".venv/bin/python -m pip install -r requirements.txt" {
+		t.Fatalf("unexpected attach: %q", mod.Attach)
+	}
+	if mod.Detach != "rm -rf .venv" {
+		t.Fatalf("unexpected detach: %q", mod.Detach)
+	}
+}
+
+func TestParseModuleAttachDetachAbsent(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "plain.yaml")
+	writeFile(t, manifestPath, `
+name: plain
+commands:
+  run:
+    cmd: "echo run"
+`)
+
+	mod, err := ParseModule(manifestPath, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mod.Attach != "" {
+		t.Fatalf("expected empty attach, got %q", mod.Attach)
+	}
+	if mod.Detach != "" {
+		t.Fatalf("expected empty detach, got %q", mod.Detach)
+	}
+}

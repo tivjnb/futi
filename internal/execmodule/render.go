@@ -143,6 +143,13 @@ func quoteShlex(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// QuoteShlex возвращает s в форме, которую shlex.Split интерпретирует как
+// один argv-токон (см. quoteShlex). Экспортирован для переиспользования в
+// modulerunner.RunHook (шаблоны attach:/detach:).
+func QuoteShlex(s string) string {
+	return quoteShlex(s)
+}
+
 // envMapFn возвращает map переменных окружения процесса из os.Environ().
 // Package-level var — позволяет заменить реализацию для кэширования
 // (HTTP server) или тестирования (фикс #43).

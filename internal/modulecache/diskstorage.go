@@ -85,3 +85,11 @@ func (d *DiskStorage) Save(cf cacheFile) error {
 	}
 	return nil
 }
+
+// Clear удаляет gob-файл с диска. Отсутствие файла — не ошибка.
+func (d *DiskStorage) Clear() error {
+	if err := os.Remove(d.path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("modulecache: clear %q: %w", d.path, err)
+	}
+	return nil
+}

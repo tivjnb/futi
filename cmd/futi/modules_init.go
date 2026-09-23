@@ -10,7 +10,7 @@ import (
 	"futi/internal/config"
 )
 
-// initConfig — параметры команды futi init.
+// initConfig — параметры подкоманды futi modules init.
 type initConfig struct {
 	path        string   // путь модуля (может содержать / для namespace)
 	global      bool     // создавать в ~/.config/futi/modules/ вместо CWD
@@ -20,20 +20,22 @@ type initConfig struct {
 }
 
 // reservedModuleNames — имена, которые нельзя давать модулям: все они
-// перехватываются в main.go ДО резолва модулей (cache/init/completion/
+// перехватываются в main.go ДО резолва модулей (cache/modules/completion/
 // __complete — fast-path по первому аргументу; list/validate — builtin
 // subcommands по последнему позиционному), поэтому модуль с таким именем
 // никогда не будет вызван. При добавлении новой builtin-команды в main.go —
 // добавить имя сюда.
 // REV-008: раньше completion/__complete отсутствовали в списке —
-// futi init completion молча создавал нерабочий модуль.
+// futi modules init completion молча создавал нерабочий модуль.
+// init больше не зарезервирован: `futi init` удалён (миграция в
+// `futi modules init`), имя отдано модулям.
 var reservedModuleNames = map[string]bool{
-	"list":        true,
-	"validate":    true,
-	"cache":       true,
-	"init":        true,
-	"completion":  true,
-	"__complete":  true,
+	"list":       true,
+	"validate":   true,
+	"cache":      true,
+	"modules":    true,
+	"completion": true,
+	"__complete": true,
 }
 
 // isReservedModuleName проверяет имя модуля по canonical-списку.
@@ -41,7 +43,7 @@ func isReservedModuleName(name string) bool {
 	return reservedModuleNames[name]
 }
 
-// parseInitArgs разбирает аргументы команды futi init.
+// parseInitArgs разбирает аргументы подкоманды futi modules init.
 // Позиционный аргумент — path (обязательный). Флаги:
 // --global, --desc <value>, --default-cmd <value>, --command <name> (repeatable).
 // Флаги, требующие значение (--desc, --default-cmd, --command), отклоняют
@@ -105,7 +107,7 @@ func parseInitArgs(args []string) (*initConfig, error) {
 	}
 
 	if len(positional) == 0 {
-		return nil, fmt.Errorf("usage: futi init <name> [flags]")
+		return nil, fmt.Errorf("usage: futi modules init <name> [flags]")
 	}
 	if len(positional) > 1 {
 		return nil, fmt.Errorf("expected one path argument, got %d", len(positional))
@@ -201,11 +203,12 @@ func quoteYAMLValue(s string) string {
 	return fmt.Sprintf("%q", s)
 }
 
-// runInit создаёт новый модуль с шаблоном YAML.
+// runModulesInit создаёт новый модуль с шаблоном YAML
+// (подкоманда `futi modules init`).
 // Парсит path + флаги, генерирует шаблон, пишет файл.
 // Возвращает ошибку при существующем файле (без перезаписи).
 // #44: использует O_EXCL вместо Stat+WriteFile для атомарной проверки.
-func runInit(w io.Writer, args []string) error {
+func runModulesInit(w io.Writer, args []string) error {
 	cfg, err := parseInitArgs(args)
 	if err != nil {
 		return err

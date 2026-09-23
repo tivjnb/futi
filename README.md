@@ -23,6 +23,7 @@ futi deploy staging
 - [Команды CLI](#команды-cli)
 - [Валидация](#валидация)
 - [Создание модулей](#создание-модулей)
+- [Управление модулями](#управление-модулями)
 - [Кэш модулей](#кэш-модулей)
 - [Автодополнение](#автодополнение)
 - [Безопасность](#безопасность)
@@ -34,14 +35,10 @@ futi deploy staging
 
 ## Установка
 
-```bash
-go install ./cmd/futi
-```
-
-Или собрать из исходников:
+Сборка из исходников:
 
 ```bash
-git clone <repo-url> futi
+git clone https://github.com/tivjnb/futi futi
 cd futi
 go build -o futi ./cmd/futi
 ```
@@ -66,24 +63,14 @@ export FUTI_MODULES_DIR=/path/to/modules
 Создайте первый модуль:
 
 ```bash
-mkdir -p ~/.config/futi/modules
-cat > ~/.config/futi/modules/hello.yaml << 'EOF'
-name: hello
-description: Demo module
-commands:
-  greet:
-    params:
-      - name: name
-        type: string
-        required: true
-    cmd: "echo hello {{.name}}"
-EOF
+mkdir -p ~/.config/futi
+cp -r examples/modules ~/.config/futi/
 ```
 
-Или через `futi init` (создаёт модуль с шаблоном):
+Или через `futi modules init` (создаёт модуль с шаблоном):
 
 ```bash
-futi init hello --desc "Demo module" --command greet
+futi modules init hello --desc "Demo module" --command greet
 ```
 
 Вызовите (модуль, созданный вручную, принимает `--name`):
@@ -100,7 +87,7 @@ $ futi list
 └────────┴───────┴─────────────┘
 ```
 
-Модуль из `futi init` создаёт команды-заглушки без параметров — параметры
+Модуль из `futi modules init` создаёт команды-заглушки без параметров — параметры
 дописываются в YAML вручную (см. [Структура модуля](#структура-модуля)):
 
 ```bash
@@ -256,7 +243,7 @@ futi deploy   # пакет-симлинк листится и исполняет
 - Битый симлинк с именем `*.yaml` остаётся в listing'е как файл — цель может
   стать доступной позже (например, примонтированный volume); кэш сохраняет
   запись при временной ошибке чтения.
-- `futi init` при записи через симлинк-директорию создаёт файл в целевом
+- `futi modules init` при записи через симлинк-директорию создаёт файл в целевом
   каталоге симлинка и показывает **реальный** (резолвнутый) путь в выводе.
 
 ### Локальные модули проекта
@@ -520,7 +507,15 @@ futi <namespace...> list -v                 # то же, с колонкой PAT
 futi <namespace...> list -r                 # рекурсивный обход поддерева
 futi <namespace...> validate                # валидация схемы модуля
 futi <namespace...> help                    # справка по модулю/команде
-futi init <name> [flags]                    # создать модуль с шаблоном
+futi modules init <name> [flags]            # создать модуль с шаблоном
+futi modules install <source> [flags]       # установить модуль из source (local/git/archive)
+futi modules uninstall <name> [flags]       # detach + удаление (с подтверждением)
+futi modules update [name] [flags]          # re-fetch из lockfile-источника + re-attach
+futi modules list                           # установленные модули
+futi modules info <name>                    # детали установки (lockfile/about)
+futi modules path <name>                    # каталог установленного модуля
+futi modules add_command <mod> <cmd> [flags]   # добавить команду в манифест
+futi modules remove_command <mod> <cmd>      # удалить команду из манифеста
 futi cache refresh                          # явное обновление кэша модулей
 futi cache status                           # статистика кэша
 futi cache clear                            # удалить persistent кэш с диска
@@ -532,7 +527,7 @@ futi -h | --help                            # справка
 Парсинг: последний позиционный аргумент (до `--`) — команда, всё до него — namespace (сегменты через `.`). Аргументы после `--` передаются в шаблон команды как `{{.args}}` (строка) и `{{.args_list}}` (массив).
 
 **Зарезервированные имена** — нельзя использовать как имена модулей и команд:
-`list`, `validate`, `cache`, `init`, `completion`, `__complete` (перехватываются
+`list`, `validate`, `cache`, `modules`, `completion`, `__complete` (перехватываются
 CLI до резолва модулей). `help` — исключение: если в модуле определена своя
 команда `help`, вызывается она.
 
@@ -739,12 +734,12 @@ $ echo $?
 
 ## Создание модулей
 
-`futi init` создаёт YAML-модуль с шаблоном — не нужно копировать из README вручную. Модуль сразу доступен через auto-discovery.
+`futi modules init` создаёт YAML-модуль с шаблоном — не нужно копировать из README вручную. Модуль сразу доступен через auto-discovery.
 
 ```bash
-futi init mytool                          # ./.futi/mytool.yaml
-futi init dev/mytool                      # ./.futi/dev/mytool.yaml (namespace dev)
-futi init mytool --global                 # ~/.config/futi/modules/mytool.yaml
+futi modules init mytool                          # ./.futi/mytool.yaml
+futi modules init dev/mytool                      # ./.futi/dev/mytool.yaml (namespace dev)
+futi modules init mytool --global                 # ~/.config/futi/modules/mytool.yaml
 ```
 
 Флаги:
@@ -759,7 +754,7 @@ futi init mytool --global                 # ~/.config/futi/modules/mytool.yaml
 Минимальный модуль (без флагов):
 
 ```bash
-$ futi init mytool
+$ futi modules init mytool
 Created: .futi/mytool.yaml
 
 $ futi mytool hello
@@ -778,7 +773,7 @@ commands:
 С флагами:
 
 ```bash
-$ futi init dev/apitool --desc "API utilities" --default-cmd "echo api" --command fetch --command build
+$ futi modules init dev/apitool --desc "API utilities" --default-cmd "echo api" --command fetch --command build
 Created: .futi/dev/apitool.yaml
 
 $ futi dev apitool           # default cmd
@@ -801,6 +796,62 @@ commands:
 ```
 
 При существующем файле возвращается ошибка (без перезаписи). Созданный модуль проходит валидацию схемы.
+
+---
+
+## Управление модулями
+
+Установка модулей из любого источника — локальный путь, git-репозиторий, web-архив:
+
+```bash
+# из локального каталога
+futi modules install ~/dev/my-modules/qr
+
+# из git (branch/tag через --ref)
+futi modules install https://github.com/foo/qr-mod.git --ref v1.2.0
+
+# из архива (.zip / .tar.gz)
+futi modules install https://example.com/qr-mod.tar.gz
+
+# в namespace и локально в проект
+futi modules install ~/dev/qr --namespace images
+futi modules install ~/dev/qr --local
+```
+
+Одиночный `.yaml` при установке оборачивается в пакет: создаётся каталог `<module>/config.yaml`. Флаги install: `--namespace <ns>`, `--ref <git-ref>`, `--local` (в `./.futi/` вместо глобального каталога), `--skip-attach`, `--from-local` / `--from-git` / `--from-archive` (переопределить эвристику определения типа источника).
+
+Модуль может объявлять setup/teardown-хуки — `futi` выполнит их при install/update и uninstall:
+
+```yaml
+attach: ".venv/bin/python -m pip install -r requirements.txt"
+detach: "rm -rf .venv"
+```
+
+Хуки выполняются в каталоге модуля; доступны `{{.module_name}}`, `{{.module_root}}`, `{{.env.FOO}}`, `{{quote ...}}` и переменные окружения FUTI_MODULE_NAME / FUTI_MODULE_ROOT / FUTI_CWD. Провал `attach` при install откатывает установку (модуль удаляется); при update — только предупреждение, новое дерево сохраняется. Провал `detach` при uninstall — предупреждение (или отказ с `--strict-detach`).
+
+Каждая установка пишет sidecar `__futi_meta.yaml` рядом с config.yaml (источник, тип, ref/commit, hash дерева, даты) — по нему работают:
+
+```bash
+futi modules list              # установленные модули
+futi modules info qr           # детали установки
+futi modules update            # re-fetch + re-attach (все модули)
+futi modules update qr         # один модуль
+futi modules uninstall qr      # detach + удаление (с подтверждением)
+futi modules path qr           # каталог модуля (для скриптов)
+```
+
+`update` сравнивает hash дерева источника с lockfile: без изменений — no-op (обновляется только `last_check`), иначе — атомарная замена дерева с сохранением `installed_at` и `about`.
+
+Удаление требует подтверждения (размер и число файлов); без sidecar (модуль создан вручную или через `modules init`) — только с `--force`. Флаги uninstall: `--yes`, `--force`, `--skip-detach`, `--strict-detach`.
+
+Управление командами модуля без редактора:
+
+```bash
+futi modules add_command qr scan --desc "Scan a QR code"
+futi modules remove_command qr scan
+```
+
+**Известное ограничение:** если процесс futi упадёт (краш) посреди install/update, может остаться частично скопированное дерево без sidecar. Откат работает при ошибках attach и при провале валидации, но не при краше процесса — такой каталог можно удалить вручную или через `futi modules uninstall <name> --force`.
 
 ---
 
@@ -966,7 +1017,7 @@ zsh выводит описания команд/модулей рядом с п
 
 - Симлинки в каталоге модулей разрешены (dotfiles-менеджеры, dev-симлинки) —
   контроль каталога и так даёт полный контроль.
-- `futi init` пишет только внутри каталога модулей и показывает реальный
+- `futi modules init` пишет только внутри каталога модулей и показывает реальный
   (резолвнутый) путь записи.
 - Публичный registry скачанных модулей (см. ROADMAP) потребует пересмотра
   этой модели — доверие к чужим модулям нельзя будет неявно унаследовать.
@@ -1155,7 +1206,7 @@ futi находится на стадии PRE PRE MVP. Ниже — направ
 - ~~**Help-система** — модульная/командная справка через `help`~~ ✅ реализовано (`futi <ns> help`, `futi <ns> <cmd> help`; user-defined `help` выигрывает)
 - **Descriptions в bash/fish** — zsh выводит описания уже сейчас; bash/fish — roadmap
 - **PowerShell** — 4-й shell после стабилизации bash/zsh/fish
-- **Модульный completion** — модули сами предоставляют подсказки для автодополнения (динамические кандидаты: имена контейнеров, веток и т.п.); тогда же имя `completion` может быть отдано модулям через smart-роутинг (`futi completion bash|zsh|fish` остаётся builtin-генерацией скрипта, остальные вызовы — резолв модуля). Сейчас `completion`/`__complete` зарезервированы (см. `futi init`)
+- **Модульный completion** — модули сами предоставляют подсказки для автодополнения (динамические кандидаты: имена контейнеров, веток и т.п.); тогда же имя `completion` может быть отдано модулям через smart-роутинг (`futi completion bash|zsh|fish` остаётся builtin-генерацией скрипта, остальные вызовы — резолв модуля). Сейчас `completion`/`__complete` зарезервированы (см. `futi modules init`)
 
 ### Unified I/O
 
@@ -1194,14 +1245,13 @@ curl -X POST http://localhost:8080/api/v1/docker/build -d '{"tag": "myapp"}'
 
 ### Менеджер модулей
 
-Установка, обновление, удаление модулей из registry:
+Базовый жизненный цикл реализован — `futi modules install/uninstall/update` из
+локальных путей, git и архивов (см. [Управление модулями](#управление-модулями)).
+Осталось — registry:
 
 ```bash
-futi module install docker        # из registry
-futi module install ./my.yaml     # из локального файла
-futi module install https://github.com/user/futi-docker
-futi module update docker
-futi module check                 # проверить обновления
+futi modules install docker        # из registry (по короткому имени)
+futi modules check                 # проверить обновления
 ```
 
 ### Дополнительно

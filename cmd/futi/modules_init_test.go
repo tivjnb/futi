@@ -17,7 +17,7 @@ func TestRunInitCreatesLocalFile(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, []string{"mytool"}); err != nil {
+	if err := runModulesInit(&buf, []string{"mytool"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -39,7 +39,7 @@ func TestRunInitGeneratedModuleValidates(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, []string{"mytool"}); err != nil {
+	if err := runModulesInit(&buf, []string{"mytool"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -61,7 +61,7 @@ func TestRunInitWithNamespace(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, []string{"dev/mytool"}); err != nil {
+	if err := runModulesInit(&buf, []string{"dev/mytool"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -86,7 +86,7 @@ func TestRunInitGlobal(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, []string{"mytool", "--global"}); err != nil {
+	if err := runModulesInit(&buf, []string{"mytool", "--global"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -109,7 +109,7 @@ func TestRunInitExistingFileError(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := runInit(&buf, []string{"mytool"})
+	err := runModulesInit(&buf, []string{"mytool"})
 	if err == nil {
 		t.Fatal("expected error for existing file")
 	}
@@ -128,7 +128,7 @@ func TestRunInitWithDesc(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, []string{"mytool", "--desc", "My awesome tool"}); err != nil {
+	if err := runModulesInit(&buf, []string{"mytool", "--desc", "My awesome tool"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -143,7 +143,7 @@ func TestRunInitWithDefaultCmd(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, []string{"mytool", "--default-cmd", "echo hi"}); err != nil {
+	if err := runModulesInit(&buf, []string{"mytool", "--default-cmd", "echo hi"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -158,7 +158,7 @@ func TestRunInitWithCommand(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, []string{"mytool", "--command", "greet", "--command", "build"}); err != nil {
+	if err := runModulesInit(&buf, []string{"mytool", "--command", "greet", "--command", "build"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -184,7 +184,7 @@ func TestRunInitNoArgsError(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	err := runInit(&buf, []string{})
+	err := runModulesInit(&buf, []string{})
 	if err == nil {
 		t.Fatal("expected error for missing path")
 	}
@@ -198,7 +198,7 @@ func TestRunInitGlobalWithNamespace(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, []string{"dev/mytool", "--global"}); err != nil {
+	if err := runModulesInit(&buf, []string{"dev/mytool", "--global"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -214,7 +214,7 @@ func TestRunInitCreatedModuleDiscoverable(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, []string{"mytool"}); err != nil {
+	if err := runModulesInit(&buf, []string{"mytool"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -247,7 +247,7 @@ func TestRunInitGlobalModuleDiscoverable(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, []string{"mytool", "--global"}); err != nil {
+	if err := runModulesInit(&buf, []string{"mytool", "--global"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -314,7 +314,7 @@ func TestRunInitPathTraversalError(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	err := runInit(&buf, []string{"../../etc/passwd", "--global"})
+	err := runModulesInit(&buf, []string{"../../etc/passwd", "--global"})
 	if err == nil {
 		t.Fatal("expected error for path traversal")
 	}
@@ -328,7 +328,7 @@ func TestRunInitPathTraversalLocal(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	err := runInit(&buf, []string{"../escape"})
+	err := runModulesInit(&buf, []string{"../escape"})
 	if err == nil {
 		t.Fatal("expected error for path traversal in local mode")
 	}
@@ -371,7 +371,7 @@ func TestRunInitDoubleYamlExtension(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, []string{"mytool.yaml"}); err != nil {
+	if err := runModulesInit(&buf, []string{"mytool.yaml"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -388,7 +388,7 @@ func TestRunInitDoubleYmlExtension(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, []string{"mytool.yml"}); err != nil {
+	if err := runModulesInit(&buf, []string{"mytool.yml"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -475,7 +475,7 @@ func TestRunInitReservedNameList(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	err := runInit(&buf, []string{"list"})
+	err := runModulesInit(&buf, []string{"list"})
 	if err == nil {
 		t.Fatal("expected error for reserved name 'list'")
 	}
@@ -489,7 +489,7 @@ func TestRunInitReservedNameValidate(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	err := runInit(&buf, []string{"validate"})
+	err := runModulesInit(&buf, []string{"validate"})
 	if err == nil {
 		t.Fatal("expected error for reserved name 'validate'")
 	}
@@ -500,7 +500,7 @@ func TestRunInitReservedNameCache(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	err := runInit(&buf, []string{"cache"})
+	err := runModulesInit(&buf, []string{"cache"})
 	if err == nil {
 		t.Fatal("expected error for reserved name 'cache'")
 	}
@@ -524,7 +524,7 @@ func TestRunInitThroughSymlinkShowsResolvedPath(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, []string{"linkedpkg/newmod", "--global"}); err != nil {
+	if err := runModulesInit(&buf, []string{"linkedpkg/newmod", "--global"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -545,12 +545,12 @@ func TestRunInitThroughSymlinkShowsResolvedPath(t *testing.T) {
 // futi init completion молча создавал модуль, который никогда не вызовется:
 // fast-path main.go перехватывает completion до резолва модулей).
 func TestRunInitReservedNames(t *testing.T) {
-	reserved := []string{"list", "validate", "cache", "init", "completion", "__complete"}
+	reserved := []string{"list", "validate", "cache", "modules", "completion", "__complete"}
 	for _, name := range reserved {
 		t.Run(name, func(t *testing.T) {
 			t.Chdir(t.TempDir())
 			var buf bytes.Buffer
-			err := runInit(&buf, []string{name})
+			err := runModulesInit(&buf, []string{name})
 			if err == nil {
 				t.Fatalf("expected error for reserved name %q", name)
 			}

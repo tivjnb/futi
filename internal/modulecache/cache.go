@@ -344,6 +344,24 @@ func (c *Cache) LastRefresh() time.Time {
 	return c.lastRefresh
 }
 
+// Invalidate сбрасывает кэш целиком: in-memory entries, persistentPaths,
+// lastRefresh и persistent-хранилище (Storage.Clear).
+// Вызывается после мутаций файловой системы из `futi modules install/
+// uninstall/update`: записи кэша по удалённым/заменённым путям становятся
+// stale, а Refresh по политике может не произойти в этом процессе.
+func (c *Cache) Invalidate() error {
+	c.mu.Lock()
+	c.entries = make(map[string]entry)
+	c.persistentPaths = make(map[string]bool)
+	c.lastRefresh = time.Time{}
+	c.mu.Unlock()
+
+	if err := c.storage.Clear(); err != nil {
+		return fmt.Errorf("modulecache: invalidate: %w", err)
+	}
+	return nil
+}
+
 // ModuleCount возвращает количество модулей в in-memory кэше (для futi cache status).
 func (c *Cache) ModuleCount() int {
 	c.mu.RLock()

@@ -18,6 +18,8 @@ type Module struct {
 	Description string
 	Root        string
 	Cmd         string
+	Attach      string // setup-команда: futi modules install/update (спека MODULE_MANAGMENT.md §3)
+	Detach      string // teardown-команда: futi modules uninstall
 	Params      []Param
 	Positional  Positional
 	Commands    map[string]*Command
@@ -56,6 +58,8 @@ type moduleYAML struct {
 	Name        string                 `yaml:"name"`
 	Description string                 `yaml:"description"`
 	Cmd         string                 `yaml:"cmd"`
+	Attach      string                 `yaml:"attach"`
+	Detach      string                 `yaml:"detach"`
 	Params      []paramYAML            `yaml:"params"`
 	Positional  positionalYAML         `yaml:"positional"`
 	Commands    map[string]commandYAML `yaml:"commands"`
@@ -124,6 +128,8 @@ func ParseModule(manifestPath, moduleRoot string) (*Module, error) {
 		Description: raw.Description,
 		Root:        moduleRoot,
 		Cmd:         raw.Cmd,
+		Attach:      raw.Attach,
+		Detach:      raw.Detach,
 		Params:      parseParams(raw.Params),
 		Positional:  Positional{Min: raw.Positional.Min},
 		Commands:    commands,
