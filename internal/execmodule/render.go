@@ -74,6 +74,18 @@ func (c *Command) ValidatePositional(argsList []string) error {
 	return nil
 }
 
+// ModuleRef — информация о модуле для шаблонного контекста cmd-рендера.
+// Используется в Command.Render как параметр module: добавляет в данные
+// шаблона переменные {{.module_name}} и {{.module_root}} (WORKDIR.md §3.2).
+//
+// Zero-value ModuleRef (пустые Name и Root) НЕ заполняет переменные в шаблоне;
+// обращение к {{.module_root}} или {{.module_name}} даст missingkey-ошибку
+// (fail-fast, как у {{.env.X}} при отсутствии env var).
+type ModuleRef struct {
+	Name string
+	Root string
+}
+
 // TemplateError — ошибка парсинга или выполнения cmd-шаблона.
 // Несёт сам шаблон и системную причину. CLI форматирует её дружелюбно,
 // скрывая длинную цепочку обёрток и технический трейс text/template.
@@ -96,10 +108,12 @@ func (e *TemplateError) Unwrap() error { return e.Cause }
 // {{if .bool}}...{{end}} для условных блоков.
 // {{.env.FOO}} — доступ к переменной окружения FOO (error если не задана,
 // для optional-проверки используйте {{if index .env "FOO"}}).
+// {{.module_root}}/{{.module_name}} — путь и имя модуля (задаются параметром
+// module; zero-value ModuleRef → missingkey-ошибка при обращении).
 // {{quote .x}} — безопасная вставка значения как ОДНОГО argv-токена
 // (экранирует кавычки/пробелы/метасимволы, см. quoteShlex).
 // Ошибки парсинга и выполнения шаблона возвращаются как *TemplateError.
-func (c *Command) Render(params map[string]string, args string, argsList []string) (string, error) {
+func (c *Command) Render(params map[string]string, args string, argsList []string, module ModuleRef) (string, error) {
 	tmpl, err := template.New("cmd").
 		Funcs(template.FuncMap{"quote": quoteShlex}).
 		Option("missingkey=error").
@@ -108,7 +122,7 @@ func (c *Command) Render(params map[string]string, args string, argsList []strin
 		return "", &TemplateError{Cmd: c.Cmd, Cause: err}
 	}
 
-	data := make(map[string]interface{}, len(params)+3)
+	data := make(map[string]interface{}, len(params)+5)
 	for k, v := range params {
 		data[k] = v
 	}
@@ -118,6 +132,12 @@ func (c *Command) Render(params map[string]string, args string, argsList []strin
 	}
 	data["args_list"] = argsList
 	data["env"] = envMapFn()
+	if module.Name != "" {
+		data["module_name"] = module.Name
+	}
+	if module.Root != "" {
+		data["module_root"] = module.Root
+	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {

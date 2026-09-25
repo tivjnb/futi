@@ -65,7 +65,7 @@ func TestRenderSubstitutesVariables(t *testing.T) {
 	cmd := &Command{
 		Cmd: "docker build -t {{.tag}} -f {{.file}} .",
 	}
-	rendered, err := cmd.Render(map[string]string{"tag": "myapp", "file": "Dockerfile.dev"}, "", nil)
+	rendered, err := cmd.Render(map[string]string{"tag": "myapp", "file": "Dockerfile.dev"}, "", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestRenderConditionalBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	rendered, err := cmd.Render(resolved, "", nil)
+	rendered, err := cmd.Render(resolved, "", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestRenderConditionalBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	renderedFalse, err := cmd.Render(resolvedFalse, "", nil)
+	renderedFalse, err := cmd.Render(resolvedFalse, "", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestRenderMissingVariableReturnsError(t *testing.T) {
 	cmd := &Command{
 		Cmd: "echo {{.msg}}",
 	}
-	_, err := cmd.Render(map[string]string{}, "", nil)
+	_, err := cmd.Render(map[string]string{}, "", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err == nil {
 		t.Fatal("expected error for missing variable in template")
 	}
@@ -160,7 +160,7 @@ func TestRenderIndexOutOfRangeReturnsTemplateError(t *testing.T) {
 	cmd := &Command{
 		Cmd: "echo {{index .args_list 0}}",
 	}
-	_, err := cmd.Render(map[string]string{}, "", nil) // args_list пуст
+	_, err := cmd.Render(map[string]string{}, "", nil, ModuleRef{Name: "test", Root: "/tmp"}) // args_list пуст
 	if err == nil {
 		t.Fatal("expected error for index out of range")
 	}
@@ -184,7 +184,7 @@ func TestRenderParseErrorReturnsTemplateError(t *testing.T) {
 	cmd := &Command{
 		Cmd: "echo {{.name",
 	}
-	_, err := cmd.Render(map[string]string{}, "", nil)
+	_, err := cmd.Render(map[string]string{}, "", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err == nil {
 		t.Fatal("expected parse error")
 	}
@@ -201,7 +201,7 @@ func TestRenderSubstitutesArgs(t *testing.T) {
 	cmd := &Command{
 		Cmd: "echo {{.args}}",
 	}
-	rendered, err := cmd.Render(map[string]string{}, "hello world", nil)
+	rendered, err := cmd.Render(map[string]string{}, "hello world", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestRenderSubstitutesArgsList(t *testing.T) {
 	cmd := &Command{
 		Cmd: "echo {{index .args_list 0}} {{index .args_list 1}}",
 	}
-	rendered, err := cmd.Render(map[string]string{}, "", []string{"hello", "world"})
+	rendered, err := cmd.Render(map[string]string{}, "", []string{"hello", "world"}, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestRenderArgsAndParams(t *testing.T) {
 	cmd := &Command{
 		Cmd: "echo {{.name}} {{.args}}",
 	}
-	rendered, err := cmd.Render(map[string]string{"name": "alice"}, "hello world", nil)
+	rendered, err := cmd.Render(map[string]string{"name": "alice"}, "hello world", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestRenderArgsEmpty(t *testing.T) {
 	cmd := &Command{
 		Cmd: "echo {{.args}}",
 	}
-	rendered, err := cmd.Render(map[string]string{}, "", nil)
+	rendered, err := cmd.Render(map[string]string{}, "", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestRenderArgsListEmpty(t *testing.T) {
 	cmd := &Command{
 		Cmd: "echo {{.args}}",
 	}
-	rendered, err := cmd.Render(map[string]string{}, "", []string{})
+	rendered, err := cmd.Render(map[string]string{}, "", []string{}, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestValidateIntParamNegative(t *testing.T) {
 func TestRenderEnvVar(t *testing.T) {
 	t.Setenv("FUTI_TEST_VAR", "hello")
 	cmd := &Command{Cmd: "echo {{.env.FUTI_TEST_VAR}}"}
-	rendered, err := cmd.Render(map[string]string{}, "", nil)
+	rendered, err := cmd.Render(map[string]string{}, "", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestRenderEnvVar(t *testing.T) {
 
 func TestRenderEnvVarMissing(t *testing.T) {
 	cmd := &Command{Cmd: "echo {{.env.FUTI_DEFINITELY_NONEXISTENT_VAR_XYZ}}"}
-	_, err := cmd.Render(map[string]string{}, "", nil)
+	_, err := cmd.Render(map[string]string{}, "", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err == nil {
 		t.Fatal("expected error for missing env var")
 	}
@@ -365,7 +365,7 @@ func TestRenderEnvVarMissing(t *testing.T) {
 func TestRenderEnvVarConditional(t *testing.T) {
 	t.Setenv("FUTI_TEST_COND", "yes")
 	cmd := &Command{Cmd: "{{if index .env \"FUTI_TEST_COND\"}}set{{else}}unset{{end}}"}
-	rendered, err := cmd.Render(map[string]string{}, "", nil)
+	rendered, err := cmd.Render(map[string]string{}, "", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestRenderEnvVarConditional(t *testing.T) {
 
 func TestRenderEnvVarConditionalMissing(t *testing.T) {
 	cmd := &Command{Cmd: "{{if index .env \"FUTI_NOPE_NOTHERE_XYZ\"}}set{{else}}unset{{end}}"}
-	rendered, err := cmd.Render(map[string]string{}, "", nil)
+	rendered, err := cmd.Render(map[string]string{}, "", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -393,7 +393,7 @@ func TestRenderEnvVarWithParams(t *testing.T) {
 			{Name: "env_name", Type: "string", Required: true},
 		},
 	}
-	rendered, err := cmd.Render(map[string]string{"env_name": "staging"}, "", nil)
+	rendered, err := cmd.Render(map[string]string{"env_name": "staging"}, "", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -414,7 +414,7 @@ func TestEnvMapFnOverridable(t *testing.T) {
 	}
 
 	cmd := &Command{Cmd: "echo {{.env.CUSTOM}}"}
-	rendered, err := cmd.Render(map[string]string{}, "", nil)
+	rendered, err := cmd.Render(map[string]string{}, "", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -488,7 +488,7 @@ func TestQuoteShlexRoundTrip(t *testing.T) {
 // остаётся частью значения, а не отдельным argv.
 func TestRenderQuotePreventsFlagInjection(t *testing.T) {
 	cmd := &Command{Cmd: `echo {{quote .msg}}`}
-	rendered, err := cmd.Render(map[string]string{"msg": `x" --force "y`}, "", nil)
+	rendered, err := cmd.Render(map[string]string{"msg": `x" --force "y`}, "", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -520,7 +520,7 @@ func TestRenderQuotePreventsFlagInjection(t *testing.T) {
 // остаётся одним argv-токеном.
 func TestRenderQuoteArgsList(t *testing.T) {
 	cmd := &Command{Cmd: `echo {{quote (index .args_list 0)}}`}
-	rendered, err := cmd.Render(map[string]string{}, "", []string{`a b "c --force`})
+	rendered, err := cmd.Render(map[string]string{}, "", []string{`a b "c --force`}, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -538,11 +538,136 @@ func TestRenderQuoteArgsList(t *testing.T) {
 // TestRenderQuotePlainValue проверяет, что quote не портит обычные значения.
 func TestRenderQuotePlainValue(t *testing.T) {
 	cmd := &Command{Cmd: `echo {{quote .msg}}`}
-	rendered, err := cmd.Render(map[string]string{"msg": "hello"}, "", nil)
+	rendered, err := cmd.Render(map[string]string{"msg": "hello"}, "", nil, ModuleRef{Name: "test", Root: "/tmp"})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
 	if rendered != `echo 'hello'` {
 		t.Fatalf("rendered = %q, want %q", rendered, `echo 'hello'`)
+	}
+}
+
+// --- {{.module_root}} / {{.module_name}} (WORKDIR.md §3.2) ---
+
+// TestRenderModuleRootSubstituted проверяет, что {{.module_root}} подставляется
+// в шаблон как путь модуля. Параметр module подаётся через ModuleRef.
+func TestRenderModuleRootSubstituted(t *testing.T) {
+	cmd := &Command{Cmd: `{{quote .module_root}}/scripts/x.sh`}
+	rendered, err := cmd.Render(map[string]string{}, "", nil, ModuleRef{Name: "mod", Root: "/srv/modules/mod"})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if rendered != `'/srv/modules/mod'/scripts/x.sh` {
+		t.Fatalf("rendered = %q", rendered)
+	}
+}
+
+// TestRenderModuleNameSubstituted — симметричный тест для {{.module_name}}.
+func TestRenderModuleNameSubstituted(t *testing.T) {
+	cmd := &Command{Cmd: `echo {{.module_name}}`}
+	rendered, err := cmd.Render(map[string]string{}, "", nil, ModuleRef{Name: "qr", Root: "/srv/qr"})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if rendered != `echo qr` {
+		t.Fatalf("rendered = %q", rendered)
+	}
+}
+
+// TestRenderModuleRootQuoteSpacesInPath проверяет, что {{quote .module_root}}
+// даёт ровно ОДИН argv-токен даже если в пути есть пробелы (POSIX shlex:
+// quote обрамляет одинарными кавычками, спецсимволы внутри безопасно
+// экранируются через '\''). WORKDIR.md §3.2 каноничная форма.
+func TestRenderModuleRootQuoteSpacesInPath(t *testing.T) {
+	cmd := &Command{Cmd: `{{quote .module_root}}/scripts/x.sh {{.arg}}`}
+	rendered, err := cmd.Render(map[string]string{"arg": "hello"}, "", nil, ModuleRef{Name: "mod", Root: "/path with spaces/mod"})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	parts, err := shlex.Split(rendered)
+	if err != nil {
+		t.Fatalf("shlex.Split(%q): %v", rendered, err)
+	}
+	want := []string{"/path with spaces/mod/scripts/x.sh", "hello"}
+	if len(parts) != len(want) {
+		t.Fatalf("argv = %v, want %v (spaces in module_root broken quote)", parts, want)
+	}
+	for i := range want {
+		if parts[i] != want[i] {
+			t.Fatalf("argv[%d] = %q, want %q", i, parts[i], want[i])
+		}
+	}
+}
+
+// TestRenderModuleRootMissingZeroValue проверяет WORKDIR.md §3.2: zero-value
+// ModuleRef (пустые Name и Root) → missingkey-ошибка при обращении к
+// {{.module_root}} или {{.module_name}}. Fail-fast как у {{.env.X}}.
+func TestRenderModuleRootMissingZeroValue(t *testing.T) {
+	cmd := &Command{Cmd: `{{.module_root}}/x.sh`}
+	_, err := cmd.Render(map[string]string{}, "", nil, ModuleRef{})
+	if err == nil {
+		t.Fatal("expected missingkey error for {{.module_root}} with zero-value ModuleRef")
+	}
+	var tmplErr *TemplateError
+	if !errors.As(err, &tmplErr) {
+		t.Fatalf("expected *TemplateError, got %T: %v", err, err)
+	}
+}
+
+func TestRenderModuleNameMissingZeroValue(t *testing.T) {
+	cmd := &Command{Cmd: `{{.module_name}}`}
+	_, err := cmd.Render(map[string]string{}, "", nil, ModuleRef{})
+	if err == nil {
+		t.Fatal("expected missingkey error for {{.module_name}} with zero-value ModuleRef")
+	}
+}
+
+// TestRenderModulePartialFill — частично заполненный ModuleRef: только Root
+// или только Name. Каждая переменная независима — обращение к заполненной
+// работает, к незаполненной падает с missingkey=error (fail-fast).
+func TestRenderModulePartialFill(t *testing.T) {
+	// Только Root — {{.module_name}} должно упасть.
+	cmd1 := &Command{Cmd: `{{.module_name}}`}
+	if _, err := cmd1.Render(map[string]string{}, "", nil, ModuleRef{Root: "/tmp"}); err == nil {
+		t.Fatal("expected missingkey error for {{.module_name}} when Name is empty")
+	}
+
+	// Только Name — {{.module_root}} должно упасть.
+	cmd2 := &Command{Cmd: `{{.module_root}}`}
+	if _, err := cmd2.Render(map[string]string{}, "", nil, ModuleRef{Name: "qr"}); err == nil {
+		t.Fatal("expected missingkey error for {{.module_root}} when Root is empty")
+	}
+
+	// Оба заданы — обе переменные работают.
+	cmd3 := &Command{Cmd: `{{.module_name}} {{.module_root}}`}
+	rendered, err := cmd3.Render(map[string]string{}, "", nil, ModuleRef{Name: "qr", Root: "/tmp"})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if rendered != "qr /tmp" {
+		t.Fatalf("rendered = %q, want %q", rendered, "qr /tmp")
+	}
+}
+
+// TestRenderModuleRootIntegrationCmd — пример интеграционного шаблона:
+// типичная команда модуля-пакета со своим скриптом (WORKDIR.md §3.2 форма).
+func TestRenderModuleRootIntegrationCmd(t *testing.T) {
+	cmd := &Command{Cmd: `{{quote .module_root}}/scripts/run.py {{quote .file}}`}
+	rendered, err := cmd.Render(map[string]string{"file": "report.csv"}, "", nil, ModuleRef{Name: "tool", Root: "/srv/modules/tool"})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	parts, err := shlex.Split(rendered)
+	if err != nil {
+		t.Fatalf("shlex.Split(%q): %v", rendered, err)
+	}
+	want := []string{"/srv/modules/tool/scripts/run.py", "report.csv"}
+	if len(parts) != len(want) {
+		t.Fatalf("argv = %v, want %v", parts, want)
+	}
+	for i := range want {
+		if parts[i] != want[i] {
+			t.Fatalf("argv[%d] = %q, want %q", i, parts[i], want[i])
+		}
 	}
 }

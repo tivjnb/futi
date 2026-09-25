@@ -435,7 +435,9 @@ cmd: "deploy {{if index .env \"VERBOSE\"}}-v{{end}}"
 
 ## Модуль-пакет со скриптами
 
-Модуль может содержать собственные скрипты. Ссылайтесь на них относительным путём от корня модуля:
+Модуль может содержать собственные скрипты. futi не задаёт `WorkDir` для
+команды — она исполняется в cwd вызова (`./photo.jpg` разрешается оттуда).
+Ссылайтесь на файлы модуля явно через шаблон `{{quote .module_root}}`:
 
 ```
 ~/.config/futi/modules/mytool/
@@ -453,7 +455,7 @@ commands:
       - name: env
         type: string
         required: true
-    cmd: "./scripts/deploy.sh {{.env}}"
+    cmd: "{{quote .module_root}}/scripts/deploy.sh {{quote .env}}"
 ```
 
 ```bash
@@ -461,38 +463,68 @@ futi mytool deploy --env staging
 # выполнит ~/.config/futi/modules/mytool/scripts/deploy.sh staging
 ```
 
-Скрипты вызываются с `WorkDir` = корень модуля. Указывайте `./` для явного вызова локального скрипта (bare-имя без `/` ищется в `PATH`).
+Скрипты вызываются с `WorkDir` = cwd вызова futi. Первый токен cmd
+подчиняется обычной Unix-семантике: относительный путь резолвится от cwd,
+bare-имя — через `PATH`. Свои скрипты пакета — явно через
+`{{quote .module_root}}/scripts/...` (кавычки экранируют пробелы в пути,
+если модуль лежит в каталоге с пробелами).
 
-### FUTI_CWD: относительные пути пользователя
+### `{{.module_root}}` и `{{.module_name}}`
 
-Так как скрипт исполняется из корня модуля, относительные пути, переданные
-пользователем (файлы-аргументы, `--out result.png`), от корня модуля не
-разрешатся. Поэтому futi передаёт скриптам переменную окружения `FUTI_CWD` —
-каталог, из которого вызвана команда:
+В шаблоне cmd доступны две новые переменные — путь и имя модуля. Они
+используются для обращения к файлам модуля из cmd и хуков:
 
-```python
-# scripts/meta.py — резолв файлов от cwd пользователя
-import os
-base = os.environ.get("FUTI_CWD") or os.getcwd()
-path = os.path.join(base, "photo.jpg")
-```
-
-Модуль может держать зависимости рядом с собой — в собственном venv:
-
-```
-~/.config/futi/modules/images/qr/
-├── config.yaml
-├── scripts/
-│   └── make.py
-└── .venv/            # python3 -m venv .venv && .venv/bin/pip install qrcode
+```yaml
+cmd: "{{quote .module_root}}/scripts/{{.name}}.sh"
 ```
 
 ```yaml
-# config.yaml — cmd начинается с .venv/bin/python, путь резолвится от корня модуля
+# Модуль с собственным venv — путь к интерпретатору от корня модуля:
+# ~/.config/futi/modules/images/qr/
+# ├── config.yaml
+# ├── scripts/make.py
+# └── .venv/            # python3 -m venv .venv && .venv/bin/pip install qrcode
 commands:
   make:
-    cmd: ".venv/bin/python scripts/make.py --text {{quote .text}}"
+    cmd: "{{quote .module_root}}/.venv/bin/python {{quote .module_root}}/scripts/make.py --text {{quote .text}}"
 ```
+
+Переменные прокинуты также как `FUTI_MODULE_ROOT` и `FUTI_MODULE_NAME` в
+окружении дочернего процесса — скрипты на любом языке могут использовать их
+напрямую:
+
+```python
+# scripts/run.py — путь к модулю из env
+import os
+mod_root = os.environ["FUTI_MODULE_ROOT"]
+config = os.path.join(mod_root, "config.local.yaml")
+```
+
+Обращение к `{{.module_root}}`/`{{.module_name}}` при пустом `ModuleRef` даёт
+missingkey-ошибку (`fail-fast`, как `{{.env.X}}` при отсутствии env var).
+
+### Cwd вызова и пути пользователя
+
+Относительные пути, переданные пользователем (`--out result.png`, файлы
+после `--`), резолвятся ОС от cwd вызова `futi` — естественная Unix-семантика.
+Скрипту, которому нужен cwd, достаточно `getcwd()` (он = cwd вызова futi):
+
+```python
+import os
+out = os.path.join(os.getcwd(), "result.png")
+```
+
+> **Migration note (pre-release):** до WORKDIR.md futi вызывал команды с
+> `WorkDir` = корень модуля и передавал `FUTI_CWD` в env. Это поведение
+> удалено. Правки модулей:
+>
+> - `cmd: "./scripts/x.sh ..."` → `cmd: "{{quote .module_root}}/scripts/x.sh ..."`
+> - `cmd: ".venv/bin/python scripts/x.py ..."` → `cmd: "{{quote .module_root}}/.venv/bin/python {{quote .module_root}}/scripts/x.py ..."`
+> - `base = os.environ.get("FUTI_CWD") or os.getcwd()` → `base = os.getcwd()`
+>   (cwd вызова futi = cwd скрипта, `getcwd()` достаточно)
+> - `os.environ["FUTI_CWD"]` для путей модуля → `os.environ["FUTI_MODULE_ROOT"]`
+>
+> См. `MD/WORKDIR.md`.
 
 ---
 
@@ -827,7 +859,7 @@ attach: ".venv/bin/python -m pip install -r requirements.txt"
 detach: "rm -rf .venv"
 ```
 
-Хуки выполняются в каталоге модуля; доступны `{{.module_name}}`, `{{.module_root}}`, `{{.env.FOO}}`, `{{quote ...}}` и переменные окружения FUTI_MODULE_NAME / FUTI_MODULE_ROOT / FUTI_CWD. Провал `attach` при install откатывает установку (модуль удаляется); при update — только предупреждение, новое дерево сохраняется. Провал `detach` при uninstall — предупреждение (или отказ с `--strict-detach`).
+Хуки выполняются в каталоге модуля; доступны `{{.module_name}}`, `{{.module_root}}`, `{{.env.FOO}}`, `{{quote ...}}` и переменные окружения FUTI_MODULE_NAME / FUTI_MODULE_ROOT. Провал `attach` при install откатывает установку (модуль удаляется); при update — только предупреждение, новое дерево сохраняется. Провал `detach` при uninstall — предупреждение (или отказ с `--strict-detach`).
 
 Каждая установка пишет sidecar `__futi_meta.yaml` рядом с config.yaml (источник, тип, ref/commit, hash дерева, даты) — по нему работают:
 

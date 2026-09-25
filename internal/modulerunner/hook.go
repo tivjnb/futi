@@ -19,8 +19,9 @@ import (
 // Отличия от обычного cmd: результат рендера выполняется через `sh -c`
 // (hook может быть составной командой: пайпы, &&, ;). Доступные переменные
 // шаблона: {{.module_name}}, {{.module_root}}, {{.env.FOO}}, {{quote .x}}.
-// Env процесса: полное окружение пользователя + FUTI_CWD (cwd пользователя),
-// FUTI_MODULE_NAME, FUTI_MODULE_ROOT. cwd = moduleRoot.
+// Env процесса: полное окружение пользователя + FUTI_MODULE_NAME,
+// FUTI_MODULE_ROOT. cwd = moduleRoot. FUTI_CWD удалён (WORKDIR.md §2.4):
+// cwd хука = moduleRoot, в скрипте getcwd() даёт то же.
 func RunHook(ctx context.Context, hookCmd, moduleRoot, moduleName string, stdout, stderr io.Writer) error {
 	rendered, err := renderHook(hookCmd, moduleName, moduleRoot)
 	if err != nil {
@@ -28,9 +29,6 @@ func RunHook(ctx context.Context, hookCmd, moduleRoot, moduleName string, stdout
 	}
 
 	env := os.Environ()
-	if cwd, err := os.Getwd(); err == nil {
-		env = append(env, "FUTI_CWD="+cwd)
-	}
 	env = append(env,
 		"FUTI_MODULE_NAME="+moduleName,
 		"FUTI_MODULE_ROOT="+moduleRoot,

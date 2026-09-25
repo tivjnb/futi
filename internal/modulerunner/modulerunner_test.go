@@ -52,7 +52,7 @@ commands:
       - name: name
         type: string
         required: true
-    cmd: "./greet.sh {{.name}}"
+    cmd: "{{quote .module_root}}/greet.sh {{.name}}"
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -237,9 +237,9 @@ commands:
   migrate:
     commands:
       up:
-        cmd: "./migrate.sh up"
+        cmd: "{{quote .module_root}}/migrate.sh up"
       down:
-        cmd: "./migrate.sh down"
+        cmd: "{{quote .module_root}}/migrate.sh down"
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -280,9 +280,9 @@ commands:
       up:
         commands:
           force:
-            cmd: "./migrate.sh up force"
+            cmd: "{{quote .module_root}}/migrate.sh up force"
           safe:
-            cmd: "./migrate.sh up safe"
+            cmd: "{{quote .module_root}}/migrate.sh up safe"
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -325,7 +325,7 @@ commands:
           - name: name
             type: string
             required: true
-        cmd: "./migrate.sh {{.name}}"
+        cmd: "{{quote .module_root}}/migrate.sh {{quote .name}}"
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -833,22 +833,27 @@ positional:
 	}
 }
 
-func TestRunSetsFutiCwdEnv(t *testing.T) {
+// TestRunRespectsParentCwd проверяет WORKDIR.md §2.2/§3.1: дочерний процесс
+// исполняется с WorkDir = cwd родительского процесса (наследование, без
+// WithDir(moduleRoot)). t.Chdir меняет cwd процесса — Run должен подхватить
+// его для дочернего процесса.
+func TestRunRespectsParentCwd(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("printenv not available on Windows")
+		t.Skip("pwd не POSIX-совместимо для проверки на Windows")
 	}
 
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "probe.yaml")
 	manifest := []byte(`
 name: probe
-cmd: "printenv FUTI_CWD"
+cmd: "pwd"
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 
-	// t.Chdir меняет cwd процесса — Run должен подхватить его как FUTI_CWD.
+	// t.Chdir меняет cwd процесса — Run должен подхватить его как WorkDir
+	// дочернего процесса (а не moduleRoot).
 	t.Chdir(dir)
 
 	source := discovery.NewGlobalSource(dir)
@@ -858,7 +863,83 @@ cmd: "printenv FUTI_CWD"
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := strings.TrimRight(stdout.String(), "\n"); got != dir {
-		t.Fatalf("FUTI_CWD = %q, want %q", got, dir)
+	got, err := filepath.EvalSymlinks(strings.TrimRight(stdout.String(), "\n"))
+	if err != nil {
+		t.Fatalf("eval symlinks: %v", err)
+	}
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("eval symlinks: %v", err)
+	}
+	if got != want {
+		t.Fatalf("cwd = %q, want %q (must inherit parent cwd, not moduleRoot)", got, want)
+	}
+}
+
+// TestRunExposesModuleRootEnv проверяет, что FUTI_MODULE_ROOT пробрасывается
+// в дочерний процесс (WORKDIR.md §2.3) — замена FUTI_CWD для скриптов,
+// которым нужен путь к файлам модуля.
+func TestRunExposesModuleRootEnv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("printenv not available on Windows")
+	}
+
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "probe.yaml")
+	manifest := []byte(`
+name: probe
+cmd: "printenv FUTI_MODULE_ROOT"
+`)
+	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	source := discovery.NewGlobalSource(dir)
+
+	var stdout bytes.Buffer
+	err := Run(context.Background(), source, "probe", "", map[string]string{}, "", nil, &stdout, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, err := filepath.EvalSymlinks(strings.TrimRight(stdout.String(), "\n"))
+	if err != nil {
+		t.Fatalf("eval symlinks: %v", err)
+	}
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("eval symlinks: %v", err)
+	}
+	if got != want {
+		t.Fatalf("FUTI_MODULE_ROOT = %q, want %q", got, want)
+	}
+}
+
+// TestRunNoFutiCwdEnv проверяет, что FUTI_CWD удалён из env (WORKDIR.md §2.3,
+// чистый breaking change). Скрипты, которым нужен cwd вызова, используют
+// getcwd() (cwd = cwd вызова futi, см. TestRunRespectsParentCwd).
+func TestRunNoFutiCwdEnv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("printenv not available on Windows")
+	}
+
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "probe.yaml")
+	manifest := []byte(`
+name: probe
+cmd: "sh -c 'if [ -n \"$FUTI_CWD\" ]; then echo HAS_FUTI_CWD; else echo NO_FUTI_CWD; fi'"
+`)
+	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	source := discovery.NewGlobalSource(dir)
+
+	var stdout bytes.Buffer
+	err := Run(context.Background(), source, "probe", "", map[string]string{}, "", nil, &stdout, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "NO_FUTI_CWD" {
+		t.Fatalf("env FUTI_CWD = %q, want absent (WORKDIR.md §2.3)", got)
 	}
 }

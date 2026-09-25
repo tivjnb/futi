@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"futi/internal/discovery"
@@ -129,7 +128,7 @@ func Run(
 			return fmt.Errorf("modulerunner: %w", err)
 		}
 
-		rendered, err := cmd.Render(resolved, args, argsList)
+		rendered, err := cmd.Render(resolved, args, argsList, execmodule.ModuleRef{Name: mod.Name, Root: moduleRoot})
 		if err != nil {
 			return fmt.Errorf("modulerunner: %w", err)
 		}
@@ -142,20 +141,19 @@ func Run(
 			return fmt.Errorf("modulerunner: empty command after render")
 		}
 
-		// Резолвинг относительных путей к скриптам пакета от moduleRoot.
-		if !filepath.IsAbs(parts[0]) && strings.Contains(parts[0], "/") {
-			parts[0] = filepath.Join(moduleRoot, parts[0])
-		}
-
-		cfg := executor.NewConfig().WithDir(moduleRoot)
-		// FUTI_CWD — исходный рабочий каталог пользователя. Go exec при
-		// Dir != "" перезаписывает PWD на moduleRoot, поэтому без этой
-		// переменной скрипты модулей не могут резолвить относительные
-		// пути, переданные пользователем. Полное окружение обязательно:
-		// cfg.Env заменяет environ дочернего процесса целиком.
-		if cwd, err := os.Getwd(); err == nil {
-			cfg = cfg.WithEnv(append(os.Environ(), "FUTI_CWD="+cwd))
-		}
+		// Unix-семантика для первого токена cmd: относительные пути резолвятся
+		// ОС от cwd вызова (Go exec при Dir=="" наследует cwd родительского
+		// процесса); bare-имя ищется в PATH. Свои скрипты пакета — явно через
+		// {{quote .module_root}}/scripts/x.py. См. WORKDIR.md §2, §3.1.
+		//
+		// Env: FUTI_MODULE_NAME и FUTI_MODULE_ROOT — симметрия с хуками;
+		// FUTI_CWD удалён (cwd = cwd вызова, getcwd() в скрипте даёт то же).
+		env := os.Environ()
+		env = append(env,
+			"FUTI_MODULE_NAME="+mod.Name,
+			"FUTI_MODULE_ROOT="+moduleRoot,
+		)
+		cfg := executor.NewConfig().WithEnv(env)
 		if stdout != nil {
 			cfg = cfg.WithStdout(stdout)
 		}
