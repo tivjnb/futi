@@ -58,8 +58,16 @@ func NewGlobalSource(rootDir string) *GlobalSource {
 //   namespace "dev.deploy" → dev/deploy.yaml или dev/deploy/config.yaml
 //   если найдены оба — ошибка конфликта
 //   если ни один — ошибка not found
+// Пакет — лист: если любой родительский каталог пути содержит config.yaml,
+// модуль «внутри пакета» не существует; сегмент "config" зарезервирован
+// (иначе dev.config резолвился бы в манифест пакета dev/config.yaml).
 func (s *GlobalSource) Resolve(namespace string) (string, string, error) {
 	segments := strings.Split(namespace, ".")
+	for i, seg := range segments {
+		if seg == "config" || (i > 0 && fileExists(filepath.Join(s.RootDir, filepath.Join(segments[:i]...), "config.yaml"))) {
+			return "", "", fmt.Errorf("discovery: module %q not found", namespace)
+		}
+	}
 	relPath := filepath.Join(segments...)
 
 	yamlPath := filepath.Join(s.RootDir, relPath+".yaml")
@@ -107,8 +115,8 @@ func (s *GlobalSource) List() ([]ModuleInfo, error) {
 // nsPrefix — namespace-префикс ("" для корня). visited — множество
 // резолвнутых (EvalSymlinks) путей уже обойдённых директорий: защита от
 // циклов симлинков и повторного обхода алиасов на один каталог.
-// Семантика обхода соответствует filepath.WalkDir: внутрь пакетов
-// (директорий с config.yaml) тоже заходим.
+// Пакет (директория с config.yaml) — лист: внутрь не заходим, его *.yaml
+// не модули (согласовано с Resolve и ListChildrenRecursive).
 func (s *GlobalSource) walkModules(dir, nsPrefix string, modules *[]ModuleInfo, visited map[string]bool) {
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
@@ -134,6 +142,7 @@ func (s *GlobalSource) walkModules(dir, nsPrefix string, modules *[]ModuleInfo, 
 					ManifestPath: filepath.Join(path, "config.yaml"),
 					ModuleRoot:   path,
 				})
+				continue
 			}
 			s.walkModules(path, nsPrefix+entry.Name()+".", modules, visited)
 			continue

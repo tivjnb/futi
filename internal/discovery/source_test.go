@@ -3,6 +3,7 @@ package discovery
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -330,6 +331,7 @@ func TestListChildrenRecursiveNonExistentReturnsError(t *testing.T) {
 
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
+	mkdir(t, filepath.Dir(path))
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write file %q: %v", path, err)
 	}
@@ -548,5 +550,88 @@ func TestListBrokenSymlinkKeptAsFile(t *testing.T) {
 	}
 	if _, ok := names["broken"]; !ok {
 		t.Fatalf("expected broken .yaml symlink to be kept as file module, got %v", names)
+	}
+}
+
+func TestResolveInsidePackageNotFound(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "dev", "deploy", "config.yaml"), "name: deploy\n")
+	writeFile(t, filepath.Join(dir, "dev", "deploy", "x.yaml"), "name: x\n")
+
+	s := NewGlobalSource(dir)
+	_, _, err := s.Resolve("dev.deploy.x")
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("Resolve(dev.deploy.x) err = %v, want not found", err)
+	}
+	if _, _, err := s.Resolve("dev.deploy"); err != nil {
+		t.Fatalf("Resolve(dev.deploy): unexpected error: %v", err)
+	}
+}
+
+func TestResolveConfigSegmentRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "dev", "config.yaml"), "name: dev\n")
+
+	s := NewGlobalSource(dir)
+	for _, ns := range []string{"dev.config", "config"} {
+		_, _, err := s.Resolve(ns)
+		if err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Errorf("Resolve(%q) err = %v, want not found", ns, err)
+		}
+	}
+}
+
+func TestListDoesNotEnterPackages(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "dev", "deploy", "config.yaml"), "name: deploy\n")
+	writeFile(t, filepath.Join(dir, "dev", "deploy", "x.yaml"), "name: x\n")
+
+	s := NewGlobalSource(dir)
+	mods, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, m := range mods {
+		names = append(names, m.Name)
+	}
+	if len(names) != 1 || names[0] != "dev.deploy" {
+		t.Fatalf("List names = %v, want [dev.deploy]", names)
+	}
+
+	children, err := s.ListChildrenRecursive("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recMods []string
+	for _, c := range children {
+		if c.Type == "module" {
+			recMods = append(recMods, c.Name)
+		}
+	}
+	if len(recMods) != 1 || recMods[0] != "dev.deploy" {
+		t.Fatalf("ListChildrenRecursive modules = %v, want [dev.deploy]", recMods)
+	}
+}
+
+func TestListPackageSymlinkNotEntered(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	writeFile(t, filepath.Join(real, "config.yaml"), "name: pkg\n")
+	writeFile(t, filepath.Join(real, "x.yaml"), "name: x\n")
+	root := filepath.Join(dir, "root")
+	mkdir(t, root)
+	symlinkOrFail(t, real, filepath.Join(root, "pkg"))
+
+	mods, err := NewGlobalSource(root).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, m := range mods {
+		names = append(names, m.Name)
+	}
+	if len(names) != 1 || names[0] != "pkg" {
+		t.Fatalf("List names = %v, want [pkg]", names)
 	}
 }
