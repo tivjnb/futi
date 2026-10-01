@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"futi/internal/config"
 )
 
 func TestFileSourceResolveByModuleName(t *testing.T) {
@@ -271,5 +273,27 @@ func TestLayeredSourceResolveNotFoundIsErrNotFound(t *testing.T) {
 	_, _, err := s.Resolve("zzz")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestLayeredOverCompositeConflictPropagates(t *testing.T) {
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, "a"))
+	writeFile(t, filepath.Join(dir, "a.yaml"), "name: a\n")
+	writeFile(t, filepath.Join(dir, "a", "config.yaml"), "name: a\n")
+	primary := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: dir}}})
+
+	fbDir := t.TempDir()
+	writeFile(t, filepath.Join(fbDir, "a.yaml"), "name: a\n")
+
+	_, _, err := NewLayeredSource(primary, NewGlobalSource(fbDir)).Resolve("a")
+	if err == nil {
+		t.Fatal("ожидалась ошибка конфликта, получен результат fallback")
+	}
+	if !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("error %q does not mention conflict", err)
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("конфликт не должен быть ErrNotFound: %v", err)
 	}
 }

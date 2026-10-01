@@ -1,10 +1,13 @@
 package discovery
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // ModuleInfo описывает обнаруженный модуль для `futi list`.
@@ -71,7 +74,18 @@ func (s *GlobalSource) Resolve(namespace string) (string, string, error) {
 		}
 	}
 	for i, seg := range segments {
-		if seg == "config" || (i > 0 && fileExists(filepath.Join(s.RootDir, filepath.Join(segments[:i]...), "config.yaml"))) {
+		if seg == "config" {
+			return "", "", newModuleNotFound(namespace)
+		}
+		if i == 0 {
+			continue
+		}
+		parentConfig := filepath.Join(s.RootDir, filepath.Join(segments[:i]...), "config.yaml")
+		isPackage, err := statFile(parentConfig)
+		if err != nil {
+			return "", "", fmt.Errorf("discovery: stat %q: %w", parentConfig, err)
+		}
+		if isPackage {
 			return "", "", newModuleNotFound(namespace)
 		}
 	}
@@ -80,8 +94,14 @@ func (s *GlobalSource) Resolve(namespace string) (string, string, error) {
 	yamlPath := filepath.Join(s.RootDir, relPath+".yaml")
 	pkgPath := filepath.Join(s.RootDir, relPath, "config.yaml")
 
-	yamlExists := fileExists(yamlPath)
-	pkgExists := fileExists(pkgPath)
+	yamlExists, err := statFile(yamlPath)
+	if err != nil {
+		return "", "", fmt.Errorf("discovery: stat %q: %w", yamlPath, err)
+	}
+	pkgExists, err := statFile(pkgPath)
+	if err != nil {
+		return "", "", fmt.Errorf("discovery: stat %q: %w", pkgPath, err)
+	}
 
 	switch {
 	case yamlExists && pkgExists:
@@ -187,6 +207,21 @@ func nsName(prefix, name string) string {
 		return name
 	}
 	return prefix + name
+}
+
+// statFile сообщает, что path — существующий файл (не каталог).
+// Отсутствие пути (в том числе когда родитель — не каталог) и каталог — это
+// false без ошибки; любая другая ошибка stat (например, EACCES) возвращается
+// вызывающему: её нельзя трактовать как «модуля нет».
+func statFile(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return false, nil
+		}
+		return false, err
+	}
+	return !info.IsDir(), nil
 }
 
 func fileExists(path string) bool {

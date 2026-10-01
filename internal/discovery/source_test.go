@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -683,5 +684,64 @@ func TestGlobalSourceResolveConflictIsNotNotFound(t *testing.T) {
 	}
 	if err.Error() != `discovery: module "missing" not found` {
 		t.Fatalf("unexpected message: %q", err)
+	}
+}
+
+// noAccessDir создаёт каталог без прав доступа; права возвращаются в Cleanup.
+func noAccessDir(t *testing.T, path string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root обходит права доступа")
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o755) })
+}
+
+func TestGlobalSourceResolveStatErrorIsNotNotFound(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a.yaml"), "name: a\n")
+	mkdir(t, filepath.Join(dir, "a"))
+	writeFile(t, filepath.Join(dir, "a", "b.yaml"), "name: b\n")
+	noAccessDir(t, filepath.Join(dir, "a"))
+
+	_, _, err := NewGlobalSource(dir).Resolve("a.b")
+	if err == nil {
+		t.Fatal("ожидалась ошибка stat")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("ошибка stat не должна быть ErrNotFound: %v", err)
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("err = %v, want fs.ErrPermission", err)
+	}
+}
+
+func TestGlobalSourceResolveNotDirIsNotFound(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a"), "не каталог\n")
+
+	_, _, err := NewGlobalSource(dir).Resolve("a.b")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if err.Error() != `discovery: module "a.b" not found` {
+		t.Fatalf("неожиданный текст ошибки: %q", err)
+	}
+}
+
+func TestGlobalSourceResolvePackageCheckStatError(t *testing.T) {
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, "p"))
+	writeFile(t, filepath.Join(dir, "p", "x.yaml"), "name: x\n")
+	noAccessDir(t, filepath.Join(dir, "p"))
+
+	_, _, err := NewGlobalSource(dir).Resolve("p.x")
+	if err == nil {
+		t.Fatal("ожидалась ошибка stat")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("ошибка stat не должна быть ErrNotFound: %v", err)
 	}
 }

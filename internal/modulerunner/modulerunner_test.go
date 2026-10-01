@@ -996,3 +996,35 @@ func TestRunConflictInSubnamespaceReturnsError(t *testing.T) {
 		t.Fatal("command a.yaml:b was executed despite conflict")
 	}
 }
+
+func TestRunStatErrorDoesNotFallBack(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root обходит права доступа")
+	}
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker")
+
+	if err := os.MkdirAll(filepath.Join(dir, "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, content string) {
+		if err := os.WriteFile(filepath.Join(dir, path), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a.yaml", "name: a\ncommands:\n  b:\n    cmd: \"touch "+marker+"\"\n")
+	write("a/b.yaml", "name: b\n")
+	if err := os.Chmod(filepath.Join(dir, "a"), 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dir, "a"), 0o755) })
+
+	source := discovery.NewGlobalSource(dir)
+	err := Run(context.Background(), source, "a", "b", map[string]string{}, "", nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected stat error")
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("command a.yaml:b was executed despite stat error")
+	}
+}

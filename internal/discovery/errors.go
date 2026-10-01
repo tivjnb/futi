@@ -6,7 +6,7 @@ import (
 )
 
 // ErrNotFound — sentinel «модуль/namespace не найден». Остальные ошибки Resolve
-// (конфликт .yaml vs /config.yaml, ошибки ввода-вывода) его не оборачивают,
+// (конфликт .yaml vs /config.yaml, ошибки ввода-вывода, в том числе stat) его не оборачивают,
 // поэтому вызывающий код не должен трактовать их как «не найдено».
 var ErrNotFound = errors.New("discovery: not found")
 
