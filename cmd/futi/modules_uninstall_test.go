@@ -160,3 +160,51 @@ func TestRunModulesUninstallRefusesOutsideRoot(t *testing.T) {
 		t.Fatal("module outside roots must survive")
 	}
 }
+
+func TestParseUninstallArgs_InvalidName(t *testing.T) {
+	for _, name := range []string{"", ".", "..", "a/../b", "/abs", "a//b"} {
+		if _, err := parseUninstallArgs([]string{name, "--force", "--yes"}); err == nil {
+			t.Errorf("parseUninstallArgs(%q) должен вернуть ошибку", name)
+		}
+	}
+}
+
+func TestUninstall_EmptyNameKeepsRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "m")
+	t.Setenv("FUTI_MODULES_DIR", root)
+	t.Chdir(t.TempDir())
+
+	moduleDir := filepath.Join(root, "qr")
+	os.MkdirAll(moduleDir, 0o755)
+	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte("name: qr\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
+
+	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(root), newTestCache(), []string{"", "--force", "--yes"})
+	if err == nil {
+		t.Fatal("пустое имя должно давать ошибку")
+	}
+	if _, statErr := os.Stat(filepath.Join(moduleDir, "config.yaml")); statErr != nil {
+		t.Fatalf("корень со содержимым должен остаться цел: %v", statErr)
+	}
+}
+
+func TestUninstall_SingleModuleKeepsRootWithSlash(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "m2")
+	t.Setenv("FUTI_MODULES_DIR", root+"/")
+	t.Chdir(t.TempDir())
+
+	moduleDir := filepath.Join(root, "n", "m")
+	os.MkdirAll(moduleDir, 0o755)
+	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte("name: m\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
+
+	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(root+"/"), newTestCache(), []string{"n/m", "--force", "--yes"})
+	if err != nil {
+		t.Fatalf("runModulesUninstall: %v", err)
+	}
+	if _, statErr := os.Stat(root); statErr != nil {
+		t.Fatalf("каталог m2 должен остаться: %v", statErr)
+	}
+	if _, statErr := os.Stat(moduleDir); !os.IsNotExist(statErr) {
+		t.Fatal("модуль должен быть удалён")
+	}
+}

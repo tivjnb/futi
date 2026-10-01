@@ -79,3 +79,56 @@ func TestConfirmDelete(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsureWithinRoot_RejectsRoot(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "m")
+	sub := filepath.Join(root, "sub")
+	os.MkdirAll(sub, 0o755)
+	link := filepath.Join(tmp, "link")
+	if err := os.Symlink(root, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureWithinRoot(root, []string{root}); err == nil {
+		t.Error("сам корень должен отвергаться")
+	}
+	if err := ensureWithinRoot(link, []string{root}); err == nil {
+		t.Error("симлинк на корень должен отвергаться")
+	}
+	if err := ensureWithinRoot(sub, []string{root}); err != nil {
+		t.Errorf("root/sub должен приниматься: %v", err)
+	}
+}
+
+func TestCleanupEmptyParents_RootNotRemoved(t *testing.T) {
+	variants := map[string]func(tmp string) string{
+		"trailing slash": func(tmp string) string { return filepath.Join(tmp, "m2") + "/" },
+		"dot":            func(tmp string) string { return filepath.Join(tmp, "m2") + "/." },
+		"dotdot":         func(tmp string) string { return filepath.Join(tmp, "x", "..", "m2") },
+		"symlink": func(tmp string) string {
+			link := filepath.Join(tmp, "link")
+			if err := os.Symlink(filepath.Join(tmp, "m2"), link); err != nil {
+				t.Fatal(err)
+			}
+			return link
+		},
+	}
+	for name, mkRoot := range variants {
+		t.Run(name, func(t *testing.T) {
+			tmp := t.TempDir()
+			os.MkdirAll(filepath.Join(tmp, "x"), 0o755)
+			ns := filepath.Join(tmp, "m2", "ns")
+			os.MkdirAll(ns, 0o755)
+
+			cleanupEmptyParents(ns, []string{mkRoot(tmp)})
+
+			if _, err := os.Stat(ns); !os.IsNotExist(err) {
+				t.Error("пустой ns должен быть удалён")
+			}
+			if _, err := os.Stat(filepath.Join(tmp, "m2")); err != nil {
+				t.Errorf("корень m2 должен остаться: %v", err)
+			}
+		})
+	}
+}
