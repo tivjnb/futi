@@ -733,15 +733,18 @@ func TestGlobalSourceResolveNotDirIsNotFound(t *testing.T) {
 
 func TestGlobalSourceResolvePackageCheckStatError(t *testing.T) {
 	dir := t.TempDir()
-	mkdir(t, filepath.Join(dir, "p"))
-	writeFile(t, filepath.Join(dir, "p", "x.yaml"), "name: x\n")
-	noAccessDir(t, filepath.Join(dir, "p"))
+	writeFile(t, filepath.Join(dir, "a.yaml"), "name: a\n")
+	mkdir(t, filepath.Join(dir, "a"))
+	noAccessDir(t, filepath.Join(dir, "a"))
 
-	_, _, err := NewGlobalSource(dir).Resolve("p.x")
+	_, _, err := NewGlobalSource(dir).Resolve("a")
 	if err == nil {
-		t.Fatal("ожидалась ошибка stat")
+		t.Fatal("ожидалась ошибка stat a/config.yaml")
 	}
 	if errors.Is(err, ErrNotFound) {
 		t.Fatalf("ошибка stat не должна быть ErrNotFound: %v", err)
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("ожидался fs.ErrPermission, получено: %v", err)
 	}
 }
