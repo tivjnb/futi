@@ -397,13 +397,16 @@ func runCacheClear(w io.Writer, cachePath string) error {
 // При verbose=true добавляет колонку PATH.
 // loader используется для загрузки модулей (с кэшем или без).
 func runList(w io.Writer, source discovery.Source, namespace string, verbose, recurse bool, loader modulerunner.ModuleLoader) error {
-	// Сначала пробуем резолвить как модуль
-	manifestPath, moduleRoot, err := source.Resolve(namespace)
-	if err == nil {
-		return printCommands(w, manifestPath, moduleRoot, verbose, loader)
-	}
-	if !errors.Is(err, discovery.ErrNotFound) {
-		return fmt.Errorf("list: %w", err)
+	// Сначала пробуем резолвить как модуль. Пустой namespace — запрос корня:
+	// Resolve("") вернул бы «invalid namespace», а не ErrNotFound.
+	if namespace != "" {
+		manifestPath, moduleRoot, err := source.Resolve(namespace)
+		if err == nil {
+			return printCommands(w, manifestPath, moduleRoot, verbose, loader)
+		}
+		if !errors.Is(err, discovery.ErrNotFound) {
+			return fmt.Errorf("list: %w", err)
+		}
 	}
 
 	// Не модуль — пробуем progressive resolution для subcommands

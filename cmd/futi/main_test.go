@@ -1701,3 +1701,52 @@ func TestRunListConflictInProgressiveResolveReturnsError(t *testing.T) {
 		t.Fatalf("error %q does not mention conflict", err)
 	}
 }
+
+// Пустой namespace у runList — законный запрос корня: Resolve("") не вызывается,
+// корневой config.yaml не считается модулем (audit F1/F2).
+func TestRunListEmptyNamespaceListsRoot(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "config.yaml"), "name: root\ncmd: echo ROOTCFG\n")
+	writeFile(t, filepath.Join(dir, "a.yaml"), "name: a\ncmd: echo a\n")
+
+	for _, tc := range []struct {
+		name    string
+		recurse bool
+		verbose bool
+	}{
+		{"plain", false, false},
+		{"recursive", true, false},
+		{"verbose", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			err := runList(&buf, discovery.NewGlobalSource(dir), "", tc.verbose, tc.recurse, nil)
+			if err != nil {
+				t.Fatalf("runList: %v", err)
+			}
+			out := buf.String()
+			if !strings.Contains(out, "a") {
+				t.Fatalf("в выводе нет модуля a:\n%s", out)
+			}
+			if strings.Contains(out, "ROOTCFG") || strings.Contains(out, "root") {
+				t.Fatalf("корневой config.yaml попал в список:\n%s", out)
+			}
+		})
+	}
+}
+
+// То же на продовой цепочке источников: Layered(Composite, ...).
+func TestRunListEmptyNamespaceOnProdSourceChain(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a.yaml"), "name: a\ncmd: echo a\n")
+	cfg := &config.Config{Sources: []config.SourceConfig{{Path: dir}}}
+	source := discovery.NewLayeredSource(discovery.NewCompositeSource(cfg), discovery.NewGlobalSource(t.TempDir()))
+
+	var buf bytes.Buffer
+	if err := runList(&buf, source, "", false, false, nil); err != nil {
+		t.Fatalf("runList: %v", err)
+	}
+	if !strings.Contains(buf.String(), "a") {
+		t.Fatalf("в выводе нет модуля a:\n%s", buf.String())
+	}
+}
