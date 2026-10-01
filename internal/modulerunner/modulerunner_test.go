@@ -967,3 +967,32 @@ func TestRunRootConfigNotUsedAsModule(t *testing.T) {
 		t.Errorf("Run(\"\", \"\") без ошибки, stdout=%q", stdout.String())
 	}
 }
+
+func TestRunConflictInSubnamespaceReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker")
+
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, content string) {
+		if err := os.WriteFile(filepath.Join(dir, path), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a.yaml", "name: a\ncommands:\n  b:\n    cmd: \"touch "+marker+"\"\n")
+	write("a/b.yaml", "name: b\n")
+	write("a/b/config.yaml", "name: b\n")
+
+	source := discovery.NewGlobalSource(dir)
+	err := Run(context.Background(), source, "a", "b", map[string]string{}, "", nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected conflict error")
+	}
+	if !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("error %q does not mention conflict", err)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("command a.yaml:b was executed despite conflict")
+	}
+}

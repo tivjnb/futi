@@ -1,7 +1,9 @@
 package discovery
 
 import (
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"futi/internal/config"
@@ -315,7 +317,7 @@ func TestCompositeListChildrenFromRootSourceAndMountpointSource(t *testing.T) {
 
 	cfg := &config.Config{
 		Sources: []config.SourceConfig{
-			{Path: dir1},                     // root: docker module
+			{Path: dir1},                      // root: docker module
 			{Path: dir2, Mountpoint: "tools"}, // tools.git module
 		},
 	}
@@ -338,5 +340,39 @@ func TestCompositeListChildrenFromRootSourceAndMountpointSource(t *testing.T) {
 	}
 	if byName["tools"] != "namespace" {
 		t.Fatalf("expected namespace 'tools', got %q", byName["tools"])
+	}
+}
+
+func TestCompositeSourceResolveConflictNotCounted(t *testing.T) {
+	conflict := makeConflictSource(t)
+	okDir := t.TempDir()
+	mkdir(t, filepath.Join(okDir, "a"))
+	writeFile(t, filepath.Join(okDir, "a", "b.yaml"), "name: b\n")
+
+	cfg := &config.Config{
+		Sources: []config.SourceConfig{
+			{Path: conflict.RootDir},
+			{Path: okDir},
+		},
+	}
+	s := NewCompositeSource(cfg)
+
+	_, _, err := s.Resolve("a.b")
+	if err == nil {
+		t.Fatal("expected conflict error")
+	}
+	if !strings.Contains(err.Error(), "both") {
+		t.Fatalf("error %q: want the source-level conflict text (both ... exist)", err)
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("conflict must not be ErrNotFound: %v", err)
+	}
+}
+
+func TestCompositeSourceResolveNotFoundIsErrNotFound(t *testing.T) {
+	s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: t.TempDir()}}})
+	_, _, err := s.Resolve("zzz")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }

@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -54,12 +55,15 @@ func (cs *CompositeSource) Resolve(namespace string) (string, string, error) {
 			foundCount++
 			foundManifest = manifest
 			foundRoot = root
+		} else if !errors.Is(err, ErrNotFound) {
+			// Конфликт/I/O-ошибка источника — не «не найдено», не считаем как отсутствие.
+			return "", "", err
 		}
 	}
 
 	switch foundCount {
 	case 0:
-		return "", "", fmt.Errorf("discovery: module %q not found", namespace)
+		return "", "", newModuleNotFound(namespace)
 	case 1:
 		return foundManifest, foundRoot, nil
 	default:

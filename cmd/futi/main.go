@@ -402,6 +402,9 @@ func runList(w io.Writer, source discovery.Source, namespace string, verbose, re
 	if err == nil {
 		return printCommands(w, manifestPath, moduleRoot, verbose, loader)
 	}
+	if !errors.Is(err, discovery.ErrNotFound) {
+		return fmt.Errorf("list: %w", err)
+	}
 
 	// Не модуль — пробуем progressive resolution для subcommands
 	if namespace != "" {
@@ -412,7 +415,10 @@ func runList(w io.Writer, source discovery.Source, namespace string, verbose, re
 
 			manifestPath, moduleRoot, err := source.Resolve(ns)
 			if err != nil {
-				continue
+				if errors.Is(err, discovery.ErrNotFound) {
+					continue
+				}
+				return fmt.Errorf("list: %w", err)
 			}
 
 			mod, err := modulerunner.LoadModule(loader, manifestPath, moduleRoot)

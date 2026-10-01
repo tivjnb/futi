@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -654,5 +655,33 @@ func TestListPackageSymlinkNotEntered(t *testing.T) {
 	}
 	if len(names) != 1 || names[0] != "pkg" {
 		t.Fatalf("List names = %v, want [pkg]", names)
+	}
+}
+
+func TestGlobalSourceResolveConflictIsNotNotFound(t *testing.T) {
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, "a", "b"))
+	writeFile(t, filepath.Join(dir, "a", "b.yaml"), "name: b\n")
+	writeFile(t, filepath.Join(dir, "a", "b", "config.yaml"), "name: b\n")
+
+	s := NewGlobalSource(dir)
+
+	_, _, err := s.Resolve("a.b")
+	if err == nil {
+		t.Fatal("expected conflict error")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("conflict must not be ErrNotFound: %v", err)
+	}
+	if !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("error %q does not mention conflict", err)
+	}
+
+	_, _, err = s.Resolve("missing")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing module: err = %v, want ErrNotFound", err)
+	}
+	if err.Error() != `discovery: module "missing" not found` {
+		t.Fatalf("unexpected message: %q", err)
 	}
 }

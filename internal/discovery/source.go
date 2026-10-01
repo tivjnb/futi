@@ -72,7 +72,7 @@ func (s *GlobalSource) Resolve(namespace string) (string, string, error) {
 	}
 	for i, seg := range segments {
 		if seg == "config" || (i > 0 && fileExists(filepath.Join(s.RootDir, filepath.Join(segments[:i]...), "config.yaml"))) {
-			return "", "", fmt.Errorf("discovery: module %q not found", namespace)
+			return "", "", newModuleNotFound(namespace)
 		}
 	}
 	relPath := filepath.Join(segments...)
@@ -91,7 +91,7 @@ func (s *GlobalSource) Resolve(namespace string) (string, string, error) {
 	case pkgExists:
 		return pkgPath, filepath.Dir(pkgPath), nil
 	default:
-		return "", "", fmt.Errorf("discovery: module %q not found", namespace)
+		return "", "", newModuleNotFound(namespace)
 	}
 }
 
