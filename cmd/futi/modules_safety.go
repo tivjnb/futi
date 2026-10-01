@@ -30,8 +30,32 @@ func validateModuleName(name string) error {
 	return nil
 }
 
+// normalizePath приводит путь к абсолютному чистому виду и по возможности
+// резолвит симлинки (если путь не существует — остаётся Abs+Clean).
+func normalizePath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = filepath.Clean(path)
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real
+	}
+	return abs
+}
+
+// strictlyInside сообщает, лежит ли path строго внутри root (path != root).
+// Оба пути должны быть уже нормализованы.
+func strictlyInside(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // ensureWithinRoot проверяет, что path (после резолва симлинков) находится
-// внутри одного из roots (спека §8 #2, #12). Используется перед удалением.
+// строго внутри одного из roots (спека §8 #2, #12): сам корень не допускается.
+// Используется перед удалением.
 func ensureWithinRoot(path string, roots []string) error {
 	real, err := filepath.EvalSymlinks(path)
 	if err != nil {
@@ -42,11 +66,7 @@ func ensureWithinRoot(path string, roots []string) error {
 		if err != nil {
 			continue
 		}
-		rel, err := filepath.Rel(realRoot, real)
-		if err != nil {
-			continue
-		}
-		if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if strictlyInside(realRoot, real) {
 			return nil
 		}
 	}

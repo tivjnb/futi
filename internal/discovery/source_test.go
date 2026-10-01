@@ -1,8 +1,11 @@
 package discovery
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -330,6 +333,7 @@ func TestListChildrenRecursiveNonExistentReturnsError(t *testing.T) {
 
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
+	mkdir(t, filepath.Dir(path))
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write file %q: %v", path, err)
 	}
@@ -548,5 +552,220 @@ func TestListBrokenSymlinkKeptAsFile(t *testing.T) {
 	}
 	if _, ok := names["broken"]; !ok {
 		t.Fatalf("expected broken .yaml symlink to be kept as file module, got %v", names)
+	}
+}
+
+func TestGlobalSourceResolveEmptyNamespace(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "config.yaml"), "cmd: echo root\n")
+	writeFile(t, filepath.Join(dir, "a.yaml"), "cmd: echo a\n")
+	s := NewGlobalSource(dir)
+
+	for _, ns := range []string{"", "a..b", ".a", "a."} {
+		if path, _, err := s.Resolve(ns); err == nil {
+			t.Errorf("Resolve(%q) = %q, ожидалась ошибка", ns, path)
+		}
+	}
+
+	path, _, err := s.Resolve("a")
+	if err != nil {
+		t.Fatalf("Resolve(\"a\"): %v", err)
+	}
+	if want := filepath.Join(dir, "a.yaml"); path != want {
+		t.Errorf("Resolve(\"a\") = %q, want %q", path, want)
+	}
+}
+
+func TestResolveInsidePackageNotFound(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "dev", "deploy", "config.yaml"), "name: deploy\n")
+	writeFile(t, filepath.Join(dir, "dev", "deploy", "x.yaml"), "name: x\n")
+
+	s := NewGlobalSource(dir)
+	_, _, err := s.Resolve("dev.deploy.x")
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("Resolve(dev.deploy.x) err = %v, want not found", err)
+	}
+	if _, _, err := s.Resolve("dev.deploy"); err != nil {
+		t.Fatalf("Resolve(dev.deploy): unexpected error: %v", err)
+	}
+}
+
+func TestResolveConfigSegmentRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "dev", "config.yaml"), "name: dev\n")
+
+	s := NewGlobalSource(dir)
+	for _, ns := range []string{"dev.config", "config"} {
+		_, _, err := s.Resolve(ns)
+		if err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Errorf("Resolve(%q) err = %v, want not found", ns, err)
+		}
+	}
+}
+
+func TestListDoesNotEnterPackages(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "dev", "deploy", "config.yaml"), "name: deploy\n")
+	writeFile(t, filepath.Join(dir, "dev", "deploy", "x.yaml"), "name: x\n")
+
+	s := NewGlobalSource(dir)
+	mods, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, m := range mods {
+		names = append(names, m.Name)
+	}
+	if len(names) != 1 || names[0] != "dev.deploy" {
+		t.Fatalf("List names = %v, want [dev.deploy]", names)
+	}
+
+	children, err := s.ListChildrenRecursive("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recMods []string
+	for _, c := range children {
+		if c.Type == "module" {
+			recMods = append(recMods, c.Name)
+		}
+	}
+	if len(recMods) != 1 || recMods[0] != "dev.deploy" {
+		t.Fatalf("ListChildrenRecursive modules = %v, want [dev.deploy]", recMods)
+	}
+}
+
+// Пакет — лист: внутри namespace-пакета (и глубже) детей нет, как и для
+// Resolve("pk.inner") → not found.
+func TestListChildrenOfPackageIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "pk", "config.yaml"), "name: pk\n")
+	writeFile(t, filepath.Join(dir, "pk", "inner.yaml"), "name: inner\n")
+	writeFile(t, filepath.Join(dir, "pk", "sub", "x.yaml"), "name: x\n")
+
+	s := NewGlobalSource(dir)
+	for _, ns := range []string{"pk", "pk.sub"} {
+		children, err := s.ListChildren(ns)
+		if err != nil || len(children) != 0 {
+			t.Errorf("ListChildren(%q) = %v, %v; want [], nil", ns, children, err)
+		}
+		children, err = s.ListChildrenRecursive(ns)
+		if err != nil || len(children) != 0 {
+			t.Errorf("ListChildrenRecursive(%q) = %v, %v; want [], nil", ns, children, err)
+		}
+	}
+}
+
+func TestListPackageSymlinkNotEntered(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	writeFile(t, filepath.Join(real, "config.yaml"), "name: pkg\n")
+	writeFile(t, filepath.Join(real, "x.yaml"), "name: x\n")
+	root := filepath.Join(dir, "root")
+	mkdir(t, root)
+	symlinkOrFail(t, real, filepath.Join(root, "pkg"))
+
+	mods, err := NewGlobalSource(root).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, m := range mods {
+		names = append(names, m.Name)
+	}
+	if len(names) != 1 || names[0] != "pkg" {
+		t.Fatalf("List names = %v, want [pkg]", names)
+	}
+}
+
+func TestGlobalSourceResolveConflictIsNotNotFound(t *testing.T) {
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, "a", "b"))
+	writeFile(t, filepath.Join(dir, "a", "b.yaml"), "name: b\n")
+	writeFile(t, filepath.Join(dir, "a", "b", "config.yaml"), "name: b\n")
+
+	s := NewGlobalSource(dir)
+
+	_, _, err := s.Resolve("a.b")
+	if err == nil {
+		t.Fatal("expected conflict error")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("conflict must not be ErrNotFound: %v", err)
+	}
+	if !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("error %q does not mention conflict", err)
+	}
+
+	_, _, err = s.Resolve("missing")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing module: err = %v, want ErrNotFound", err)
+	}
+	if err.Error() != `discovery: module "missing" not found` {
+		t.Fatalf("unexpected message: %q", err)
+	}
+}
+
+// noAccessDir создаёт каталог без прав доступа; права возвращаются в Cleanup.
+func noAccessDir(t *testing.T, path string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root обходит права доступа")
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o755) })
+}
+
+func TestGlobalSourceResolveStatErrorIsNotNotFound(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a.yaml"), "name: a\n")
+	mkdir(t, filepath.Join(dir, "a"))
+	writeFile(t, filepath.Join(dir, "a", "b.yaml"), "name: b\n")
+	noAccessDir(t, filepath.Join(dir, "a"))
+
+	_, _, err := NewGlobalSource(dir).Resolve("a.b")
+	if err == nil {
+		t.Fatal("ожидалась ошибка stat")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("ошибка stat не должна быть ErrNotFound: %v", err)
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("err = %v, want fs.ErrPermission", err)
+	}
+}
+
+func TestGlobalSourceResolveNotDirIsNotFound(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a"), "не каталог\n")
+
+	_, _, err := NewGlobalSource(dir).Resolve("a.b")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if err.Error() != `discovery: module "a.b" not found` {
+		t.Fatalf("неожиданный текст ошибки: %q", err)
+	}
+}
+
+func TestGlobalSourceResolvePackageCheckStatError(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a.yaml"), "name: a\n")
+	mkdir(t, filepath.Join(dir, "a"))
+	noAccessDir(t, filepath.Join(dir, "a"))
+
+	_, _, err := NewGlobalSource(dir).Resolve("a")
+	if err == nil {
+		t.Fatal("ожидалась ошибка stat a/config.yaml")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("ошибка stat не должна быть ErrNotFound: %v", err)
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("ожидался fs.ErrPermission, получено: %v", err)
 	}
 }

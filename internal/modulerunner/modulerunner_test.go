@@ -943,3 +943,88 @@ cmd: "sh -c 'if [ -n \"$FUTI_CWD\" ]; then echo HAS_FUTI_CWD; else echo NO_FUTI_
 		t.Fatalf("env FUTI_CWD = %q, want absent (WORKDIR.md §2.3)", got)
 	}
 }
+
+// Корневой config.yaml не должен становиться модулем для пустого/неизвестного namespace.
+func TestRunRootConfigNotUsedAsModule(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("name: root\ncmd: echo ROOTCFG\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source := discovery.NewGlobalSource(dir)
+
+	var stdout bytes.Buffer
+	err := Run(context.Background(), source, "zzz", "x", map[string]string{}, "", nil, &stdout, nil, nil)
+	if err == nil {
+		t.Fatal("ожидалась ошибка для неизвестного модуля")
+	}
+	if !strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), `in module ""`) {
+		t.Errorf("Run(zzz, x) err = %q, ожидалось not found без `in module \"\"`", err)
+	}
+
+	stdout.Reset()
+	err = Run(context.Background(), source, "", "", map[string]string{}, "", nil, &stdout, nil, nil)
+	if err == nil {
+		t.Errorf("Run(\"\", \"\") без ошибки, stdout=%q", stdout.String())
+	}
+}
+
+func TestRunConflictInSubnamespaceReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker")
+
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, content string) {
+		if err := os.WriteFile(filepath.Join(dir, path), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a.yaml", "name: a\ncommands:\n  b:\n    cmd: \"touch "+marker+"\"\n")
+	write("a/b.yaml", "name: b\n")
+	write("a/b/config.yaml", "name: b\n")
+
+	source := discovery.NewGlobalSource(dir)
+	err := Run(context.Background(), source, "a", "b", map[string]string{}, "", nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected conflict error")
+	}
+	if !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("error %q does not mention conflict", err)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("command a.yaml:b was executed despite conflict")
+	}
+}
+
+func TestRunStatErrorDoesNotFallBack(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root обходит права доступа")
+	}
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker")
+
+	if err := os.MkdirAll(filepath.Join(dir, "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, content string) {
+		if err := os.WriteFile(filepath.Join(dir, path), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a.yaml", "name: a\ncommands:\n  b:\n    cmd: \"touch "+marker+"\"\n")
+	write("a/b.yaml", "name: b\n")
+	if err := os.Chmod(filepath.Join(dir, "a"), 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dir, "a"), 0o755) })
+
+	source := discovery.NewGlobalSource(dir)
+	err := Run(context.Background(), source, "a", "b", map[string]string{}, "", nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected stat error")
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("command a.yaml:b was executed despite stat error")
+	}
+}

@@ -1,8 +1,12 @@
 package discovery
 
 import (
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"futi/internal/config"
 )
 
 func TestFileSourceResolveByModuleName(t *testing.T) {
@@ -230,5 +234,66 @@ func TestLayeredSourceListChildrenRecursive(t *testing.T) {
 	}
 	if byName["images.png"] != "module" {
 		t.Fatalf("expected module 'images.png', got %q", byName["images.png"])
+	}
+}
+
+// makeConflictSource создаёт источник с конфликтной парой a/b.yaml + a/b/config.yaml.
+func makeConflictSource(t *testing.T) *GlobalSource {
+	t.Helper()
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, "a", "b"))
+	writeFile(t, filepath.Join(dir, "a", "b.yaml"), "name: b\n")
+	writeFile(t, filepath.Join(dir, "a", "b", "config.yaml"), "name: b\n")
+	return NewGlobalSource(dir)
+}
+
+func TestLayeredSourceResolveConflictNotSwallowed(t *testing.T) {
+	primary := makeConflictSource(t)
+	fbDir := t.TempDir()
+	mkdir(t, filepath.Join(fbDir, "a"))
+	writeFile(t, filepath.Join(fbDir, "a", "b.yaml"), "name: b\n")
+	fallback := NewGlobalSource(fbDir)
+
+	s := NewLayeredSource(primary, fallback)
+
+	_, _, err := s.Resolve("a.b")
+	if err == nil {
+		t.Fatal("expected conflict error, got fallback result")
+	}
+	if !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("error %q does not mention conflict", err)
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("conflict must not be ErrNotFound: %v", err)
+	}
+}
+
+func TestLayeredSourceResolveNotFoundIsErrNotFound(t *testing.T) {
+	s := NewLayeredSource(NewGlobalSource(t.TempDir()))
+	_, _, err := s.Resolve("zzz")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestLayeredOverCompositeConflictPropagates(t *testing.T) {
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, "a"))
+	writeFile(t, filepath.Join(dir, "a.yaml"), "name: a\n")
+	writeFile(t, filepath.Join(dir, "a", "config.yaml"), "name: a\n")
+	primary := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: dir}}})
+
+	fbDir := t.TempDir()
+	writeFile(t, filepath.Join(fbDir, "a.yaml"), "name: a\n")
+
+	_, _, err := NewLayeredSource(primary, NewGlobalSource(fbDir)).Resolve("a")
+	if err == nil {
+		t.Fatal("ожидалась ошибка конфликта, получен результат fallback")
+	}
+	if !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("error %q does not mention conflict", err)
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("конфликт не должен быть ErrNotFound: %v", err)
 	}
 }

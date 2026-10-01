@@ -2,6 +2,7 @@ package modulerunner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -84,13 +85,17 @@ func Run(
 	// Progressive resolution: пробуем резолвить модуль от длиннейшего
 	// namespace к коротчайшему. Остаток = command path.
 	// i=len(positional) → ns=все, commandPath=[] (default cmd случай).
-	for i := len(positional); i >= 0; i-- {
+	// i>=1: пустой namespace (i=0) модулем не является.
+	for i := len(positional); i >= 1; i-- {
 		ns := strings.Join(positional[:i], ".")
 		commandPath := positional[i:]
 
 		manifestPath, moduleRoot, err := source.Resolve(ns)
 		if err != nil {
-			continue
+			if errors.Is(err, discovery.ErrNotFound) {
+				continue
+			}
+			return fmt.Errorf("modulerunner: %w", err)
 		}
 
 		// Исполняемый модуль загружаем со строгой проверкой свежести/аутентичности

@@ -1,10 +1,13 @@
 package discovery
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // ModuleInfo описывает обнаруженный модуль для `futi list`.
@@ -58,15 +61,43 @@ func NewGlobalSource(rootDir string) *GlobalSource {
 //   namespace "dev.deploy" → dev/deploy.yaml или dev/deploy/config.yaml
 //   если найдены оба — ошибка конфликта
 //   если ни один — ошибка not found
+// Пустой namespace и пустые сегменты ("a..b", ".a", "a.") — ошибка:
+// иначе пустой путь резолвился бы в корневой config.yaml.
+// Пакет — лист: если любой родительский каталог пути содержит config.yaml,
+// модуль «внутри пакета» не существует; сегмент "config" зарезервирован
+// (иначе dev.config резолвился бы в манифест пакета dev/config.yaml).
 func (s *GlobalSource) Resolve(namespace string) (string, string, error) {
 	segments := strings.Split(namespace, ".")
+	for _, seg := range segments {
+		if seg == "" {
+			return "", "", fmt.Errorf("discovery: invalid namespace %q: empty segment", namespace)
+		}
+	}
+	for _, seg := range segments {
+		if seg == "config" {
+			return "", "", newModuleNotFound(namespace)
+		}
+	}
+	insidePackage, err := s.withinPackage(segments[:len(segments)-1])
+	if err != nil {
+		return "", "", err
+	}
+	if insidePackage {
+		return "", "", newModuleNotFound(namespace)
+	}
 	relPath := filepath.Join(segments...)
 
 	yamlPath := filepath.Join(s.RootDir, relPath+".yaml")
 	pkgPath := filepath.Join(s.RootDir, relPath, "config.yaml")
 
-	yamlExists := fileExists(yamlPath)
-	pkgExists := fileExists(pkgPath)
+	yamlExists, err := statFile(yamlPath)
+	if err != nil {
+		return "", "", fmt.Errorf("discovery: stat %q: %w", yamlPath, err)
+	}
+	pkgExists, err := statFile(pkgPath)
+	if err != nil {
+		return "", "", fmt.Errorf("discovery: stat %q: %w", pkgPath, err)
+	}
 
 	switch {
 	case yamlExists && pkgExists:
@@ -76,8 +107,26 @@ func (s *GlobalSource) Resolve(namespace string) (string, string, error) {
 	case pkgExists:
 		return pkgPath, filepath.Dir(pkgPath), nil
 	default:
-		return "", "", fmt.Errorf("discovery: module %q not found", namespace)
+		return "", "", newModuleNotFound(namespace)
 	}
+}
+
+// withinPackage сообщает, что путь segments — пакет или лежит внутри пакета:
+// какой-либо из каталогов segments[:1], segments[:2], …, segments содержит
+// config.yaml. Пакет — лист: ни модулей, ни namespace внутри него нет.
+// Ошибка stat (кроме отсутствия) возвращается: её нельзя считать «не пакет».
+func (s *GlobalSource) withinPackage(segments []string) (bool, error) {
+	for i := 1; i <= len(segments); i++ {
+		configPath := filepath.Join(s.RootDir, filepath.Join(segments[:i]...), "config.yaml")
+		isPackage, err := statFile(configPath)
+		if err != nil {
+			return false, fmt.Errorf("discovery: stat %q: %w", configPath, err)
+		}
+		if isPackage {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // List обходит RootDir и находит все модули:
@@ -107,8 +156,8 @@ func (s *GlobalSource) List() ([]ModuleInfo, error) {
 // nsPrefix — namespace-префикс ("" для корня). visited — множество
 // резолвнутых (EvalSymlinks) путей уже обойдённых директорий: защита от
 // циклов симлинков и повторного обхода алиасов на один каталог.
-// Семантика обхода соответствует filepath.WalkDir: внутрь пакетов
-// (директорий с config.yaml) тоже заходим.
+// Пакет (директория с config.yaml) — лист: внутрь не заходим, его *.yaml
+// не модули (согласовано с Resolve и ListChildrenRecursive).
 func (s *GlobalSource) walkModules(dir, nsPrefix string, modules *[]ModuleInfo, visited map[string]bool) {
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
@@ -134,6 +183,7 @@ func (s *GlobalSource) walkModules(dir, nsPrefix string, modules *[]ModuleInfo, 
 					ManifestPath: filepath.Join(path, "config.yaml"),
 					ModuleRoot:   path,
 				})
+				continue
 			}
 			s.walkModules(path, nsPrefix+entry.Name()+".", modules, visited)
 			continue
@@ -173,6 +223,21 @@ func nsName(prefix, name string) string {
 	return prefix + name
 }
 
+// statFile сообщает, что path — существующий файл (не каталог).
+// Отсутствие пути (в том числе когда родитель — не каталог) и каталог — это
+// false без ошибки; любая другая ошибка stat (например, EACCES) возвращается
+// вызывающему: её нельзя трактовать как «модуля нет».
+func statFile(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return false, nil
+		}
+		return false, err
+	}
+	return !info.IsDir(), nil
+}
+
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -204,6 +269,15 @@ func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {
 			return nil, fmt.Errorf("discovery: namespace %q not found", namespace)
 		}
 		return nil, fmt.Errorf("discovery: list children %q: %w", namespace, err)
+	}
+	if namespace != "" {
+		insidePackage, err := s.withinPackage(strings.Split(namespace, "."))
+		if err != nil {
+			return nil, err
+		}
+		if insidePackage {
+			return nil, nil // пакет — лист: детей нет, как и для Resolve
+		}
 	}
 
 	var children []Child
@@ -264,6 +338,15 @@ func (s *GlobalSource) ListChildrenRecursive(namespace string) ([]Child, error) 
 			return nil, fmt.Errorf("discovery: namespace %q not found", namespace)
 		}
 		return nil, fmt.Errorf("discovery: list recursive %q: %w", namespace, err)
+	}
+	if namespace != "" {
+		insidePackage, err := s.withinPackage(strings.Split(namespace, "."))
+		if err != nil {
+			return nil, err
+		}
+		if insidePackage {
+			return nil, nil // пакет — лист: потомков нет, как и для Resolve
+		}
 	}
 
 	var result []Child

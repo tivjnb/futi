@@ -160,3 +160,64 @@ func TestRunModulesUninstallRefusesOutsideRoot(t *testing.T) {
 		t.Fatal("module outside roots must survive")
 	}
 }
+
+func TestParseUninstallArgs_InvalidName(t *testing.T) {
+	for _, name := range []string{"", ".", "..", "a/../b", "/abs", "a//b"} {
+		_, err := parseUninstallArgs([]string{name, "--force", "--yes"})
+		if err == nil {
+			t.Errorf("parseUninstallArgs(%q) должен вернуть ошибку", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "invalid module name") {
+			t.Errorf("parseUninstallArgs(%q) err = %v, want invalid module name", name, err)
+		}
+	}
+}
+
+func TestUninstall_EmptyNameKeepsRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "m")
+	t.Setenv("FUTI_MODULES_DIR", root)
+	t.Chdir(t.TempDir())
+
+	moduleDir := filepath.Join(root, "qr")
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte("name: qr\ncommands:\n  run:\n    cmd: echo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(root), newTestCache(), []string{"", "--force", "--yes"})
+	if err == nil || !strings.Contains(err.Error(), "invalid module name") {
+		t.Fatalf("err = %v, want invalid module name", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(moduleDir, "config.yaml")); statErr != nil {
+		t.Fatalf("корень со содержимым должен остаться цел: %v", statErr)
+	}
+}
+
+func TestUninstall_SingleModuleKeepsRootWithSlash(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "m2")
+	t.Setenv("FUTI_MODULES_DIR", root+"/")
+	t.Chdir(t.TempDir())
+
+	moduleDir := filepath.Join(root, "n", "m")
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte("name: m\ncommands:\n  run:\n    cmd: echo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(root+"/"), newTestCache(), []string{"n/m", "--force", "--yes"})
+	if err != nil {
+		t.Fatalf("runModulesUninstall: %v", err)
+	}
+	if _, statErr := os.Stat(root); statErr != nil {
+		t.Fatalf("каталог m2 должен остаться: %v", statErr)
+	}
+	if _, statErr := os.Stat(moduleDir); !os.IsNotExist(statErr) {
+		t.Fatal("модуль должен быть удалён")
+	}
+}
