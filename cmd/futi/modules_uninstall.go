@@ -57,6 +57,10 @@ func parseUninstallArgs(args []string) (*uninstallArgs, error) {
 		return nil, fmt.Errorf("expected one module name, got %d", len(positional))
 	}
 	cfg.name = positional[0]
+	// Имя проверяем до Resolve: "" / "." иначе резолвятся в корень каталога модулей.
+	if err := validateModuleName(cfg.name); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 
@@ -159,12 +163,24 @@ func runModulesUninstall(w io.Writer, stdin io.Reader, source discovery.Source, 
 
 // cleanupEmptyParents удаляет пустые каталоги-родители (namespace-каталоги
 // после удаления единственного модуля), пока не дойдём до одного из roots.
+// Пути нормализуются (Abs, Clean, симлинки), поэтому хвостовой "/", "." и
+// симлинки в корне не мешают его распознать; сам корень не удаляется никогда.
 func cleanupEmptyParents(dir string, roots []string) {
+	normRoots := make([]string, 0, len(roots))
+	for _, root := range roots {
+		normRoots = append(normRoots, normalizePath(root))
+	}
+	dir = normalizePath(dir)
 	for range 32 { // страховка от бесконечного цикла
-		for _, root := range roots {
-			if dir == root {
-				return
+		inside := false
+		for _, root := range normRoots {
+			if strictlyInside(root, dir) {
+				inside = true
+				break
 			}
+		}
+		if !inside {
+			return // dir == корень или вне корней
 		}
 		entries, err := os.ReadDir(dir)
 		if err != nil || len(entries) > 0 {
