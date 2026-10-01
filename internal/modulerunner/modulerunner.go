@@ -2,6 +2,7 @@ package modulerunner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -90,7 +91,10 @@ func Run(
 
 		manifestPath, moduleRoot, err := source.Resolve(ns)
 		if err != nil {
-			continue
+			if errors.Is(err, discovery.ErrNotFound) {
+				continue
+			}
+			return fmt.Errorf("modulerunner: %w", err)
 		}
 
 		// Исполняемый модуль загружаем со строгой проверкой свежести/аутентичности

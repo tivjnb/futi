@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -27,7 +28,7 @@ func (s *FileSource) Resolve(namespace string) (string, string, error) {
 	if namespace == s.moduleName {
 		return s.manifestPath, s.moduleRoot, nil
 	}
-	return "", "", fmt.Errorf("discovery: module %q not found", namespace)
+	return "", "", newModuleNotFound(namespace)
 }
 
 func (s *FileSource) List() ([]ModuleInfo, error) {
@@ -78,8 +79,12 @@ func (s *LayeredSource) Resolve(namespace string) (string, string, error) {
 		if err == nil {
 			return manifest, root, nil
 		}
+		// Конфликт и I/O-ошибки не должны маскироваться модулем из нижнего слоя.
+		if !errors.Is(err, ErrNotFound) {
+			return "", "", err
+		}
 	}
-	return "", "", fmt.Errorf("discovery: module %q not found", namespace)
+	return "", "", newModuleNotFound(namespace)
 }
 
 func (s *LayeredSource) List() ([]ModuleInfo, error) {

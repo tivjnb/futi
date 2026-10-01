@@ -1650,3 +1650,54 @@ func TestFormatRunErrorGeneric(t *testing.T) {
 		t.Fatalf("expected generic run: prefix, got: %q", out)
 	}
 }
+
+func TestRunListConflictInSubnamespaceReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{
+		"a.yaml":          "name: a\ncommands:\n  b:\n    commands:\n      c:\n        cmd: \"echo c\"\n",
+		"a/b.yaml":        "name: b\n",
+		"a/b/config.yaml": "name: b\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, path), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var buf bytes.Buffer
+	err := runList(&buf, discovery.NewGlobalSource(dir), "a.b", false, false, nil)
+	if err == nil {
+		t.Fatalf("expected conflict error, got output:\n%s", buf.String())
+	}
+	if !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("error %q does not mention conflict", err)
+	}
+}
+
+func TestRunListConflictInProgressiveResolveReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	// a.b.c: ns "a.b" конфликтен, "a" — валидный модуль с командой b.
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{
+		"a.yaml":          "name: a\ncommands:\n  b:\n    commands:\n      c:\n        commands:\n          d:\n            cmd: \"echo d\"\n",
+		"a/b.yaml":        "name: b\n",
+		"a/b/config.yaml": "name: b\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, path), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var buf bytes.Buffer
+	err := runList(&buf, discovery.NewGlobalSource(dir), "a.b.c", false, false, nil)
+	if err == nil {
+		t.Fatalf("expected conflict error, got output:\n%s", buf.String())
+	}
+	if !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("error %q does not mention conflict", err)
+	}
+}

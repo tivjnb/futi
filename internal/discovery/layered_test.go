@@ -1,7 +1,9 @@
 package discovery
 
 import (
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -230,5 +232,44 @@ func TestLayeredSourceListChildrenRecursive(t *testing.T) {
 	}
 	if byName["images.png"] != "module" {
 		t.Fatalf("expected module 'images.png', got %q", byName["images.png"])
+	}
+}
+
+// makeConflictSource создаёт источник с конфликтной парой a/b.yaml + a/b/config.yaml.
+func makeConflictSource(t *testing.T) *GlobalSource {
+	t.Helper()
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, "a", "b"))
+	writeFile(t, filepath.Join(dir, "a", "b.yaml"), "name: b\n")
+	writeFile(t, filepath.Join(dir, "a", "b", "config.yaml"), "name: b\n")
+	return NewGlobalSource(dir)
+}
+
+func TestLayeredSourceResolveConflictNotSwallowed(t *testing.T) {
+	primary := makeConflictSource(t)
+	fbDir := t.TempDir()
+	mkdir(t, filepath.Join(fbDir, "a"))
+	writeFile(t, filepath.Join(fbDir, "a", "b.yaml"), "name: b\n")
+	fallback := NewGlobalSource(fbDir)
+
+	s := NewLayeredSource(primary, fallback)
+
+	_, _, err := s.Resolve("a.b")
+	if err == nil {
+		t.Fatal("expected conflict error, got fallback result")
+	}
+	if !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("error %q does not mention conflict", err)
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("conflict must not be ErrNotFound: %v", err)
+	}
+}
+
+func TestLayeredSourceResolveNotFoundIsErrNotFound(t *testing.T) {
+	s := NewLayeredSource(NewGlobalSource(t.TempDir()))
+	_, _, err := s.Resolve("zzz")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }

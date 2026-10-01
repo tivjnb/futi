@@ -76,7 +76,7 @@ func (s *GlobalSource) Resolve(namespace string) (string, string, error) {
 	case pkgExists:
 		return pkgPath, filepath.Dir(pkgPath), nil
 	default:
-		return "", "", fmt.Errorf("discovery: module %q not found", namespace)
+		return "", "", newModuleNotFound(namespace)
 	}
 }
 
