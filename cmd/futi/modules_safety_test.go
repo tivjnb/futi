@@ -84,7 +84,9 @@ func TestEnsureWithinRoot_RejectsRoot(t *testing.T) {
 	tmp := t.TempDir()
 	root := filepath.Join(tmp, "m")
 	sub := filepath.Join(root, "sub")
-	os.MkdirAll(sub, 0o755)
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	link := filepath.Join(tmp, "link")
 	if err := os.Symlink(root, link); err != nil {
 		t.Fatal(err)
@@ -102,11 +104,11 @@ func TestEnsureWithinRoot_RejectsRoot(t *testing.T) {
 }
 
 func TestCleanupEmptyParents_RootNotRemoved(t *testing.T) {
-	variants := map[string]func(tmp string) string{
-		"trailing slash": func(tmp string) string { return filepath.Join(tmp, "m2") + "/" },
-		"dot":            func(tmp string) string { return filepath.Join(tmp, "m2") + "/." },
-		"dotdot":         func(tmp string) string { return filepath.Join(tmp, "x", "..", "m2") },
-		"symlink": func(tmp string) string {
+	variants := map[string]func(t *testing.T, tmp string) string{
+		"trailing slash": func(t *testing.T, tmp string) string { return filepath.Join(tmp, "m2") + "/" },
+		"dot":            func(t *testing.T, tmp string) string { return filepath.Join(tmp, "m2") + "/." },
+		"dotdot":         func(t *testing.T, tmp string) string { return filepath.Join(tmp, "x", "..", "m2") },
+		"symlink": func(t *testing.T, tmp string) string {
 			link := filepath.Join(tmp, "link")
 			if err := os.Symlink(filepath.Join(tmp, "m2"), link); err != nil {
 				t.Fatal(err)
@@ -117,11 +119,14 @@ func TestCleanupEmptyParents_RootNotRemoved(t *testing.T) {
 	for name, mkRoot := range variants {
 		t.Run(name, func(t *testing.T) {
 			tmp := t.TempDir()
-			os.MkdirAll(filepath.Join(tmp, "x"), 0o755)
 			ns := filepath.Join(tmp, "m2", "ns")
-			os.MkdirAll(ns, 0o755)
+			for _, d := range []string{filepath.Join(tmp, "x"), ns} {
+				if err := os.MkdirAll(d, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-			cleanupEmptyParents(ns, []string{mkRoot(tmp)})
+			cleanupEmptyParents(ns, []string{mkRoot(t, tmp)})
 
 			if _, err := os.Stat(ns); !os.IsNotExist(err) {
 				t.Error("пустой ns должен быть удалён")

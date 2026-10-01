@@ -163,8 +163,13 @@ func TestRunModulesUninstallRefusesOutsideRoot(t *testing.T) {
 
 func TestParseUninstallArgs_InvalidName(t *testing.T) {
 	for _, name := range []string{"", ".", "..", "a/../b", "/abs", "a//b"} {
-		if _, err := parseUninstallArgs([]string{name, "--force", "--yes"}); err == nil {
+		_, err := parseUninstallArgs([]string{name, "--force", "--yes"})
+		if err == nil {
 			t.Errorf("parseUninstallArgs(%q) должен вернуть ошибку", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "invalid module name") {
+			t.Errorf("parseUninstallArgs(%q) err = %v, want invalid module name", name, err)
 		}
 	}
 }
@@ -175,12 +180,16 @@ func TestUninstall_EmptyNameKeepsRoot(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	moduleDir := filepath.Join(root, "qr")
-	os.MkdirAll(moduleDir, 0o755)
-	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte("name: qr\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte("name: qr\ncommands:\n  run:\n    cmd: echo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(root), newTestCache(), []string{"", "--force", "--yes"})
-	if err == nil {
-		t.Fatal("пустое имя должно давать ошибку")
+	if err == nil || !strings.Contains(err.Error(), "invalid module name") {
+		t.Fatalf("err = %v, want invalid module name", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(moduleDir, "config.yaml")); statErr != nil {
 		t.Fatalf("корень со содержимым должен остаться цел: %v", statErr)
@@ -194,8 +203,12 @@ func TestUninstall_SingleModuleKeepsRootWithSlash(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	moduleDir := filepath.Join(root, "n", "m")
-	os.MkdirAll(moduleDir, 0o755)
-	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte("name: m\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte("name: m\ncommands:\n  run:\n    cmd: echo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(root+"/"), newTestCache(), []string{"n/m", "--force", "--yes"})
 	if err != nil {
