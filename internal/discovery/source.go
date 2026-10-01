@@ -73,21 +73,17 @@ func (s *GlobalSource) Resolve(namespace string) (string, string, error) {
 			return "", "", fmt.Errorf("discovery: invalid namespace %q: empty segment", namespace)
 		}
 	}
-	for i, seg := range segments {
+	for _, seg := range segments {
 		if seg == "config" {
 			return "", "", newModuleNotFound(namespace)
 		}
-		if i == 0 {
-			continue
-		}
-		parentConfig := filepath.Join(s.RootDir, filepath.Join(segments[:i]...), "config.yaml")
-		isPackage, err := statFile(parentConfig)
-		if err != nil {
-			return "", "", fmt.Errorf("discovery: stat %q: %w", parentConfig, err)
-		}
-		if isPackage {
-			return "", "", newModuleNotFound(namespace)
-		}
+	}
+	insidePackage, err := s.withinPackage(segments[:len(segments)-1])
+	if err != nil {
+		return "", "", err
+	}
+	if insidePackage {
+		return "", "", newModuleNotFound(namespace)
 	}
 	relPath := filepath.Join(segments...)
 
@@ -113,6 +109,24 @@ func (s *GlobalSource) Resolve(namespace string) (string, string, error) {
 	default:
 		return "", "", newModuleNotFound(namespace)
 	}
+}
+
+// withinPackage сообщает, что путь segments — пакет или лежит внутри пакета:
+// какой-либо из каталогов segments[:1], segments[:2], …, segments содержит
+// config.yaml. Пакет — лист: ни модулей, ни namespace внутри него нет.
+// Ошибка stat (кроме отсутствия) возвращается: её нельзя считать «не пакет».
+func (s *GlobalSource) withinPackage(segments []string) (bool, error) {
+	for i := 1; i <= len(segments); i++ {
+		configPath := filepath.Join(s.RootDir, filepath.Join(segments[:i]...), "config.yaml")
+		isPackage, err := statFile(configPath)
+		if err != nil {
+			return false, fmt.Errorf("discovery: stat %q: %w", configPath, err)
+		}
+		if isPackage {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // List обходит RootDir и находит все модули:
@@ -256,6 +270,15 @@ func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {
 		}
 		return nil, fmt.Errorf("discovery: list children %q: %w", namespace, err)
 	}
+	if namespace != "" {
+		insidePackage, err := s.withinPackage(strings.Split(namespace, "."))
+		if err != nil {
+			return nil, err
+		}
+		if insidePackage {
+			return nil, nil // пакет — лист: детей нет, как и для Resolve
+		}
+	}
 
 	var children []Child
 	for _, entry := range entries {
@@ -315,6 +338,15 @@ func (s *GlobalSource) ListChildrenRecursive(namespace string) ([]Child, error) 
 			return nil, fmt.Errorf("discovery: namespace %q not found", namespace)
 		}
 		return nil, fmt.Errorf("discovery: list recursive %q: %w", namespace, err)
+	}
+	if namespace != "" {
+		insidePackage, err := s.withinPackage(strings.Split(namespace, "."))
+		if err != nil {
+			return nil, err
+		}
+		if insidePackage {
+			return nil, nil // пакет — лист: потомков нет, как и для Resolve
+		}
 	}
 
 	var result []Child

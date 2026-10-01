@@ -637,6 +637,27 @@ func TestListDoesNotEnterPackages(t *testing.T) {
 	}
 }
 
+// Пакет — лист: внутри namespace-пакета (и глубже) детей нет, как и для
+// Resolve("pk.inner") → not found.
+func TestListChildrenOfPackageIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "pk", "config.yaml"), "name: pk\n")
+	writeFile(t, filepath.Join(dir, "pk", "inner.yaml"), "name: inner\n")
+	writeFile(t, filepath.Join(dir, "pk", "sub", "x.yaml"), "name: x\n")
+
+	s := NewGlobalSource(dir)
+	for _, ns := range []string{"pk", "pk.sub"} {
+		children, err := s.ListChildren(ns)
+		if err != nil || len(children) != 0 {
+			t.Errorf("ListChildren(%q) = %v, %v; want [], nil", ns, children, err)
+		}
+		children, err = s.ListChildrenRecursive(ns)
+		if err != nil || len(children) != 0 {
+			t.Errorf("ListChildrenRecursive(%q) = %v, %v; want [], nil", ns, children, err)
+		}
+	}
+}
+
 func TestListPackageSymlinkNotEntered(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real")
