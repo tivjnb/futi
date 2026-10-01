@@ -550,3 +550,24 @@ func TestListBrokenSymlinkKeptAsFile(t *testing.T) {
 		t.Fatalf("expected broken .yaml symlink to be kept as file module, got %v", names)
 	}
 }
+
+func TestGlobalSourceResolveEmptyNamespace(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "config.yaml"), "cmd: echo root\n")
+	writeFile(t, filepath.Join(dir, "a.yaml"), "cmd: echo a\n")
+	s := NewGlobalSource(dir)
+
+	for _, ns := range []string{"", "a..b", ".a", "a."} {
+		if path, _, err := s.Resolve(ns); err == nil {
+			t.Errorf("Resolve(%q) = %q, ожидалась ошибка", ns, path)
+		}
+	}
+
+	path, _, err := s.Resolve("a")
+	if err != nil {
+		t.Fatalf("Resolve(\"a\"): %v", err)
+	}
+	if want := filepath.Join(dir, "a.yaml"); path != want {
+		t.Errorf("Resolve(\"a\") = %q, want %q", path, want)
+	}
+}

@@ -84,7 +84,8 @@ func Run(
 	// Progressive resolution: пробуем резолвить модуль от длиннейшего
 	// namespace к коротчайшему. Остаток = command path.
 	// i=len(positional) → ns=все, commandPath=[] (default cmd случай).
-	for i := len(positional); i >= 0; i-- {
+	// i>=1: пустой namespace (i=0) модулем не является.
+	for i := len(positional); i >= 1; i-- {
 		ns := strings.Join(positional[:i], ".")
 		commandPath := positional[i:]
 

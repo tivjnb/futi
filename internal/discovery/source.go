@@ -58,8 +58,15 @@ func NewGlobalSource(rootDir string) *GlobalSource {
 //   namespace "dev.deploy" → dev/deploy.yaml или dev/deploy/config.yaml
 //   если найдены оба — ошибка конфликта
 //   если ни один — ошибка not found
+// Пустой namespace и пустые сегменты ("a..b", ".a", "a.") — ошибка:
+// иначе пустой путь резолвился бы в корневой config.yaml.
 func (s *GlobalSource) Resolve(namespace string) (string, string, error) {
 	segments := strings.Split(namespace, ".")
+	for _, seg := range segments {
+		if seg == "" {
+			return "", "", fmt.Errorf("discovery: invalid namespace %q: empty segment", namespace)
+		}
+	}
 	relPath := filepath.Join(segments...)
 
 	yamlPath := filepath.Join(s.RootDir, relPath+".yaml")

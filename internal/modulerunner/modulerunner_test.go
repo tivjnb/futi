@@ -943,3 +943,27 @@ cmd: "sh -c 'if [ -n \"$FUTI_CWD\" ]; then echo HAS_FUTI_CWD; else echo NO_FUTI_
 		t.Fatalf("env FUTI_CWD = %q, want absent (WORKDIR.md §2.3)", got)
 	}
 }
+
+// Корневой config.yaml не должен становиться модулем для пустого/неизвестного namespace.
+func TestRunRootConfigNotUsedAsModule(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("name: root\ncmd: echo ROOTCFG\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source := discovery.NewGlobalSource(dir)
+
+	var stdout bytes.Buffer
+	err := Run(context.Background(), source, "zzz", "x", map[string]string{}, "", nil, &stdout, nil, nil)
+	if err == nil {
+		t.Fatal("ожидалась ошибка для неизвестного модуля")
+	}
+	if !strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), `in module ""`) {
+		t.Errorf("Run(zzz, x) err = %q, ожидалось not found без `in module \"\"`", err)
+	}
+
+	stdout.Reset()
+	err = Run(context.Background(), source, "", "", map[string]string{}, "", nil, &stdout, nil, nil)
+	if err == nil {
+		t.Errorf("Run(\"\", \"\") без ошибки, stdout=%q", stdout.String())
+	}
+}
