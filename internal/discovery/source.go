@@ -358,7 +358,7 @@ func (s *GlobalSource) namespaceDir(namespace string) (string, error) {
 			return "", fmt.Errorf("discovery: invalid namespace %q: empty segment", namespace)
 		}
 		if !validSegment(seg) {
-			return "", fmt.Errorf("discovery: namespace %q not found", namespace)
+			return "", newNamespaceNotFound(namespace)
 		}
 	}
 	return filepath.Join(s.RootDir, filepath.Join(segments...)), nil
@@ -382,7 +382,7 @@ func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {
 			if namespace == "" {
 				return nil, nil
 			}
-			return nil, fmt.Errorf("discovery: namespace %q not found", namespace)
+			return nil, newNamespaceNotFound(namespace)
 		}
 		return nil, fmt.Errorf("discovery: list children %q: %w", namespace, err)
 	}
@@ -429,7 +429,7 @@ func (s *GlobalSource) ListChildrenRecursive(namespace string) ([]Child, error) 
 			if namespace == "" {
 				return nil, nil
 			}
-			return nil, fmt.Errorf("discovery: namespace %q not found", namespace)
+			return nil, newNamespaceNotFound(namespace)
 		}
 		return nil, fmt.Errorf("discovery: list recursive %q: %w", namespace, err)
 	}

@@ -20,3 +20,10 @@ func (e *notFoundError) Is(target error) bool { return target == ErrNotFound }
 func newModuleNotFound(namespace string) error {
 	return &notFoundError{msg: fmt.Sprintf("discovery: module %q not found", namespace)}
 }
+
+// newNamespaceNotFound — ошибка «namespace не найден» в листингах с прежним
+// текстом; совпадает с ErrNotFound, чтобы LayeredSource отличал отсутствие
+// namespace в слое от конфликта и ошибок ввода-вывода.
+func newNamespaceNotFound(namespace string) error {
+	return &notFoundError{msg: fmt.Sprintf("discovery: namespace %q not found", namespace)}
+}

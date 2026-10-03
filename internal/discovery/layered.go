@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 )
 
@@ -53,7 +52,7 @@ func (s *FileSource) ListChildren(namespace string) ([]Child, error) {
 			},
 		}, nil
 	}
-	return nil, fmt.Errorf("discovery: namespace %q not found", namespace)
+	return nil, newNamespaceNotFound(namespace)
 }
 
 func (s *FileSource) ListChildrenRecursive(namespace string) ([]Child, error) {
@@ -144,11 +143,11 @@ func (s *LayeredSource) ListChildren(namespace string) ([]Child, error) {
 // ListChildrenRecursive делегирует обход поддерева каждому слою (защита от
 // циклов симлинков — в самих слоях) и сливает результаты как ListChildren:
 // ключ — пара (имя, тип), побеждает верхний слой, Conflict сохраняется.
-// Слой, который не может листить сам namespace (например, его там нет),
-// пропускается, если namespace листит другой слой; если не может никто —
-// ошибка. Ошибка внутри поддерева слоя (namespace слой листит, а обход —
-// нет: конфликт модуля из двух sources в Composite) пробрасывается всегда:
-// иначе пропал бы весь слой, а конфликт остался бы незамеченным.
+// Слой, в котором namespace нет (ErrNotFound), пропускается, если namespace
+// листит другой слой; если не листит никто — ошибка «не найден». Остальные
+// ошибки (конфликт модуля из двух sources в Composite на любом уровне,
+// invalid namespace, ввод-вывод) пробрасываются всегда: иначе пропал бы
+// весь слой, а ошибка осталась бы незамеченной.
 func (s *LayeredSource) ListChildrenRecursive(namespace string) ([]Child, error) {
 	var lists [][]Child
 	var anyErr error
@@ -157,7 +156,7 @@ func (s *LayeredSource) ListChildrenRecursive(namespace string) ([]Child, error)
 	for _, layer := range s.layers {
 		children, err := layer.ListChildrenRecursive(namespace)
 		if err != nil {
-			if _, levelErr := layer.ListChildren(namespace); levelErr == nil {
+			if !errors.Is(err, ErrNotFound) {
 				return nil, err
 			}
 			anyErr = err

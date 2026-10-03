@@ -367,12 +367,13 @@ func TestLayeredRecursiveLoopMatchesGlobal(t *testing.T) {
 	}
 }
 
-// TestLayeredRecursiveLayerErrors фиксирует решение об ошибках слоёв:
-// слой, у которого нет запрошенного namespace, пропускается, если другой
-// слой его листит (как в ListChildren); единственный слой — ошибка
-// пробрасывается; ошибка внутри поддерева слоя (конфликт модуля из двух
-// sources в Composite на глубине) пробрасывается всегда — иначе пропал бы
-// весь слой, а конфликт остался бы незамеченным.
+// TestLayeredRecursiveLayerErrors фиксирует решение об ошибках слоёв
+// (решает тип ошибки): слой, у которого нет запрошенного namespace
+// (ErrNotFound), пропускается, если namespace листит другой слой; если не
+// листит никто — ошибка ErrNotFound пробрасывается. Остальные ошибки
+// (конфликт модуля из двух sources в Composite на любом уровне, invalid
+// namespace) пробрасываются всегда — иначе пропал бы весь слой, а ошибка
+// осталась бы незамеченной.
 func TestLayeredRecursiveLayerErrors(t *testing.T) {
 	onlyNs := t.TempDir()
 	writeFile(t, filepath.Join(onlyNs, "ns", "m.yaml"), "name: m\n")
@@ -383,27 +384,87 @@ func TestLayeredRecursiveLayerErrors(t *testing.T) {
 	writeFile(t, filepath.Join(conflictDir2, "ns", "docker.yaml"), "name: docker\n")
 	conflicting := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: conflictDir1}, {Path: conflictDir2}}})
 
+	rootConflictDir1 := t.TempDir()
+	rootConflictDir2 := t.TempDir()
+	writeFile(t, filepath.Join(rootConflictDir1, "docker.yaml"), "name: docker\n")
+	writeFile(t, filepath.Join(rootConflictDir2, "docker.yaml"), "name: docker\n")
+	rootConflicting := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: rootConflictDir1}, {Path: rootConflictDir2}}})
+
 	local := t.TempDir()
 	writeFile(t, filepath.Join(local, "futi.yaml"), "name: local\n")
 	fileSrc := NewFileSource(filepath.Join(local, "futi.yaml"), local, "local")
 
+	const (
+		noErr = iota
+		notFoundErr
+		otherErr // ошибка, не являющаяся ErrNotFound
+	)
 	tests := []struct {
 		name      string
 		src       Source
 		namespace string
-		wantErr   bool
+		want      int
 	}{
-		{"namespace только в нижнем слое", NewLayeredSource(NewGlobalSource(t.TempDir()), NewGlobalSource(onlyNs)), "ns", false},
-		{"единственный слой без namespace", NewLayeredSource(NewGlobalSource(onlyNs)), "nope", true},
-		{"единственный слой с конфликтом", NewLayeredSource(conflicting), "", true},
-		{"FileSource поверх конфликта", NewLayeredSource(fileSrc, conflicting), "", true},
-		{"конфликт за namespace другого слоя", NewLayeredSource(NewGlobalSource(onlyNs), conflicting), "", true},
+		{"namespace только в нижнем слое", NewLayeredSource(NewGlobalSource(t.TempDir()), NewGlobalSource(onlyNs)), "ns", noErr},
+		{"FileSource не листит namespace", NewLayeredSource(fileSrc, NewGlobalSource(onlyNs)), "ns", noErr},
+		{"единственный слой без namespace", NewLayeredSource(NewGlobalSource(onlyNs)), "nope", notFoundErr},
+		{"ни один слой не листит namespace", NewLayeredSource(fileSrc, NewGlobalSource(onlyNs)), "nope", notFoundErr},
+		{"единственный слой с конфликтом", NewLayeredSource(conflicting), "", otherErr},
+		{"FileSource поверх конфликта", NewLayeredSource(fileSrc, conflicting), "", otherErr},
+		{"FileSource поверх конфликта в корне Composite", NewLayeredSource(fileSrc, rootConflicting), "", otherErr},
+		{"конфликт за namespace другого слоя", NewLayeredSource(NewGlobalSource(onlyNs), conflicting), "", otherErr},
+		{"запрос ns при конфликте в ns", NewLayeredSource(NewGlobalSource(onlyNs), conflicting), "ns", otherErr},
+		{"invalid namespace не маскируется другим слоем", NewLayeredSource(NewGlobalSource(onlyNs), conflicting), "a..b", otherErr},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := tt.src.ListChildrenRecursive(tt.namespace)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("ListChildrenRecursive(%q) err = %v, wantErr %v", tt.namespace, err, tt.wantErr)
+			children, err := tt.src.ListChildrenRecursive(tt.namespace)
+			got := noErr
+			switch {
+			case errors.Is(err, ErrNotFound):
+				got = notFoundErr
+			case err != nil:
+				got = otherErr
+			}
+			if got != tt.want {
+				t.Fatalf("ListChildrenRecursive(%q) = %+v, err = %v; want вид ошибки %d (0 — нет, 1 — ErrNotFound, 2 — другая)", tt.namespace, children, err, tt.want)
+			}
+		})
+	}
+}
+
+// TestListChildrenMissingNamespaceIsErrNotFound: отсутствующий namespace в
+// листингах — ErrNotFound (Layered по нему отличает «слоя нет» от ошибки);
+// invalid namespace — не ErrNotFound.
+func TestListChildrenMissingNamespaceIsErrNotFound(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "ns", "m.yaml"), "name: m\n")
+	writeFile(t, filepath.Join(dir, "config", "x.yaml"), "name: x\n")
+	global := NewGlobalSource(dir)
+	file := NewFileSource(filepath.Join(dir, "ns", "m.yaml"), filepath.Join(dir, "ns"), "m")
+
+	tests := []struct {
+		name         string
+		list         func() ([]Child, error)
+		wantNotFound bool
+	}{
+		{"Global.ListChildren: нет каталога", func() ([]Child, error) { return global.ListChildren("nope") }, true},
+		{"Global.ListChildren: сегмент config", func() ([]Child, error) { return global.ListChildren("config") }, true},
+		{"Global.ListChildrenRecursive: нет каталога", func() ([]Child, error) { return global.ListChildrenRecursive("nope") }, true},
+		{"Global.ListChildrenRecursive: сегмент config", func() ([]Child, error) { return global.ListChildrenRecursive("config") }, true},
+		{"FileSource.ListChildren", func() ([]Child, error) { return file.ListChildren("ns") }, true},
+		{"FileSource.ListChildrenRecursive", func() ([]Child, error) { return file.ListChildrenRecursive("ns") }, true},
+		{"Global.ListChildren: invalid namespace", func() ([]Child, error) { return global.ListChildren("a..b") }, false},
+		{"Global.ListChildrenRecursive: invalid namespace", func() ([]Child, error) { return global.ListChildrenRecursive("a..b") }, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.list()
+			if err == nil {
+				t.Fatal("ожидалась ошибка")
+			}
+			if errors.Is(err, ErrNotFound) != tt.wantNotFound {
+				t.Fatalf("err = %v, errors.Is(ErrNotFound) = %v, want %v", err, errors.Is(err, ErrNotFound), tt.wantNotFound)
 			}
 		})
 	}
