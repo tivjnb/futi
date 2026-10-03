@@ -548,7 +548,10 @@ func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader
 			path = c.ManifestPath
 			if c.Conflict {
 				// Resolve для такого имени вернёт ошибку конфликта: описание не грузим.
-				desc = "конфликт: " + c.Name + ".yaml и " + c.Name + "/config.yaml"
+				// ManifestPath конфликтной записи — от x.yaml; c.Name в `list -r` —
+				// полный путь (ns.x), поэтому имена файлов берём из пути.
+				base := filepath.Base(c.ManifestPath)
+				desc = "конфликт: " + base + " и " + strings.TrimSuffix(base, ".yaml") + "/config.yaml"
 			} else if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err == nil {
 				desc = mod.Description
 			}

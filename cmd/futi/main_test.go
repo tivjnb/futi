@@ -545,6 +545,27 @@ func TestRunListShowsConflict(t *testing.T) {
 	if n := strings.Count(out, "module"); n != 1 {
 		t.Errorf("строк module = %d, want 1:\n%s", n, out)
 	}
+
+	// Вложенный namespace в `list -r`: имя записи — полный путь ns.x, но в
+	// тексте конфликта — имена файлов, а не ns.x.yaml и ns.x/config.yaml.
+	nested := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(nested, "ns", "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMainTestFile(t, filepath.Join(nested, "ns", "x.yaml"), "name: x\ncmd: echo x\n")
+	writeMainTestFile(t, filepath.Join(nested, "ns", "x", "config.yaml"), "name: x\ncmd: echo x\n")
+
+	buf.Reset()
+	if err := runList(&buf, discovery.NewGlobalSource(nested), "", false, true, nil); err != nil {
+		t.Fatalf("list -r: unexpected error: %v", err)
+	}
+	out = buf.String()
+	if !strings.Contains(out, "ns.x") || !strings.Contains(out, "конфликт: x.yaml и x/config.yaml") {
+		t.Errorf("list -r: нет записи ns.x с описанием конфликта по именам файлов:\n%s", out)
+	}
+	if strings.Contains(out, "ns.x.yaml") {
+		t.Errorf("list -r: в тексте конфликта полный путь namespace вместо имени файла:\n%s", out)
+	}
 }
 
 func TestRunListSubcommands(t *testing.T) {
