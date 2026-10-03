@@ -468,6 +468,7 @@ func TestListChildrenMissingNamespaceIsErrNotFound(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "ns", "m.yaml"), "name: m\n")
 	writeFile(t, filepath.Join(dir, "config", "x.yaml"), "name: x\n")
+	writeFile(t, filepath.Join(dir, "notes"), "обычный файл, не каталог\n")
 	global := NewGlobalSource(dir)
 	file := NewFileSource(filepath.Join(dir, "ns", "m.yaml"), filepath.Join(dir, "ns"), "m")
 
@@ -480,6 +481,10 @@ func TestListChildrenMissingNamespaceIsErrNotFound(t *testing.T) {
 		{"Global.ListChildren: сегмент config", func() ([]Child, error) { return global.ListChildren("config") }, true},
 		{"Global.ListChildrenRecursive: нет каталога", func() ([]Child, error) { return global.ListChildrenRecursive("nope") }, true},
 		{"Global.ListChildrenRecursive: сегмент config", func() ([]Child, error) { return global.ListChildrenRecursive("config") }, true},
+		{"Global.ListChildren: namespace — обычный файл", func() ([]Child, error) { return global.ListChildren("notes") }, true},
+		{"Global.ListChildren: сегмент — обычный файл", func() ([]Child, error) { return global.ListChildren("notes.sub") }, true},
+		{"Global.ListChildrenRecursive: namespace — обычный файл", func() ([]Child, error) { return global.ListChildrenRecursive("notes") }, true},
+		{"Global.ListChildrenRecursive: сегмент — обычный файл", func() ([]Child, error) { return global.ListChildrenRecursive("notes.sub") }, true},
 		{"FileSource.ListChildren", func() ([]Child, error) { return file.ListChildren("ns") }, true},
 		{"FileSource.ListChildrenRecursive", func() ([]Child, error) { return file.ListChildrenRecursive("ns") }, true},
 		{"Global.ListChildren: invalid namespace", func() ([]Child, error) { return global.ListChildren("a..b") }, false},
@@ -495,6 +500,28 @@ func TestListChildrenMissingNamespaceIsErrNotFound(t *testing.T) {
 				t.Fatalf("err = %v, errors.Is(ErrNotFound) = %v, want %v", err, errors.Is(err, ErrNotFound), tt.wantNotFound)
 			}
 		})
+	}
+}
+
+// TestLayeredRecursiveSkipsLayerWhereSegmentIsFile: в верхнем слое сегмент
+// namespace — обычный файл (notes), в нижнем notes/sub — namespace. Верхний
+// слой namespace не листит (ErrNotFound), list -r показывает нижний.
+func TestLayeredRecursiveSkipsLayerWhereSegmentIsFile(t *testing.T) {
+	upper := t.TempDir()
+	writeFile(t, filepath.Join(upper, "notes"), "обычный файл, не каталог\n")
+	lower := t.TempDir()
+	writeFile(t, filepath.Join(lower, "notes", "sub", "m.yaml"), "name: m\n")
+
+	s := NewLayeredSource(NewGlobalSource(upper), NewGlobalSource(lower))
+	got, err := s.ListChildrenRecursive("notes.sub")
+	if err != nil {
+		t.Fatalf("ListChildrenRecursive(notes.sub): %v", err)
+	}
+	want := []Child{
+		{Name: "m", Type: "module", ManifestPath: filepath.Join(lower, "notes", "sub", "m.yaml"), ModuleRoot: filepath.Join(lower, "notes", "sub")},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListChildrenRecursive(notes.sub) =\n%+v\nwant\n%+v", got, want)
 	}
 }
 

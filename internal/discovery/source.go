@@ -378,7 +378,8 @@ func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {
 
 	entries, err := readModuleEntries(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		// ENOTDIR — сегмент namespace оказался файлом: namespace нет, как и в Resolve.
+		if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) {
 			if namespace == "" {
 				return nil, nil
 			}
@@ -423,15 +424,17 @@ func (s *GlobalSource) ListChildrenRecursive(namespace string) ([]Child, error) 
 	if err != nil {
 		return nil, err
 	}
-	// Проверяем существование namespace
-	if _, err := os.Stat(dir); err != nil {
-		if os.IsNotExist(err) {
-			if namespace == "" {
-				return nil, nil
-			}
-			return nil, newNamespaceNotFound(namespace)
-		}
+	// Проверяем существование namespace. Не каталог (сегмент или сам
+	// namespace — файл) — namespace нет, как и в Resolve.
+	info, err := os.Stat(dir)
+	if err != nil && !os.IsNotExist(err) && !errors.Is(err, syscall.ENOTDIR) {
 		return nil, fmt.Errorf("discovery: list recursive %q: %w", namespace, err)
+	}
+	if err != nil || !info.IsDir() {
+		if namespace == "" {
+			return nil, nil
+		}
+		return nil, newNamespaceNotFound(namespace)
 	}
 	if namespace != "" {
 		insidePackage, err := s.withinPackage(strings.Split(namespace, "."))
