@@ -42,5 +42,3 @@ func runModules(w io.Writer, stdin io.Reader, source discovery.Source, cache *mo
 		return fmt.Errorf("unknown modules subcommand %q", sub)
 	}
 }
-
-

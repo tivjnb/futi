@@ -438,7 +438,7 @@ cmd: "echo v1"`)
 	cache.entries[modPath] = entry{
 		Module:  &execmodule.Module{Name: "old_app"},
 		ModTime: time.Now().Add(-1 * time.Hour), // старое время
-		Size:    999,                             // не совпадает
+		Size:    999,                            // не совпадает
 	}
 	cache.persistentPaths[modPath] = true
 	cache.mu.Unlock()

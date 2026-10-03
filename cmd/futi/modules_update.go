@@ -12,8 +12,8 @@ import (
 	"futi/internal/discovery"
 	"futi/internal/execmodule"
 	"futi/internal/metayaml"
-	"futi/internal/modulerunner"
 	"futi/internal/modulecache"
+	"futi/internal/modulerunner"
 )
 
 // updateArgs — аргументы `futi modules update`.

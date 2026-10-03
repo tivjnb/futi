@@ -12,8 +12,8 @@ import (
 	"futi/internal/discovery"
 	"futi/internal/execmodule"
 	"futi/internal/metayaml"
-	"futi/internal/modulerunner"
 	"futi/internal/modulecache"
+	"futi/internal/modulerunner"
 )
 
 // uninstallArgs — аргументы `futi modules uninstall`.

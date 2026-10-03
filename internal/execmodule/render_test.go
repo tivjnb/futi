@@ -450,6 +450,7 @@ func TestValidatePositionalMinZero(t *testing.T) {
 		t.Fatalf("min 0 should always pass: %v", err)
 	}
 }
+
 // --- {{quote}} (REV-004: защита от argv/flag-инъекции через re-shlex) ---
 
 // TestQuoteShlexRoundTrip проверяет, что quoteShlex(v) после shlex.Split
@@ -577,7 +578,7 @@ func TestRenderModuleNameSubstituted(t *testing.T) {
 // TestRenderModuleRootQuoteSpacesInPath проверяет, что {{quote .module_root}}
 // даёт ровно ОДИН argv-токен даже если в пути есть пробелы (POSIX shlex:
 // quote обрамляет одинарными кавычками, спецсимволы внутри безопасно
-// экранируются через '\''). WORKDIR.md §3.2 каноничная форма.
+// экранируются, см. quoteShlex). WORKDIR.md §3.2 каноничная форма.
 func TestRenderModuleRootQuoteSpacesInPath(t *testing.T) {
 	cmd := &Command{Cmd: `{{quote .module_root}}/scripts/x.sh {{.arg}}`}
 	rendered, err := cmd.Render(map[string]string{"arg": "hello"}, "", nil, ModuleRef{Name: "mod", Root: "/path with spaces/mod"})
