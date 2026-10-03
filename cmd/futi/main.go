@@ -546,7 +546,10 @@ func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader
 		var desc, path string
 		if c.Type == "module" {
 			path = c.ManifestPath
-			if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err == nil {
+			if c.Conflict {
+				// Resolve для такого имени вернёт ошибку конфликта: описание не грузим.
+				desc = "конфликт: " + c.Name + ".yaml и " + c.Name + "/config.yaml"
+			} else if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err == nil {
 				desc = mod.Description
 			}
 		}

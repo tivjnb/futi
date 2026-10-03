@@ -521,6 +521,32 @@ func TestPrintChildrenSortedAlphabetically(t *testing.T) {
 	}
 }
 
+// TestRunListShowsConflict: x.yaml рядом с x/config.yaml — одна строка x
+// с описанием конфликта вместо описания модуля.
+func TestRunListShowsConflict(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMainTestFile(t, filepath.Join(dir, "x.yaml"), "name: x\ndescription: Описание-из-yaml\ncmd: echo x\n")
+	writeMainTestFile(t, filepath.Join(dir, "x", "config.yaml"), "name: x\ndescription: Описание-из-пакета\ncmd: echo x\n")
+
+	var buf bytes.Buffer
+	if err := runList(&buf, discovery.NewGlobalSource(dir), "", false, false, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "конфликт: x.yaml и x/config.yaml") {
+		t.Errorf("нет описания конфликта:\n%s", out)
+	}
+	if strings.Contains(out, "Описание-из") {
+		t.Errorf("для конфликта не должно подтягиваться описание модуля:\n%s", out)
+	}
+	if n := strings.Count(out, "module"); n != 1 {
+		t.Errorf("строк module = %d, want 1:\n%s", n, out)
+	}
+}
+
 func TestRunListSubcommands(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "db.yaml")

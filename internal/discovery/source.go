@@ -23,6 +23,7 @@ type Child struct {
 	Type         string // "namespace" или "module"
 	ManifestPath string // путь к манифесту (для module)
 	ModuleRoot   string // корень модуля (для module)
+	Conflict     bool   // рядом лежат x.yaml и x/config.yaml: Resolve вернёт ошибку конфликта
 }
 
 // Source — источник модулей. Реализации: GlobalSource (один каталог),
@@ -204,10 +205,14 @@ type moduleEntry struct {
 	path         string // путь записи: каталог или .yaml-файл
 	manifestPath string // манифест (для пакета и yaml-модуля)
 	moduleRoot   string // корень модуля (для пакета и yaml-модуля)
+	conflict     bool   // x.yaml и x/config.yaml рядом: записи сведены в одну
 }
 
 // readModuleEntries читает dir и классифицирует записи (classifyEntry);
 // пропущенные записи не возвращаются. Порядок — как у os.ReadDir (по имени).
+// Конфликт x.yaml и x/config.yaml (Resolve вернёт для него ошибку) сводится
+// в одну запись yaml-модуля с conflict=true: манифест от x.yaml,
+// детерминированно; запись-пакет отбрасывается.
 // Общий шаг всех обходов GlobalSource: листинги согласованы между собой
 // и с Resolve.
 func readModuleEntries(dir string) ([]moduleEntry, error) {
@@ -221,7 +226,35 @@ func readModuleEntries(dir string) ([]moduleEntry, error) {
 			entries = append(entries, e)
 		}
 	}
-	return entries, nil
+	return mergeConflicts(entries), nil
+}
+
+// mergeConflicts сводит пары «yaml-модуль x + пакет x» в одну запись
+// yaml-модуля с conflict=true. Остальные записи и их порядок не меняются.
+func mergeConflicts(entries []moduleEntry) []moduleEntry {
+	packages := make(map[string]bool)
+	for _, e := range entries {
+		if e.kind == entryPackage {
+			packages[e.name] = true
+		}
+	}
+	yamlWithPackage := make(map[string]bool)
+	merged := make([]moduleEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.kind == entryYAMLModule && packages[e.name] {
+			e.conflict = true
+			yamlWithPackage[e.name] = true
+		}
+		merged = append(merged, e)
+	}
+	result := merged[:0]
+	for _, e := range merged {
+		if e.kind == entryPackage && yamlWithPackage[e.name] {
+			continue
+		}
+		result = append(result, e)
+	}
+	return result
 }
 
 // classifyEntry определяет вид записи de каталога dir, следуя симлинкам.
@@ -367,6 +400,7 @@ func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {
 			Type:         "module",
 			ManifestPath: e.manifestPath,
 			ModuleRoot:   e.moduleRoot,
+			Conflict:     e.conflict,
 		})
 	}
 
@@ -444,6 +478,7 @@ func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child
 			Type:         "module",
 			ManifestPath: e.manifestPath,
 			ModuleRoot:   e.moduleRoot,
+			Conflict:     e.conflict,
 		})
 	}
 }

@@ -281,7 +281,7 @@ func namespaceMatches(source discovery.Source, loader modulerunner.ModuleLoader,
 	if children, err := source.ListChildren(ns); err == nil {
 		for _, c := range children {
 			m := Match{Text: c.Name}
-			if c.Type == "module" {
+			if c.Type == "module" && !c.Conflict { // конфликтный модуль не загружаем
 				// Подтягиваем описание модуля (zsh); ошибку игнорируем.
 				if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err == nil {
 					m.Description = mod.Description

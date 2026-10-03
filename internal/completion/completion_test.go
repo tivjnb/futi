@@ -372,6 +372,28 @@ func TestCompleteRootChildrenDescriptions(t *testing.T) {
 	}
 }
 
+// TestCompleteConflictHasNoDescription: для x.yaml + x/config.yaml подсказка x
+// одна и без описания модуля.
+func TestCompleteConflictHasNoDescription(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "x.yaml"), "name: x\ndescription: Описание-из-yaml\ncmd: echo x\n")
+	writeFile(t, filepath.Join(dir, "x", "config.yaml"), "name: x\ndescription: Описание-из-пакета\ncmd: echo x\n")
+
+	matches, _ := Complete(discovery.NewGlobalSource(dir), nil, []string{}, "x")
+	n := 0
+	for _, m := range matches {
+		if m.Text == "x" {
+			n++
+			if m.Description != "" {
+				t.Errorf("Description = %q, want пусто", m.Description)
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("подсказок x = %d, want 1: %v", n, matches)
+	}
+}
+
 // newHelpSource создаёт модуль с user-defined командой "help", чтобы проверить,
 // что системная подсказка help не дублируется.
 func newHelpSource(t *testing.T) discovery.Source {

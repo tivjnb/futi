@@ -680,9 +680,13 @@ func TestListingsAgree(t *testing.T) {
 	writeFile(t, filepath.Join(root, "dev", "tools", "bad.name.yaml"), "name: bad\n")
 	writeFile(t, filepath.Join(dir, "outside", "ext.yaml"), "name: ext\n")
 	symlinkOrFail(t, filepath.Join(dir, "outside"), filepath.Join(root, "linked"))
+	// Конфликт x.yaml vs x/config.yaml: в листингах одна запись cx, Resolve — ошибка.
+	writeFile(t, filepath.Join(root, "cx.yaml"), "name: cx\n")
+	writeFile(t, filepath.Join(root, "cx", "config.yaml"), "name: cx\n")
 
 	s := NewGlobalSource(root)
 	want := map[string]string{
+		"cx":             filepath.Join(root, "cx.yaml"),
 		"ok":             filepath.Join(root, "ok.yaml"),
 		"ns.m":           filepath.Join(root, "ns", "m.yaml"),
 		"dev.deploy":     filepath.Join(root, "dev", "deploy", "config.yaml"),
@@ -734,11 +738,108 @@ func TestListingsAgree(t *testing.T) {
 		}
 	}
 
+	// map прячет дубли: сверяем и число записей-модулей.
+	modules, err := s.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(modules) != len(want) {
+		t.Errorf("List: %d записей, want %d: %v", len(modules), len(want), modules)
+	}
+	recModules := 0
+	for _, c := range rec {
+		if c.Type == "module" {
+			recModules++
+		}
+	}
+	if recModules != len(want) {
+		t.Errorf("ListChildrenRecursive: %d модулей, want %d", recModules, len(want))
+	}
+
 	for name, manifest := range fromList {
+		if name == "cx" {
+			continue // конфликт: Resolve возвращает ошибку по замыслу
+		}
 		got, _, err := s.Resolve(name)
 		if err != nil || got != manifest {
 			t.Errorf("Resolve(%q) = %q, %v; want %q (листинг показал)", name, got, err, manifest)
 		}
+	}
+}
+
+// TestListConflictYamlVsPackageIsMarked: x.yaml рядом с x/config.yaml в
+// листингах — одна запись x с Conflict (манифест от x.yaml), а Resolve
+// по-прежнему возвращает ошибку конфликта, не ErrNotFound.
+func TestListConflictYamlVsPackageIsMarked(t *testing.T) {
+	for _, ns := range []string{"", "ns"} {
+		t.Run("namespace="+ns, func(t *testing.T) {
+			root := t.TempDir()
+			base := root
+			if ns != "" {
+				base = filepath.Join(root, ns)
+			}
+			writeFile(t, filepath.Join(base, "x.yaml"), "name: x\n")
+			writeFile(t, filepath.Join(base, "x", "config.yaml"), "name: x\n")
+			writeFile(t, filepath.Join(base, "y.yaml"), "name: y\n")
+			s := NewGlobalSource(root)
+			wantManifest := filepath.Join(base, "x.yaml")
+
+			check := func(label string, children []Child, err error, wantName string) {
+				t.Helper()
+				if err != nil {
+					t.Fatalf("%s: %v", label, err)
+				}
+				var got []Child
+				for _, c := range children {
+					if c.Name == wantName {
+						got = append(got, c)
+					}
+				}
+				if len(got) != 1 {
+					t.Fatalf("%s: записей %q = %d (%v), want 1", label, wantName, len(got), children)
+				}
+				if got[0].Type != "module" || !got[0].Conflict || got[0].ManifestPath != wantManifest || got[0].ModuleRoot != base {
+					t.Errorf("%s: %+v, want module Conflict=true ManifestPath=%q ModuleRoot=%q", label, got[0], wantManifest, base)
+				}
+				for _, c := range children {
+					if c.Name != wantName && c.Conflict {
+						t.Errorf("%s: Conflict у неконфликтной записи %+v", label, c)
+					}
+				}
+			}
+
+			children, err := s.ListChildren(ns)
+			check("ListChildren", children, err, "x")
+
+			rec, err := s.ListChildrenRecursive(ns)
+			check("ListChildrenRecursive", rec, err, "x")
+
+			fullName := "x"
+			if ns != "" {
+				fullName = ns + ".x"
+			}
+			modules, err := s.List()
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			count := 0
+			for _, m := range modules {
+				if m.Name == fullName {
+					count++
+					if m.ManifestPath != wantManifest {
+						t.Errorf("List: ManifestPath = %q, want %q", m.ManifestPath, wantManifest)
+					}
+				}
+			}
+			if count != 1 {
+				t.Errorf("List: записей %q = %d, want 1", fullName, count)
+			}
+
+			_, _, err = s.Resolve(fullName)
+			if err == nil || errors.Is(err, ErrNotFound) {
+				t.Errorf("Resolve(%q) err = %v, want ошибка конфликта (не ErrNotFound)", fullName, err)
+			}
+		})
 	}
 }
 
