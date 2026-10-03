@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sync"
@@ -127,14 +128,36 @@ func (c *Cache) LoadModuleVerified(manifestPath, moduleRoot string) (*execmodule
 	return mod, nil
 }
 
-// hashFile возвращает SHA-256 содержимого файла.
+// hashFile возвращает SHA-256 содержимого файла. Вызывается раньше
+// execmodule.LoadModule, поэтому сам соблюдает его ограничения манифеста:
+// только обычный файл (FIFO/устройство заблокировали бы чтение) не больше
+// execmodule.MaxManifestSize.
 func hashFile(path string) ([]byte, error) {
-	data, err := os.ReadFile(path)
+	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
-	sum := sha256.Sum256(data)
-	return sum[:], nil
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("modulecache: манифест %q — не обычный файл", path)
+	}
+	if info.Size() > execmodule.MaxManifestSize {
+		return nil, fmt.Errorf("modulecache: манифест %q: размер %d байт превышает лимит %d", path, info.Size(), execmodule.MaxManifestSize)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	// limit+1 байт: файл мог вырасти после Stat, хешировать усечённое нельзя.
+	n, err := io.Copy(h, io.LimitReader(f, execmodule.MaxManifestSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if n > execmodule.MaxManifestSize {
+		return nil, fmt.Errorf("modulecache: манифест %q: размер превышает лимит %d байт", path, execmodule.MaxManifestSize)
+	}
+	return h.Sum(nil), nil
 }
 
 // Load загружает entries из storage без вызова Refresh. Возвращает cacheFile

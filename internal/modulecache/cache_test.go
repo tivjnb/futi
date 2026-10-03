@@ -2,6 +2,7 @@ package modulecache
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"log"
@@ -948,6 +949,137 @@ func TestCacheRefreshFIFOInTreeDoesNotHang(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Refresh завис на FIFO в дереве модулей")
 	}
+}
+
+// manifestLimit — лимит размера манифеста (1 МиБ), общий с execmodule.
+const manifestLimit = 1 << 20
+
+// mkfifoUnblocked создаёт FIFO и снимает возможную блокировку его читателя в
+// t.Cleanup, чтобы горутина не протекла при падении теста.
+func mkfifoUnblocked(t *testing.T, path string) {
+	t.Helper()
+	if err := syscall.Mkfifo(path, 0o644); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+	t.Cleanup(func() {
+		if f, err := os.OpenFile(path, os.O_RDWR, 0); err == nil {
+			f.Close()
+		}
+	})
+}
+
+// withTimeout выполняет fn в горутине и падает, если она не завершилась за 5 с.
+func withTimeout(t *testing.T, what string, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s: завис", what)
+	}
+}
+
+// TestHashFileRespectsManifestLimit: hashFile не читает то, что execmodule не
+// примет как манифест: FIFO (чтение блокируется) и файл больше лимита
+// (отвергается до чтения целиком); файл ровно в лимит хешируется.
+func TestHashFileRespectsManifestLimit(t *testing.T) {
+	t.Run("fifo", func(t *testing.T) {
+		fifo := filepath.Join(t.TempDir(), "x.yaml")
+		mkfifoUnblocked(t, fifo)
+		var err error
+		withTimeout(t, "hashFile(FIFO)", func() { _, err = hashFile(fifo) })
+		if err == nil {
+			t.Fatal("hashFile(FIFO): ожидалась ошибка")
+		}
+	})
+
+	t.Run("больше лимита", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "big.yaml")
+		writeFile(t, path, strings.Repeat("a", manifestLimit+1))
+		_, err := hashFile(path)
+		if err == nil || !strings.Contains(err.Error(), "размер") || !strings.Contains(err.Error(), path) {
+			t.Fatalf("hashFile(файл > 1 МиБ): err = %v, want ошибка с \"размер\" и путём", err)
+		}
+	})
+
+	t.Run("ровно лимит", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "ok.yaml")
+		content := strings.Repeat("a", manifestLimit)
+		writeFile(t, path, content)
+		got, err := hashFile(path)
+		if err != nil {
+			t.Fatalf("hashFile(файл ровно в лимит): %v", err)
+		}
+		want := sha256.Sum256([]byte(content))
+		if !bytes.Equal(got, want[:]) {
+			t.Fatalf("hashFile = %x, want %x", got, want)
+		}
+	})
+}
+
+// TestLoadModuleVerifiedRejectsFIFO: путь исполнения (`futi x`) не зависает
+// на FIFO вместо манифеста — LoadModuleVerified возвращает ошибку.
+func TestLoadModuleVerifiedRejectsFIFO(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "x.yaml")
+	mkfifoUnblocked(t, fifo)
+
+	cache := newTestCache()
+	var err error
+	withTimeout(t, "LoadModuleVerified(FIFO)", func() { _, err = cache.LoadModuleVerified(fifo, dir) })
+	if err == nil {
+		t.Fatal("LoadModuleVerified(FIFO): ожидалась ошибка")
+	}
+}
+
+// TestCacheRefreshSkipsOversizedAndFIFOManifests: манифест больше лимита и
+// FIFO (FileSource листит путь без проверки типа) Refresh пропускает с
+// причиной hash — не читая файл целиком и не зависая.
+func TestCacheRefreshSkipsOversizedAndFIFOManifests(t *testing.T) {
+	defer suppressLog(t)()
+
+	t.Run("больше лимита", func(t *testing.T) {
+		dir := t.TempDir()
+		big := filepath.Join(dir, "big.yaml")
+		writeFile(t, big, "name: big\n# "+strings.Repeat("a", manifestLimit))
+
+		result, err := newTestCache().Refresh(discovery.NewGlobalSource(dir))
+		if err != nil {
+			t.Fatalf("Refresh: %v", err)
+		}
+		if result.Total != 1 || result.Skipped != 1 || len(result.SkippedModules) != 1 {
+			t.Fatalf("Refresh: Total=%d Skipped=%d SkippedModules=%+v, want 1, 1, одна запись", result.Total, result.Skipped, result.SkippedModules)
+		}
+		reason := result.SkippedModules[0].Reason
+		if !strings.HasPrefix(reason, "hash:") || !strings.Contains(reason, "размер") {
+			t.Fatalf("Reason = %q, want \"hash: …размер…\"", reason)
+		}
+	})
+
+	t.Run("fifo", func(t *testing.T) {
+		dir := t.TempDir()
+		fifo := filepath.Join(dir, "x.yaml")
+		mkfifoUnblocked(t, fifo)
+
+		var (
+			result RefreshResult
+			err    error
+		)
+		withTimeout(t, "Refresh(FIFO)", func() {
+			result, err = newTestCache().Refresh(discovery.NewFileSource(fifo, dir, "x"))
+		})
+		if err != nil {
+			t.Fatalf("Refresh: %v", err)
+		}
+		if result.Total != 1 || result.Skipped != 1 || len(result.SkippedModules) != 1 ||
+			!strings.HasPrefix(result.SkippedModules[0].Reason, "hash:") {
+			t.Fatalf("Refresh: Total=%d Skipped=%d SkippedModules=%+v, want 1, 1, причина hash", result.Total, result.Skipped, result.SkippedModules)
+		}
+	})
 }
 
 // TestCacheRefreshEmptySourceUpdatesLastRefresh проверяет, что пустой source
