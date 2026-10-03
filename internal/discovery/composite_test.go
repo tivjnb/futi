@@ -3,6 +3,7 @@ package discovery
 import (
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -374,5 +375,200 @@ func TestCompositeSourceResolveNotFoundIsErrNotFound(t *testing.T) {
 	_, _, err := s.Resolve("zzz")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestCompositeListChildrenModuleAndNamespaceFromDifferentSources: модуль tools
+// из одного source и namespace tools из другого (в любом порядке sources,
+// в т.ч. namespace от mountpoint) видны оба, без ошибки конфликта.
+func TestCompositeListChildrenModuleAndNamespaceFromDifferentSources(t *testing.T) {
+	moduleDir := t.TempDir()
+	nsDir := t.TempDir()
+	writeFile(t, filepath.Join(moduleDir, "tools.yaml"), "name: tools\n")
+	writeFile(t, filepath.Join(nsDir, "tools", "build.yaml"), "name: build\n")
+	mountDir := t.TempDir()
+	writeFile(t, filepath.Join(mountDir, "build.yaml"), "name: build\n")
+
+	module := Child{Name: "tools", Type: "module", ManifestPath: filepath.Join(moduleDir, "tools.yaml"), ModuleRoot: moduleDir}
+	namespace := Child{Name: "tools", Type: "namespace"}
+
+	tests := []struct {
+		name      string
+		sources   []config.SourceConfig
+		want      []Child
+		wantBuild string
+	}{
+		{
+			name:      "модуль, затем namespace",
+			sources:   []config.SourceConfig{{Path: moduleDir}, {Path: nsDir}},
+			want:      []Child{module, namespace},
+			wantBuild: filepath.Join(nsDir, "tools", "build.yaml"),
+		},
+		{
+			name:      "namespace, затем модуль",
+			sources:   []config.SourceConfig{{Path: nsDir}, {Path: moduleDir}},
+			want:      []Child{namespace, module},
+			wantBuild: filepath.Join(nsDir, "tools", "build.yaml"),
+		},
+		{
+			name:      "namespace от mountpoint",
+			sources:   []config.SourceConfig{{Path: moduleDir}, {Path: mountDir, Mountpoint: "tools"}},
+			want:      []Child{module, namespace},
+			wantBuild: filepath.Join(mountDir, "build.yaml"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewCompositeSource(&config.Config{Sources: tt.sources})
+
+			children, err := s.ListChildren("")
+			if err != nil {
+				t.Fatalf("ListChildren: %v", err)
+			}
+			if !reflect.DeepEqual(children, tt.want) {
+				t.Fatalf("ListChildren(\"\") = %+v, want %+v", children, tt.want)
+			}
+
+			manifest, _, err := s.Resolve("tools.build")
+			if err != nil {
+				t.Fatalf("Resolve(tools.build): %v", err)
+			}
+			if manifest != tt.wantBuild {
+				t.Fatalf("Resolve(tools.build) = %q, want %q", manifest, tt.wantBuild)
+			}
+		})
+	}
+}
+
+// TestCompositeListChildrenKeepsConflictBehindNamespace: конфликтный модуль
+// (x.yaml + x/config.yaml) одного source не теряется за namespace другого
+// и сохраняет пометку Conflict.
+func TestCompositeListChildrenKeepsConflictBehindNamespace(t *testing.T) {
+	nsDir := t.TempDir()
+	conflictDir := t.TempDir()
+	writeFile(t, filepath.Join(nsDir, "tools", "build.yaml"), "name: build\n")
+	writeFile(t, filepath.Join(conflictDir, "tools.yaml"), "name: tools\n")
+	writeFile(t, filepath.Join(conflictDir, "tools", "config.yaml"), "name: tools\n")
+
+	s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: nsDir}, {Path: conflictDir}}})
+
+	children, err := s.ListChildren("")
+	if err != nil {
+		t.Fatalf("ListChildren: %v", err)
+	}
+	want := []Child{
+		{Name: "tools", Type: "namespace"},
+		{Name: "tools", Type: "module", ManifestPath: filepath.Join(conflictDir, "tools.yaml"), ModuleRoot: conflictDir, Conflict: true},
+	}
+	if !reflect.DeepEqual(children, want) {
+		t.Fatalf("ListChildren(\"\") = %+v, want %+v", children, want)
+	}
+}
+
+// TestCompositeRecursiveDeepConflictIsError: модуль с одним именем из двух
+// sources на втором уровне — ошибка конфликта и в рекурсивном листинге
+// (как в ListChildren этого уровня и в Resolve), с префиксом и без.
+func TestCompositeRecursiveDeepConflictIsError(t *testing.T) {
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+	writeFile(t, filepath.Join(dir1, "ns", "docker.yaml"), "name: docker\n")
+	writeFile(t, filepath.Join(dir2, "ns", "docker.yaml"), "name: docker\n")
+
+	tests := []struct {
+		name      string
+		sources   []config.SourceConfig
+		namespace string
+	}{
+		{"без префикса, от корня", []config.SourceConfig{{Path: dir1}, {Path: dir2}}, ""},
+		{"с префиксом, от корня", []config.SourceConfig{{Path: dir1, Mountpoint: "p"}, {Path: dir2, Mountpoint: "p"}}, ""},
+		{"с префиксом, от mountpoint", []config.SourceConfig{{Path: dir1, Mountpoint: "p"}, {Path: dir2, Mountpoint: "p"}}, "p"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewCompositeSource(&config.Config{Sources: tt.sources})
+			children, err := s.ListChildrenRecursive(tt.namespace)
+			if err == nil {
+				t.Fatalf("ListChildrenRecursive(%q) = %+v, ожидалась ошибка конфликта", tt.namespace, children)
+			}
+			if !strings.Contains(err.Error(), "conflict") {
+				t.Fatalf("error %q does not mention conflict", err)
+			}
+		})
+	}
+}
+
+// TestCompositeRecursiveMultiSegmentPrefix: source, смонтированный в a.b,
+// рядом с корневым source; запросы от корня, от промежуточного сегмента,
+// от mountpoint и изнутри source — синтетические namespace для сегментов
+// префикса, порядок как у обхода через ListChildren.
+func TestCompositeRecursiveMultiSegmentPrefix(t *testing.T) {
+	mounted := t.TempDir()
+	writeFile(t, filepath.Join(mounted, "top.yaml"), "name: top\n")
+	writeFile(t, filepath.Join(mounted, "ns", "m.yaml"), "name: m\n")
+	rootDir := t.TempDir()
+	writeFile(t, filepath.Join(rootDir, "z.yaml"), "name: z\n")
+	writeFile(t, filepath.Join(rootDir, "a", "r.yaml"), "name: r\n")
+
+	s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{
+		{Path: mounted, Mountpoint: "a.b"},
+		{Path: rootDir},
+	}})
+
+	m := Child{Type: "module", ManifestPath: filepath.Join(mounted, "ns", "m.yaml"), ModuleRoot: filepath.Join(mounted, "ns")}
+	top := Child{Type: "module", ManifestPath: filepath.Join(mounted, "top.yaml"), ModuleRoot: mounted}
+	r := Child{Type: "module", ManifestPath: filepath.Join(rootDir, "a", "r.yaml"), ModuleRoot: filepath.Join(rootDir, "a")}
+	z := Child{Name: "z", Type: "module", ManifestPath: filepath.Join(rootDir, "z.yaml"), ModuleRoot: rootDir}
+	named := func(c Child, name string) Child { c.Name = name; return c }
+	ns := func(name string) Child { return Child{Name: name, Type: "namespace"} }
+
+	tests := []struct {
+		namespace string
+		want      []Child
+	}{
+		{"", []Child{ns("a"), ns("a.b"), ns("a.b.ns"), named(m, "a.b.ns.m"), named(top, "a.b.top"), named(r, "a.r"), z}},
+		{"a", []Child{ns("b"), ns("b.ns"), named(m, "b.ns.m"), named(top, "b.top"), named(r, "r")}},
+		{"a.b", []Child{ns("ns"), named(m, "ns.m"), named(top, "top")}},
+		{"a.b.ns", []Child{named(m, "m")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.namespace, func(t *testing.T) {
+			got, err := s.ListChildrenRecursive(tt.namespace)
+			if err != nil {
+				t.Fatalf("ListChildrenRecursive(%q): %v", tt.namespace, err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("ListChildrenRecursive(%q) =\n%+v\nwant\n%+v", tt.namespace, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCompositeRecursiveMountedExactlyAtNs: запрос ровно по mountpoint —
+// поддерево смонтированного source сливается с одноимённым namespace
+// корневого source.
+func TestCompositeRecursiveMountedExactlyAtNs(t *testing.T) {
+	mounted := t.TempDir()
+	writeFile(t, filepath.Join(mounted, "build.yaml"), "name: build\n")
+	writeFile(t, filepath.Join(mounted, "sub", "x.yaml"), "name: x\n")
+	rootDir := t.TempDir()
+	writeFile(t, filepath.Join(rootDir, "tools", "extra.yaml"), "name: extra\n")
+
+	s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{
+		{Path: mounted, Mountpoint: "tools"},
+		{Path: rootDir},
+	}})
+
+	got, err := s.ListChildrenRecursive("tools")
+	if err != nil {
+		t.Fatalf("ListChildrenRecursive(tools): %v", err)
+	}
+	want := []Child{
+		{Name: "build", Type: "module", ManifestPath: filepath.Join(mounted, "build.yaml"), ModuleRoot: mounted},
+		{Name: "sub", Type: "namespace"},
+		{Name: "sub.x", Type: "module", ManifestPath: filepath.Join(mounted, "sub", "x.yaml"), ModuleRoot: filepath.Join(mounted, "sub")},
+		{Name: "extra", Type: "module", ManifestPath: filepath.Join(rootDir, "tools", "extra.yaml"), ModuleRoot: filepath.Join(rootDir, "tools")},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListChildrenRecursive(tools) =\n%+v\nwant\n%+v", got, want)
 	}
 }

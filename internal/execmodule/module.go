@@ -2,6 +2,7 @@ package execmodule
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -103,14 +104,47 @@ func LoadModule(manifestPath, moduleRoot string) (*Module, error) {
 	return mod, nil
 }
 
+// MaxManifestSize — предельный размер манифеста модуля (1 МиБ). Общий для
+// всех, кто читает манифест (в т.ч. хеширование в modulecache).
+const MaxManifestSize = 1 << 20
+
+// readManifest читает манифест, принимая только обычный файл не больше
+// MaxManifestSize: FIFO/устройства блокируют чтение, огромный файл — память.
+func readManifest(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("execmodule: read manifest %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("execmodule: манифест %q — не обычный файл", path)
+	}
+	if info.Size() > MaxManifestSize {
+		return nil, fmt.Errorf("execmodule: манифест %q: размер %d байт превышает лимит %d", path, info.Size(), MaxManifestSize)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("execmodule: read manifest %q: %w", path, err)
+	}
+	defer f.Close()
+	// limit+1 байт: файл мог вырасти после Stat, усечение молча недопустимо.
+	data, err := io.ReadAll(io.LimitReader(f, MaxManifestSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("execmodule: read manifest %q: %w", path, err)
+	}
+	if len(data) > MaxManifestSize {
+		return nil, fmt.Errorf("execmodule: манифест %q: размер превышает лимит %d байт", path, MaxManifestSize)
+	}
+	return data, nil
+}
+
 // ParseModule загружает манифест модуля из YAML-файла без валидации схемы.
 // Используется `futi validate` для получения полного отчёта всех ошибок
 // через последующий вызов Module.Validate().
 // moduleRoot — директория модуля (для пакетов со скриптами).
 func ParseModule(manifestPath, moduleRoot string) (*Module, error) {
-	data, err := os.ReadFile(manifestPath)
+	data, err := readManifest(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("execmodule: read manifest %q: %w", manifestPath, err)
+		return nil, err
 	}
 
 	var raw moduleYAML

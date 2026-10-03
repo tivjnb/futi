@@ -281,7 +281,7 @@ func namespaceMatches(source discovery.Source, loader modulerunner.ModuleLoader,
 	if children, err := source.ListChildren(ns); err == nil {
 		for _, c := range children {
 			m := Match{Text: c.Name}
-			if c.Type == "module" {
+			if c.Type == "module" && !c.Conflict { // конфликтный модуль не загружаем
 				// Подтягиваем описание модуля (zsh); ошибку игнорируем.
 				if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err == nil {
 					m.Description = mod.Description
@@ -350,13 +350,24 @@ func paramHint(p execmodule.Param) string {
 }
 
 // filterMatches оставляет подсказки, чьи имена начинаются с toComplete
-// (case-sensitive префикс), и сортирует по алфавиту.
+// (case-sensitive префикс), и сортирует по алфавиту. Повторы Text
+// (модуль x и namespace x) сводятся в одну подсказку; сохраняется
+// непустое описание (описание модуля).
 func filterMatches(matches []Match, toComplete string) []Match {
 	var out []Match
+	index := make(map[string]int)
 	for _, m := range matches {
-		if strings.HasPrefix(m.Text, toComplete) {
-			out = append(out, m)
+		if !strings.HasPrefix(m.Text, toComplete) {
+			continue
 		}
+		if i, ok := index[m.Text]; ok {
+			if out[i].Description == "" {
+				out[i].Description = m.Description
+			}
+			continue
+		}
+		index[m.Text] = len(out)
+		out = append(out, m)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Text < out[j].Text

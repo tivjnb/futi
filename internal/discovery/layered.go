@@ -2,7 +2,7 @@ package discovery
 
 import (
 	"errors"
-	"fmt"
+	"strings"
 )
 
 // FileSource — источник из одного YAML-файла модуля.
@@ -52,7 +52,7 @@ func (s *FileSource) ListChildren(namespace string) ([]Child, error) {
 			},
 		}, nil
 	}
-	return nil, fmt.Errorf("discovery: namespace %q not found", namespace)
+	return nil, newNamespaceNotFound(namespace)
 }
 
 func (s *FileSource) ListChildrenRecursive(namespace string) ([]Child, error) {
@@ -106,8 +106,13 @@ func (s *LayeredSource) List() ([]ModuleInfo, error) {
 	return modules, nil
 }
 
+// ListChildren объединяет детей namespace из всех слоёв. Ключ слияния — пара
+// (имя, тип): модуль x и namespace x сосуществуют, как и в Resolve
+// (x — модуль, x.y — внутри namespace). Внутри одного ключа побеждает
+// верхний слой; запись берётся целиком, вместе с пометкой Conflict.
 func (s *LayeredSource) ListChildren(namespace string) ([]Child, error) {
-	seen := make(map[string]bool)
+	type childKey struct{ name, typ string }
+	seen := make(map[childKey]bool)
 	var result []Child
 	var anyErr error
 	foundAny := false
@@ -120,10 +125,11 @@ func (s *LayeredSource) ListChildren(namespace string) ([]Child, error) {
 		}
 		foundAny = true
 		for _, c := range children {
-			if seen[c.Name] {
+			key := childKey{c.Name, c.Type}
+			if seen[key] {
 				continue
 			}
-			seen[c.Name] = true
+			seen[key] = true
 			result = append(result, c)
 		}
 	}
@@ -134,30 +140,84 @@ func (s *LayeredSource) ListChildren(namespace string) ([]Child, error) {
 	return result, nil
 }
 
+// ListChildrenRecursive делегирует обход поддерева каждому слою (защита от
+// циклов симлинков — в самих слоях) и сливает результаты как ListChildren:
+// ключ — пара (имя, тип), побеждает верхний слой, Conflict сохраняется.
+// Слой, в котором namespace нет (ErrNotFound), пропускается, если namespace
+// листит другой слой; если не листит никто — ошибка «не найден». Остальные
+// ошибки (конфликт модуля из двух sources в Composite на любом уровне,
+// invalid namespace, ввод-вывод) пробрасываются всегда: иначе пропал бы
+// весь слой, а ошибка осталась бы незамеченной.
 func (s *LayeredSource) ListChildrenRecursive(namespace string) ([]Child, error) {
-	children, err := s.ListChildren(namespace)
-	if err != nil {
-		return nil, err
-	}
+	var lists [][]Child
+	var anyErr error
+	foundAny := false
 
-	var result []Child
-	for _, c := range children {
-		result = append(result, c)
-		if c.Type == "namespace" {
-			fullNs := c.Name
-			if namespace != "" {
-				fullNs = namespace + "." + c.Name
-			}
-			subChildren, err := s.ListChildrenRecursive(fullNs)
-			if err != nil {
+	for _, layer := range s.layers {
+		children, err := layer.ListChildrenRecursive(namespace)
+		if err != nil {
+			if !errors.Is(err, ErrNotFound) {
 				return nil, err
 			}
-			for _, sc := range subChildren {
-				sc.Name = c.Name + "." + sc.Name
-				result = append(result, sc)
+			anyErr = err
+			continue
+		}
+		foundAny = true
+		lists = append(lists, children)
+	}
+
+	if !foundAny && anyErr != nil {
+		return nil, anyErr
+	}
+	return mergeRecursive(lists), nil
+}
+
+// mergeRecursive сливает рекурсивные листинги (имена — пути от общего
+// контекста) в один. Ключ — пара (имя, тип), побеждает запись из более
+// раннего списка. Порядок — как при рекурсии через ListChildren по
+// объединённому дереву: обход в глубину, дети каждого namespace — в порядке
+// списков, внутри списка — в его порядке. Предусловие обхода — родитель-
+// namespace записи присутствует в объединённых списках. Записи без него
+// (модуль `my.tool` из ./futi.yaml при отсутствии namespace `my`) обход не
+// посещает — они добавляются после него в исходном порядке.
+func mergeRecursive(lists [][]Child) []Child {
+	type childKey struct{ name, typ string }
+	seen := make(map[childKey]bool)
+	var merged []Child
+	byParent := make(map[string][]Child)
+	for _, list := range lists {
+		for _, c := range list {
+			key := childKey{c.Name, c.Type}
+			if seen[key] {
+				continue
 			}
+			seen[key] = true
+			merged = append(merged, c)
+			parent := ""
+			if i := strings.LastIndex(c.Name, "."); i >= 0 {
+				parent = c.Name[:i]
+			}
+			byParent[parent] = append(byParent[parent], c)
 		}
 	}
 
-	return result, nil
+	var result []Child
+	visited := make(map[childKey]bool)
+	var walk func(parent string)
+	walk = func(parent string) {
+		for _, c := range byParent[parent] {
+			result = append(result, c)
+			visited[childKey{c.Name, c.Type}] = true
+			if c.Type == "namespace" {
+				walk(c.Name)
+			}
+		}
+	}
+	walk("")
+	for _, c := range merged {
+		if !visited[childKey{c.Name, c.Type}] {
+			result = append(result, c)
+		}
+	}
+	return result
 }

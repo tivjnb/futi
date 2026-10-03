@@ -521,6 +521,80 @@ func TestPrintChildrenSortedAlphabetically(t *testing.T) {
 	}
 }
 
+// TestPrintChildrenSameNameOrderedByType: модуль и namespace одного имени
+// выводятся в одном порядке (module, затем namespace) независимо от порядка
+// во входном листинге.
+func TestPrintChildrenSameNameOrderedByType(t *testing.T) {
+	tests := []struct {
+		name     string
+		children []discovery.Child
+	}{
+		{"module первым", []discovery.Child{{Name: "tools", Type: "module"}, {Name: "tools", Type: "namespace"}}},
+		{"namespace первым", []discovery.Child{{Name: "tools", Type: "namespace"}, {Name: "tools", Type: "module"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := printChildren(&buf, tt.children, false, nil); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			out := buf.String()
+			moduleIdx := strings.Index(out, "│ module")
+			namespaceIdx := strings.Index(out, "│ namespace")
+			if moduleIdx < 0 || namespaceIdx < 0 || moduleIdx > namespaceIdx {
+				t.Fatalf("want строка module перед namespace:\n%s", out)
+			}
+		})
+	}
+}
+
+// TestRunListShowsConflict: x.yaml рядом с x/config.yaml — одна строка x
+// с описанием конфликта вместо описания модуля.
+func TestRunListShowsConflict(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMainTestFile(t, filepath.Join(dir, "x.yaml"), "name: x\ndescription: Описание-из-yaml\ncmd: echo x\n")
+	writeMainTestFile(t, filepath.Join(dir, "x", "config.yaml"), "name: x\ndescription: Описание-из-пакета\ncmd: echo x\n")
+
+	var buf bytes.Buffer
+	if err := runList(&buf, discovery.NewGlobalSource(dir), "", false, false, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "конфликт: x.yaml и x/config.yaml") {
+		t.Errorf("нет описания конфликта:\n%s", out)
+	}
+	if strings.Contains(out, "Описание-из") {
+		t.Errorf("для конфликта не должно подтягиваться описание модуля:\n%s", out)
+	}
+	if n := strings.Count(out, "module"); n != 1 {
+		t.Errorf("строк module = %d, want 1:\n%s", n, out)
+	}
+
+	// Вложенный namespace в `list -r`: имя записи — полный путь ns.x, но в
+	// тексте конфликта — имена файлов, а не ns.x.yaml и ns.x/config.yaml.
+	nested := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(nested, "ns", "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMainTestFile(t, filepath.Join(nested, "ns", "x.yaml"), "name: x\ncmd: echo x\n")
+	writeMainTestFile(t, filepath.Join(nested, "ns", "x", "config.yaml"), "name: x\ncmd: echo x\n")
+
+	buf.Reset()
+	if err := runList(&buf, discovery.NewGlobalSource(nested), "", false, true, nil); err != nil {
+		t.Fatalf("list -r: unexpected error: %v", err)
+	}
+	out = buf.String()
+	if !strings.Contains(out, "ns.x") || !strings.Contains(out, "конфликт: x.yaml и x/config.yaml") {
+		t.Errorf("list -r: нет записи ns.x с описанием конфликта по именам файлов:\n%s", out)
+	}
+	if strings.Contains(out, "ns.x.yaml") {
+		t.Errorf("list -r: в тексте конфликта полный путь namespace вместо имени файла:\n%s", out)
+	}
+}
+
 func TestRunListSubcommands(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "db.yaml")
