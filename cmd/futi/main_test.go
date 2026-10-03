@@ -521,6 +521,33 @@ func TestPrintChildrenSortedAlphabetically(t *testing.T) {
 	}
 }
 
+// TestPrintChildrenSameNameOrderedByType: модуль и namespace одного имени
+// выводятся в одном порядке (module, затем namespace) независимо от порядка
+// во входном листинге.
+func TestPrintChildrenSameNameOrderedByType(t *testing.T) {
+	tests := []struct {
+		name     string
+		children []discovery.Child
+	}{
+		{"module первым", []discovery.Child{{Name: "tools", Type: "module"}, {Name: "tools", Type: "namespace"}}},
+		{"namespace первым", []discovery.Child{{Name: "tools", Type: "namespace"}, {Name: "tools", Type: "module"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := printChildren(&buf, tt.children, false, nil); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			out := buf.String()
+			moduleIdx := strings.Index(out, "│ module")
+			namespaceIdx := strings.Index(out, "│ namespace")
+			if moduleIdx < 0 || namespaceIdx < 0 || moduleIdx > namespaceIdx {
+				t.Fatalf("want строка module перед namespace:\n%s", out)
+			}
+		})
+	}
+}
+
 // TestRunListShowsConflict: x.yaml рядом с x/config.yaml — одна строка x
 // с описанием конфликта вместо описания модуля.
 func TestRunListShowsConflict(t *testing.T) {

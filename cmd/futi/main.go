@@ -563,8 +563,12 @@ func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader
 		}
 	}
 
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i][1] < rows[j][1]
+	// По имени, при равных именах (модуль и namespace x) — по типу.
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i][1] != rows[j][1] {
+			return rows[i][1] < rows[j][1]
+		}
+		return rows[i][0] < rows[j][0]
 	})
 
 	tw := tablewriter.NewTable(w)
