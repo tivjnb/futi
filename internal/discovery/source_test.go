@@ -3,8 +3,11 @@ package discovery
 import (
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
@@ -539,21 +542,168 @@ func TestListSymlinkPackageAliasesBothListed(t *testing.T) {
 	}
 }
 
-// TestListBrokenSymlinkKeptAsFile: битый симлинк на .yaml трактуется как
-// файл-модуль (цель может стать доступной позже; кэш сохраняет запись при
-// временной ошибке Stat — см. TestCacheRefreshDoesNotRemoveEntriesWithStatErrors).
-func TestListBrokenSymlinkKeptAsFile(t *testing.T) {
+// TestListSkipsBrokenSymlink: битый симлинк на .yaml не листится — Resolve
+// его не найдёт (ErrNotFound), а листинг показывает только резолвимое.
+func TestListSkipsBrokenSymlink(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "real.yaml"), "name: real\n")
 	symlinkOrFail(t, filepath.Join(dir, "nonexistent.yaml"), filepath.Join(dir, "broken.yaml"))
 
 	s := NewGlobalSource(dir)
-	names := listNames(t, s)
-	if _, ok := names["real"]; !ok {
-		t.Fatalf("missing real module, got %v", names)
+	if _, _, err := s.Resolve("broken"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Resolve(\"broken\") err = %v, want ErrNotFound", err)
 	}
-	if _, ok := names["broken"]; !ok {
-		t.Fatalf("expected broken .yaml symlink to be kept as file module, got %v", names)
+	names := listNames(t, s)
+	if len(names) != 1 {
+		t.Fatalf("List = %v, want только real", names)
+	}
+	if _, ok := names["real"]; !ok {
+		t.Fatalf("List = %v, want только real", names)
+	}
+}
+
+// writeUnresolvableFixture создаёт в root набор записей, которые Resolve
+// не найдёт (имя с точкой, пустое имя, битый симлинк, FIFO, каталоги config/
+// и .git/), плюс валидные ok.yaml и ns/m.yaml.
+func writeUnresolvableFixture(t *testing.T, root string) {
+	t.Helper()
+	writeFile(t, filepath.Join(root, "ok.yaml"), "name: ok\n")
+	writeFile(t, filepath.Join(root, "ns", "m.yaml"), "name: m\n")
+
+	writeFile(t, filepath.Join(root, "my.tool.yaml"), "name: tool\n")
+	writeFile(t, filepath.Join(root, ".yaml"), "name: empty\n")
+	writeFile(t, filepath.Join(root, "foo..yaml"), "name: foo\n")
+	writeFile(t, filepath.Join(root, "my.dir", "a.yaml"), "name: a\n")
+	writeFile(t, filepath.Join(root, "config", "c.yaml"), "name: c\n")
+	writeFile(t, filepath.Join(root, ".git", "hooks.yaml"), "name: hooks\n")
+	symlinkOrFail(t, "/nonexistent", filepath.Join(root, "broken.yaml"))
+	if err := syscall.Mkfifo(filepath.Join(root, "fifo.yaml"), 0o644); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+}
+
+// childKeys возвращает отсортированные "имя:тип" детей.
+func childKeys(children []Child) []string {
+	keys := make([]string, 0, len(children))
+	for _, c := range children {
+		keys = append(keys, c.Name+":"+c.Type)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// TestListSkipsUnresolvableEntries: все три листинга GlobalSource пропускают
+// записи, которые Resolve не найдёт: `my.tool.yaml` листился бы как my.tool,
+// но Resolve ищет my/tool.yaml; `.yaml` — пустое имя; битый симлинк и FIFO —
+// не обычный файл; каталоги с точкой и config/ — сегменты, которые Resolve
+// не примет.
+func TestListSkipsUnresolvableEntries(t *testing.T) {
+	root := t.TempDir()
+	writeUnresolvableFixture(t, root)
+	s := NewGlobalSource(root)
+
+	modules, err := s.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var listed []string
+	for _, m := range modules {
+		listed = append(listed, m.Name)
+	}
+	sort.Strings(listed)
+	if want := []string{"ns.m", "ok"}; !slices.Equal(listed, want) {
+		t.Errorf("List = %v, want %v", listed, want)
+	}
+
+	children, err := s.ListChildren("")
+	if err != nil {
+		t.Fatalf("ListChildren: %v", err)
+	}
+	if got, want := childKeys(children), []string{"ns:namespace", "ok:module"}; !slices.Equal(got, want) {
+		t.Errorf("ListChildren(\"\") = %v, want %v", got, want)
+	}
+
+	rec, err := s.ListChildrenRecursive("")
+	if err != nil {
+		t.Fatalf("ListChildrenRecursive: %v", err)
+	}
+	if got, want := childKeys(rec), []string{"ns.m:module", "ns:namespace", "ok:module"}; !slices.Equal(got, want) {
+		t.Errorf("ListChildrenRecursive(\"\") = %v, want %v", got, want)
+	}
+}
+
+// TestListingsAgree: List, ListChildrenRecursive и рекурсивный обход через
+// ListChildren дают одно и то же множество модулей с теми же манифестами,
+// и каждый листнутый модуль находится Resolve по своему имени.
+func TestListingsAgree(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "root")
+	writeUnresolvableFixture(t, root)
+	writeFile(t, filepath.Join(root, "dev", "deploy", "config.yaml"), "name: deploy\n")
+	writeFile(t, filepath.Join(root, "dev", "deploy", "inner.yaml"), "name: inner\n")
+	writeFile(t, filepath.Join(root, "dev", "tools", "lint.yaml"), "name: lint\n")
+	writeFile(t, filepath.Join(root, "dev", "tools", "bad.name.yaml"), "name: bad\n")
+	writeFile(t, filepath.Join(dir, "outside", "ext.yaml"), "name: ext\n")
+	symlinkOrFail(t, filepath.Join(dir, "outside"), filepath.Join(root, "linked"))
+
+	s := NewGlobalSource(root)
+	want := map[string]string{
+		"ok":             filepath.Join(root, "ok.yaml"),
+		"ns.m":           filepath.Join(root, "ns", "m.yaml"),
+		"dev.deploy":     filepath.Join(root, "dev", "deploy", "config.yaml"),
+		"dev.tools.lint": filepath.Join(root, "dev", "tools", "lint.yaml"),
+		"linked.ext":     filepath.Join(root, "linked", "ext.yaml"),
+	}
+
+	fromList := listNames(t, s)
+
+	rec, err := s.ListChildrenRecursive("")
+	if err != nil {
+		t.Fatalf("ListChildrenRecursive: %v", err)
+	}
+	fromRecursive := make(map[string]string)
+	for _, c := range rec {
+		if c.Type == "module" {
+			fromRecursive[c.Name] = c.ManifestPath
+		}
+	}
+
+	fromChildren := make(map[string]string)
+	var walk func(ns string)
+	walk = func(ns string) {
+		children, err := s.ListChildren(ns)
+		if err != nil {
+			t.Fatalf("ListChildren(%q): %v", ns, err)
+		}
+		for _, c := range children {
+			full := c.Name
+			if ns != "" {
+				full = ns + "." + c.Name
+			}
+			if c.Type == "namespace" {
+				walk(full)
+				continue
+			}
+			fromChildren[full] = c.ManifestPath
+		}
+	}
+	walk("")
+
+	for name, got := range map[string]map[string]string{
+		"List":                  fromList,
+		"ListChildrenRecursive": fromRecursive,
+		"обход ListChildren":    fromChildren,
+	} {
+		if !maps.Equal(got, want) {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
+	}
+
+	for name, manifest := range fromList {
+		got, _, err := s.Resolve(name)
+		if err != nil || got != manifest {
+			t.Errorf("Resolve(%q) = %q, %v; want %q (листинг показал)", name, got, err, manifest)
+		}
 	}
 }
 

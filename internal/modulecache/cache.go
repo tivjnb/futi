@@ -216,8 +216,13 @@ type RefreshResult struct {
 // 5. Обновить lastRefresh (только если не все модули пропущены).
 // 6. saveToStorage.
 //
-// Ошибки Stat/LoadModule не фатальны: модуль пропускается, счётчик Skipped
-// инкрементируется, ошибка логируется. При следующем Refresh retry.
+// Листинг source отдаёт только резолвимые манифесты: обычные файлы, Stat
+// которых успешен. Битый симлинк (в т.ч. на временно недоступную цель) в
+// source не попадает, и его запись удаляется на шаге 4.
+//
+// Ошибки Stat/hash/LoadModule не фатальны: модуль пропускается, счётчик
+// Skipped инкрементируется, ошибка логируется, запись кэша сохраняется
+// (модуль есть в source). При следующем Refresh retry.
 // Ошибка Save не фатальна: in-memory кэш актуален, логируется.
 func (c *Cache) Refresh(globalSource discovery.Source) (RefreshResult, error) {
 	children, err := globalSource.ListChildrenRecursive("")

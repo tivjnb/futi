@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -814,12 +815,61 @@ func TestCacheRefreshCleansUpStaleEntries(t *testing.T) {
 	}
 }
 
-// TestCacheRefreshDoesNotRemoveEntriesWithStatErrors проверяет, что модули,
-// которые есть в source (discovery нашёл), но os.Stat упал (временная ошибка),
-// НЕ удаляются из кэша. Cleanup трогает только те, кого больше нет в source.
-func TestCacheRefreshDoesNotRemoveEntriesWithStatErrors(t *testing.T) {
+// TestCacheRefreshDoesNotRemoveEntriesWithReadErrors проверяет, что модули,
+// которые есть в source (discovery нашёл), но прочитать их не удалось
+// (временная ошибка, здесь — нет прав на чтение), НЕ удаляются из кэша.
+// Cleanup трогает только те, кого больше нет в source.
+func TestCacheRefreshDoesNotRemoveEntriesWithReadErrors(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root читает файл без прав на чтение")
+	}
 	dir := t.TempDir()
-	// Broken symlink: discovery найдёт .yaml, но os.Stat упадёт.
+	unreadable := filepath.Join(dir, "unreadable.yaml")
+	writeFile(t, unreadable, "name: unreadable\n")
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	src := discovery.NewGlobalSource(dir)
+	cache := newTestCache()
+
+	// Предзаполняем кэш устаревшей записью: mtime не совпадёт → перечитывание.
+	cache.mu.Lock()
+	cache.entries[unreadable] = entry{
+		Module:  &execmodule.Module{Name: "cached_unreadable"},
+		ModTime: time.Now().Add(-1 * time.Hour),
+		Size:    100,
+	}
+	cache.persistentPaths[unreadable] = true
+	cache.mu.Unlock()
+
+	restore := suppressLog(t)
+	defer restore()
+
+	result, err := cache.Refresh(src)
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if result.Total != 1 || result.Skipped != 1 {
+		t.Fatalf("Refresh: Total=%d Skipped=%d, want 1 и 1", result.Total, result.Skipped)
+	}
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	// unreadable.yaml в source (seenPaths), но чтение упало → НЕ удаляем.
+	if e, ok := cache.entries[unreadable]; !ok || e.Module.Name != "cached_unreadable" {
+		t.Fatalf("запись нечитаемого модуля должна сохраниться, got %+v (ok=%v)", e, ok)
+	}
+	if !cache.persistentPaths[unreadable] {
+		t.Fatal("путь нечитаемого модуля должен остаться в persistentPaths")
+	}
+}
+
+// TestCacheRefreshRemovesBrokenSymlinkEntry: битый симлинк не листится
+// discovery (Resolve его не найдёт), поэтому его запись вычищается из кэша
+// как модуль, которого больше нет в source.
+func TestCacheRefreshRemovesBrokenSymlinkEntry(t *testing.T) {
+	dir := t.TempDir()
 	brokenLink := filepath.Join(dir, "broken.yaml")
 	if err := os.Symlink(filepath.Join(dir, "nonexistent.yaml"), brokenLink); err != nil {
 		t.Skipf("symlink not supported: %v", err)
@@ -828,7 +878,6 @@ func TestCacheRefreshDoesNotRemoveEntriesWithStatErrors(t *testing.T) {
 	src := discovery.NewGlobalSource(dir)
 	cache := newTestCache()
 
-	// Предзаполняем кэш записью для broken link
 	cache.mu.Lock()
 	cache.entries[brokenLink] = entry{
 		Module:  &execmodule.Module{Name: "cached_broken"},
@@ -841,19 +890,63 @@ func TestCacheRefreshDoesNotRemoveEntriesWithStatErrors(t *testing.T) {
 	restore := suppressLog(t)
 	defer restore()
 
-	_, err := cache.Refresh(src)
+	result, err := cache.Refresh(src)
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
+	}
+	if result.Total != 0 {
+		t.Fatalf("Refresh: Total=%d, want 0 (битый симлинк не в source)", result.Total)
 	}
 
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	// broken.yaml в source (seenPaths), но Stat упал → НЕ удаляем (временная ошибка)
-	if _, ok := cache.entries[brokenLink]; !ok {
-		t.Fatal("expected broken link entry to be preserved (in source, Stat error is temporary)")
+	if _, ok := cache.entries[brokenLink]; ok {
+		t.Fatal("запись битого симлинка должна быть удалена из entries")
 	}
-	if !cache.persistentPaths[brokenLink] {
-		t.Fatal("expected broken link path to remain in persistentPaths")
+	if cache.persistentPaths[brokenLink] {
+		t.Fatal("путь битого симлинка должен быть удалён из persistentPaths")
+	}
+}
+
+// TestCacheRefreshFIFOInTreeDoesNotHang: FIFO с именем *.yaml в дереве модулей
+// не листится, и Refresh не зависает на его чтении (hashFile/LoadModule).
+func TestCacheRefreshFIFOInTreeDoesNotHang(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "ok.yaml"), "name: ok\n")
+	fifo := filepath.Join(dir, "fifo.yaml")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+	// Снимаем возможную блокировку, чтобы горутина не протекла при падении теста.
+	t.Cleanup(func() {
+		if f, err := os.OpenFile(fifo, os.O_RDWR, 0); err == nil {
+			f.Close()
+		}
+	})
+
+	src := discovery.NewGlobalSource(dir)
+	cache := newTestCache()
+
+	type refreshOutcome struct {
+		result RefreshResult
+		err    error
+	}
+	done := make(chan refreshOutcome, 1)
+	go func() {
+		result, err := cache.Refresh(src)
+		done <- refreshOutcome{result, err}
+	}()
+	select {
+	case out := <-done:
+		if out.err != nil {
+			t.Fatalf("Refresh: %v", out.err)
+		}
+		if out.result.Total != 1 || out.result.Updated != 1 || out.result.Skipped != 0 {
+			t.Fatalf("Refresh: Total=%d Updated=%d Skipped=%d, want 1, 1, 0 (только ok.yaml)",
+				out.result.Total, out.result.Updated, out.result.Skipped)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Refresh завис на FIFO в дереве модулей")
 	}
 }
 

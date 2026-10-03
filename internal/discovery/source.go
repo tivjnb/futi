@@ -137,7 +137,9 @@ func (s *GlobalSource) withinPackage(segments []string) (bool, error) {
 // симлинк на .yaml-файл и симлинк на директорию (namespace или пакет)
 // обрабатываются так же, как реальные файлы/директории. Циклы симлинков
 // (a → b → a) и повторный обход алиасов отсекаются по резолвнутому пути.
-// Битые симлинки (цель недоступна) пропускаются.
+// Записи, которые Resolve не найдёт, пропускаются (см. classifyEntry):
+// битые симлинки, FIFO и устройства с именем *.yaml, имена с точкой,
+// пустые и "config".
 func (s *GlobalSource) List() ([]ModuleInfo, error) {
 	// Non-existent root = no modules (fresh install)
 	if _, err := os.Stat(s.RootDir); err != nil {
@@ -168,49 +170,103 @@ func (s *GlobalSource) walkModules(dir, nsPrefix string, modules *[]ModuleInfo, 
 	}
 	visited[real] = true
 
-	entries, err := os.ReadDir(dir)
+	entries, err := readModuleEntries(dir)
 	if err != nil {
 		return
 	}
 
-	for _, entry := range entries {
-		path := filepath.Join(dir, entry.Name())
-		if entryIsDir(path, entry) {
-			// config.yaml внутри → директория (возможно, симлинк) — пакет.
-			if fileExists(filepath.Join(path, "config.yaml")) {
-				*modules = append(*modules, ModuleInfo{
-					Name:         nsName(nsPrefix, entry.Name()),
-					ManifestPath: filepath.Join(path, "config.yaml"),
-					ModuleRoot:   path,
-				})
-				continue
-			}
-			s.walkModules(path, nsPrefix+entry.Name()+".", modules, visited)
-			continue
-		}
-		name := entry.Name()
-		if name == "config.yaml" || !strings.HasSuffix(name, ".yaml") {
+	for _, e := range entries {
+		if e.kind == entryNamespace {
+			s.walkModules(e.path, nsPrefix+e.name+".", modules, visited)
 			continue
 		}
 		*modules = append(*modules, ModuleInfo{
-			Name:         nsName(nsPrefix, strings.TrimSuffix(name, ".yaml")),
-			ManifestPath: path,
-			ModuleRoot:   filepath.Dir(path),
+			Name:         nsName(nsPrefix, e.name),
+			ManifestPath: e.manifestPath,
+			ModuleRoot:   e.moduleRoot,
 		})
 	}
 }
 
+// entryKind — вид записи каталога модулей.
+type entryKind int
+
+const (
+	entryNamespace  entryKind = iota + 1 // каталог без config.yaml
+	entryPackage                         // каталог с config.yaml — модуль-пакет
+	entryYAMLModule                      // обычный файл <name>.yaml — модуль
+)
+
+// moduleEntry — запись каталога модулей, которую найдёт Resolve.
+type moduleEntry struct {
+	kind         entryKind
+	name         string // сегмент namespace: имя каталога или файла без .yaml
+	path         string // путь записи: каталог или .yaml-файл
+	manifestPath string // манифест (для пакета и yaml-модуля)
+	moduleRoot   string // корень модуля (для пакета и yaml-модуля)
+}
+
+// readModuleEntries читает dir и классифицирует записи (classifyEntry);
+// пропущенные записи не возвращаются. Порядок — как у os.ReadDir (по имени).
+// Общий шаг всех обходов GlobalSource: листинги согласованы между собой
+// и с Resolve.
+func readModuleEntries(dir string) ([]moduleEntry, error) {
+	dirEntries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var entries []moduleEntry
+	for _, de := range dirEntries {
+		if e, ok := classifyEntry(dir, de); ok {
+			entries = append(entries, e)
+		}
+	}
+	return entries, nil
+}
+
+// classifyEntry определяет вид записи de каталога dir, следуя симлинкам.
+// ok=false — запись пропускается, потому что Resolve её не найдёт:
+//   - сегмент namespace пустой, содержит "." или равен "config"
+//     (my.tool.yaml, .yaml, foo..yaml, config.yaml, my.dir/, .git/, config/);
+//   - .yaml-файл (в т.ч. симлинк), у которого Stat падает или который не
+//     обычный файл (битый симлинк, FIFO, устройство);
+//   - не каталог и не .yaml-файл.
+func classifyEntry(dir string, de os.DirEntry) (moduleEntry, bool) {
+	path := filepath.Join(dir, de.Name())
+	if entryIsDir(path, de) {
+		if !validSegment(de.Name()) {
+			return moduleEntry{}, false
+		}
+		configPath := filepath.Join(path, "config.yaml")
+		if fileExists(configPath) {
+			return moduleEntry{kind: entryPackage, name: de.Name(), path: path, manifestPath: configPath, moduleRoot: path}, true
+		}
+		return moduleEntry{kind: entryNamespace, name: de.Name(), path: path}, true
+	}
+	name, isYAML := strings.CutSuffix(de.Name(), ".yaml")
+	if !isYAML || !validSegment(name) || !fileExists(path) {
+		return moduleEntry{}, false
+	}
+	return moduleEntry{kind: entryYAMLModule, name: name, path: path, manifestPath: path, moduleRoot: dir}, true
+}
+
+// validSegment сообщает, что name годится как сегмент namespace для Resolve:
+// непустой, без "." (Resolve делит namespace по точкам) и не "config"
+// (зарезервирован за манифестом пакета).
+func validSegment(name string) bool {
+	return name != "" && !strings.Contains(name, ".") && name != "config"
+}
+
 // entryIsDir определяет, является ли entry директорией, следуя симлинкам.
-// Битый симлинк (цель недоступна) трактуется как файл: если имя *.yaml,
-// он остаётся в listing'е как модуль — цель может стать доступной позже
-// (кэш сохраняет запись при временной ошибке Stat).
+// Битый симлинк (цель недоступна) — не директория; как файл он тоже не
+// листится (classifyEntry: Stat падает).
 func entryIsDir(path string, entry os.DirEntry) bool {
 	if entry.Type()&os.ModeSymlink == 0 {
 		return entry.IsDir()
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return false // битый симлинк — трактуем как файл
+		return false
 	}
 	return info.IsDir()
 }
@@ -252,6 +308,7 @@ func fileExists(path string) bool {
 //   - *.yaml файлы (кроме config.yaml) → child module
 //   - поддиректории с config.yaml → child module (пакет)
 //   - поддиректории без config.yaml → child namespace
+// Записи, которые Resolve не найдёт, пропускаются (см. classifyEntry).
 // Пустой namespace = корень RootDir.
 func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {
 	var dir string
@@ -262,7 +319,7 @@ func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {
 		dir = filepath.Join(s.RootDir, filepath.Join(segments...))
 	}
 
-	entries, err := os.ReadDir(dir)
+	entries, err := readModuleEntries(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			if namespace == "" {
@@ -283,37 +340,17 @@ func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {
 	}
 
 	var children []Child
-	for _, entry := range entries {
-		entryPath := filepath.Join(dir, entry.Name())
-		if entryIsDir(entryPath, entry) {
-			childDir := entryPath
-			configPath := filepath.Join(childDir, "config.yaml")
-			if fileExists(configPath) {
-				children = append(children, Child{
-					Name:         entry.Name(),
-					Type:         "module",
-					ManifestPath: configPath,
-					ModuleRoot:   childDir,
-				})
-			} else {
-				children = append(children, Child{
-					Name: entry.Name(),
-					Type: "namespace",
-				})
-			}
-		} else {
-			name := entry.Name()
-			if name == "config.yaml" || !strings.HasSuffix(name, ".yaml") {
-				continue
-			}
-			childPath := filepath.Join(dir, name)
-			children = append(children, Child{
-				Name:         strings.TrimSuffix(name, ".yaml"),
-				Type:         "module",
-				ManifestPath: childPath,
-				ModuleRoot:   dir,
-			})
+	for _, e := range entries {
+		if e.kind == entryNamespace {
+			children = append(children, Child{Name: e.name, Type: "namespace"})
+			continue
 		}
+		children = append(children, Child{
+			Name:         e.name,
+			Type:         "module",
+			ManifestPath: e.manifestPath,
+			ModuleRoot:   e.moduleRoot,
+		})
 	}
 
 	return children, nil
@@ -372,53 +409,27 @@ func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child
 	}
 	visited[real] = true
 
-	entries, err := os.ReadDir(dir)
+	entries, err := readModuleEntries(dir)
 	if err != nil {
 		return
 	}
 
-	for _, entry := range entries {
-		entryPath := filepath.Join(dir, entry.Name())
-		if !entryIsDir(entryPath, entry) {
-			name := entry.Name()
-			if name == "config.yaml" || !strings.HasSuffix(name, ".yaml") {
-				continue
-			}
-			childPath := entryPath
-			childName := strings.TrimSuffix(name, ".yaml")
-			fullName := childName
-			if prefix != "" {
-				fullName = prefix + "." + childName
-			}
-			*result = append(*result, Child{
-				Name:         fullName,
-				Type:         "module",
-				ManifestPath: childPath,
-				ModuleRoot:   dir,
-			})
-		} else {
-			childDir := entryPath
-			configPath := filepath.Join(childDir, "config.yaml")
-			childName := entry.Name()
-			fullName := childName
-			if prefix != "" {
-				fullName = prefix + "." + childName
-			}
-			if fileExists(configPath) {
-				*result = append(*result, Child{
-					Name:         fullName,
-					Type:         "module",
-					ManifestPath: configPath,
-					ModuleRoot:   childDir,
-				})
-				// Модуль-пакет: не углубляемся внутрь
-			} else {
-				*result = append(*result, Child{
-					Name: fullName,
-					Type: "namespace",
-				})
-				s.walkChildrenRecursive(childDir, fullName, result, visited)
-			}
+	for _, e := range entries {
+		fullName := e.name
+		if prefix != "" {
+			fullName = prefix + "." + e.name
 		}
+		if e.kind == entryNamespace {
+			*result = append(*result, Child{Name: fullName, Type: "namespace"})
+			s.walkChildrenRecursive(e.path, fullName, result, visited)
+			continue
+		}
+		// Модуль (в т.ч. пакет — лист: внутрь не углубляемся).
+		*result = append(*result, Child{
+			Name:         fullName,
+			Type:         "module",
+			ManifestPath: e.manifestPath,
+			ModuleRoot:   e.moduleRoot,
+		})
 	}
 }
