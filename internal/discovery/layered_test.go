@@ -3,6 +3,7 @@ package discovery
 import (
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -295,5 +296,104 @@ func TestLayeredOverCompositeConflictPropagates(t *testing.T) {
 	}
 	if errors.Is(err, ErrNotFound) {
 		t.Fatalf("конфликт не должен быть ErrNotFound: %v", err)
+	}
+}
+
+// TestLayeredListChildrenKeepsNamespaceBehindModule: модуль tools из верхнего
+// слоя не прячет namespace tools нижнего слоя — оба видны, как и в Resolve.
+func TestLayeredListChildrenKeepsNamespaceBehindModule(t *testing.T) {
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+	writeFile(t, filepath.Join(dir1, "tools.yaml"), "name: tools\n")
+	writeFile(t, filepath.Join(dir2, "tools", "build.yaml"), "name: build\n")
+
+	s := NewLayeredSource(NewGlobalSource(dir1), NewGlobalSource(dir2))
+
+	children, err := s.ListChildren("")
+	if err != nil {
+		t.Fatalf("ListChildren: %v", err)
+	}
+	want := []Child{
+		{Name: "tools", Type: "module", ManifestPath: filepath.Join(dir1, "tools.yaml"), ModuleRoot: dir1},
+		{Name: "tools", Type: "namespace"},
+	}
+	if !reflect.DeepEqual(children, want) {
+		t.Fatalf("ListChildren(\"\") = %+v, want %+v", children, want)
+	}
+
+	manifest, _, err := s.Resolve("tools.build")
+	if err != nil {
+		t.Fatalf("Resolve(tools.build): %v", err)
+	}
+	if want := filepath.Join(dir2, "tools", "build.yaml"); manifest != want {
+		t.Fatalf("Resolve(tools.build) = %q, want %q", manifest, want)
+	}
+}
+
+// TestLayeredListKeepsPriorityWithinSameKey: одинаковая пара (имя, тип)
+// берётся из верхнего слоя; запись другого типа с тем же именем остаётся.
+func TestLayeredListKeepsPriorityWithinSameKey(t *testing.T) {
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+	writeFile(t, filepath.Join(dir1, "tools.yaml"), "name: tools\n")
+	writeFile(t, filepath.Join(dir2, "tools.yaml"), "name: tools\n")
+	writeFile(t, filepath.Join(dir2, "tools", "build.yaml"), "name: build\n")
+
+	s := NewLayeredSource(NewGlobalSource(dir1), NewGlobalSource(dir2))
+
+	children, err := s.ListChildren("")
+	if err != nil {
+		t.Fatalf("ListChildren: %v", err)
+	}
+	wantChildren := []Child{
+		{Name: "tools", Type: "module", ManifestPath: filepath.Join(dir1, "tools.yaml"), ModuleRoot: dir1},
+		{Name: "tools", Type: "namespace"},
+	}
+	if !reflect.DeepEqual(children, wantChildren) {
+		t.Fatalf("ListChildren(\"\") = %+v, want %+v", children, wantChildren)
+	}
+
+	modules, err := s.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	got := make(map[string]string)
+	for _, m := range modules {
+		if _, dup := got[m.Name]; dup {
+			t.Fatalf("List: модуль %q повторяется: %+v", m.Name, modules)
+		}
+		got[m.Name] = m.ManifestPath
+	}
+	wantModules := map[string]string{
+		"tools":       filepath.Join(dir1, "tools.yaml"),
+		"tools.build": filepath.Join(dir2, "tools", "build.yaml"),
+	}
+	if !reflect.DeepEqual(got, wantModules) {
+		t.Fatalf("List = %v, want %v", got, wantModules)
+	}
+}
+
+// TestLayeredListChildrenKeepsConflictBehindNamespace: конфликтный модуль
+// нижнего слоя (x.yaml + x/config.yaml) не теряется за namespace верхнего
+// и сохраняет пометку Conflict.
+func TestLayeredListChildrenKeepsConflictBehindNamespace(t *testing.T) {
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+	writeFile(t, filepath.Join(dir1, "tools", "build.yaml"), "name: build\n")
+	writeFile(t, filepath.Join(dir2, "tools.yaml"), "name: tools\n")
+	writeFile(t, filepath.Join(dir2, "tools", "config.yaml"), "name: tools\n")
+
+	s := NewLayeredSource(NewGlobalSource(dir1), NewGlobalSource(dir2))
+
+	children, err := s.ListChildren("")
+	if err != nil {
+		t.Fatalf("ListChildren: %v", err)
+	}
+	want := []Child{
+		{Name: "tools", Type: "namespace"},
+		{Name: "tools", Type: "module", ManifestPath: filepath.Join(dir2, "tools.yaml"), ModuleRoot: dir2, Conflict: true},
+	}
+	if !reflect.DeepEqual(children, want) {
+		t.Fatalf("ListChildren(\"\") = %+v, want %+v", children, want)
 	}
 }

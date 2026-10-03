@@ -3,6 +3,7 @@ package discovery
 import (
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -374,5 +375,92 @@ func TestCompositeSourceResolveNotFoundIsErrNotFound(t *testing.T) {
 	_, _, err := s.Resolve("zzz")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestCompositeListChildrenModuleAndNamespaceFromDifferentSources: модуль tools
+// из одного source и namespace tools из другого (в любом порядке sources,
+// в т.ч. namespace от mountpoint) видны оба, без ошибки конфликта.
+func TestCompositeListChildrenModuleAndNamespaceFromDifferentSources(t *testing.T) {
+	moduleDir := t.TempDir()
+	nsDir := t.TempDir()
+	writeFile(t, filepath.Join(moduleDir, "tools.yaml"), "name: tools\n")
+	writeFile(t, filepath.Join(nsDir, "tools", "build.yaml"), "name: build\n")
+	mountDir := t.TempDir()
+	writeFile(t, filepath.Join(mountDir, "build.yaml"), "name: build\n")
+
+	module := Child{Name: "tools", Type: "module", ManifestPath: filepath.Join(moduleDir, "tools.yaml"), ModuleRoot: moduleDir}
+	namespace := Child{Name: "tools", Type: "namespace"}
+
+	tests := []struct {
+		name      string
+		sources   []config.SourceConfig
+		want      []Child
+		wantBuild string
+	}{
+		{
+			name:      "модуль, затем namespace",
+			sources:   []config.SourceConfig{{Path: moduleDir}, {Path: nsDir}},
+			want:      []Child{module, namespace},
+			wantBuild: filepath.Join(nsDir, "tools", "build.yaml"),
+		},
+		{
+			name:      "namespace, затем модуль",
+			sources:   []config.SourceConfig{{Path: nsDir}, {Path: moduleDir}},
+			want:      []Child{namespace, module},
+			wantBuild: filepath.Join(nsDir, "tools", "build.yaml"),
+		},
+		{
+			name:      "namespace от mountpoint",
+			sources:   []config.SourceConfig{{Path: moduleDir}, {Path: mountDir, Mountpoint: "tools"}},
+			want:      []Child{module, namespace},
+			wantBuild: filepath.Join(mountDir, "build.yaml"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewCompositeSource(&config.Config{Sources: tt.sources})
+
+			children, err := s.ListChildren("")
+			if err != nil {
+				t.Fatalf("ListChildren: %v", err)
+			}
+			if !reflect.DeepEqual(children, tt.want) {
+				t.Fatalf("ListChildren(\"\") = %+v, want %+v", children, tt.want)
+			}
+
+			manifest, _, err := s.Resolve("tools.build")
+			if err != nil {
+				t.Fatalf("Resolve(tools.build): %v", err)
+			}
+			if manifest != tt.wantBuild {
+				t.Fatalf("Resolve(tools.build) = %q, want %q", manifest, tt.wantBuild)
+			}
+		})
+	}
+}
+
+// TestCompositeListChildrenKeepsConflictBehindNamespace: конфликтный модуль
+// (x.yaml + x/config.yaml) одного source не теряется за namespace другого
+// и сохраняет пометку Conflict.
+func TestCompositeListChildrenKeepsConflictBehindNamespace(t *testing.T) {
+	nsDir := t.TempDir()
+	conflictDir := t.TempDir()
+	writeFile(t, filepath.Join(nsDir, "tools", "build.yaml"), "name: build\n")
+	writeFile(t, filepath.Join(conflictDir, "tools.yaml"), "name: tools\n")
+	writeFile(t, filepath.Join(conflictDir, "tools", "config.yaml"), "name: tools\n")
+
+	s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: nsDir}, {Path: conflictDir}}})
+
+	children, err := s.ListChildren("")
+	if err != nil {
+		t.Fatalf("ListChildren: %v", err)
+	}
+	want := []Child{
+		{Name: "tools", Type: "namespace"},
+		{Name: "tools", Type: "module", ManifestPath: filepath.Join(conflictDir, "tools.yaml"), ModuleRoot: conflictDir, Conflict: true},
+	}
+	if !reflect.DeepEqual(children, want) {
+		t.Fatalf("ListChildren(\"\") = %+v, want %+v", children, want)
 	}
 }

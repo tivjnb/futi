@@ -27,8 +27,9 @@ type Child struct {
 }
 
 // Source — источник модулей. Реализации: GlobalSource (один каталог),
-// CompositeSource (несколько каталогов с namespace-маппингом).
-// Расширяемая точка для будущих источников (LocalSource, ProjectSource).
+// CompositeSource (несколько каталогов с namespace-маппингом),
+// FileSource (один файл модуля, например ./futi.yaml) и LayeredSource
+// (слои с приоритетом: локальные источники перекрывают глобальный).
 type Source interface {
 	// Resolve находит модуль по namespace (например "dev.deploy").
 	// Возвращает путь к манифесту и корень модуля (директория пакета).

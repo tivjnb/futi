@@ -106,8 +106,13 @@ func (s *LayeredSource) List() ([]ModuleInfo, error) {
 	return modules, nil
 }
 
+// ListChildren объединяет детей namespace из всех слоёв. Ключ слияния — пара
+// (имя, тип): модуль x и namespace x сосуществуют, как и в Resolve
+// (x — модуль, x.y — внутри namespace). Внутри одного ключа побеждает
+// верхний слой; запись берётся целиком, вместе с пометкой Conflict.
 func (s *LayeredSource) ListChildren(namespace string) ([]Child, error) {
-	seen := make(map[string]bool)
+	type childKey struct{ name, typ string }
+	seen := make(map[childKey]bool)
 	var result []Child
 	var anyErr error
 	foundAny := false
@@ -120,10 +125,11 @@ func (s *LayeredSource) ListChildren(namespace string) ([]Child, error) {
 		}
 		foundAny = true
 		for _, c := range children {
-			if seen[c.Name] {
+			key := childKey{c.Name, c.Type}
+			if seen[key] {
 				continue
 			}
-			seen[c.Name] = true
+			seen[key] = true
 			result = append(result, c)
 		}
 	}

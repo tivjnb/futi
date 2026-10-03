@@ -394,6 +394,20 @@ func TestCompleteConflictHasNoDescription(t *testing.T) {
 	}
 }
 
+// TestCompleteDedupModuleAndNamespace: модуль x.yaml рядом с namespace x/
+// (без config.yaml) даёт одну подсказку x с описанием модуля.
+func TestCompleteDedupModuleAndNamespace(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "x.yaml"), "name: x\ndescription: Модуль x\ncmd: echo x\n")
+	writeFile(t, filepath.Join(dir, "x", "y.yaml"), "name: y\ncmd: echo y\n")
+
+	matches, _ := Complete(discovery.NewGlobalSource(dir), nil, []string{}, "x")
+	want := []Match{{Text: "x", Description: "Модуль x"}}
+	if !reflect.DeepEqual(matches, want) {
+		t.Fatalf("matches = %+v, want %+v", matches, want)
+	}
+}
+
 // newHelpSource создаёт модуль с user-defined командой "help", чтобы проверить,
 // что системная подсказка help не дублируется.
 func newHelpSource(t *testing.T) discovery.Source {

@@ -72,41 +72,30 @@ func (cs *CompositeSource) Resolve(namespace string) (string, string, error) {
 }
 
 // ListChildren возвращает непосредственных детей namespace, объединяя
-// результаты из всех sources. Если два source дают модуль с одинаковым
-// именем — ошибка конфликта.
+// результаты из всех sources. Ключ слияния — пара (имя, тип): модуль x и
+// namespace x сосуществуют, как и в Resolve (x — модуль, x.y — внутри
+// namespace). Если два source дают модуль с одинаковым именем — ошибка
+// конфликта (Resolve для него тоже вернёт конфликт).
 func (cs *CompositeSource) ListChildren(namespace string) ([]Child, error) {
-	type childEntry struct {
-		typ           string
-		moduleCount   int
-	}
-	seen := make(map[string]*childEntry)
+	type childKey struct{ name, typ string }
+	seen := make(map[childKey]bool)
+	moduleCount := make(map[string]int)
 	var result []Child
 
-	addNamespace := func(name string) {
-		if e, ok := seen[name]; ok {
-			if e.typ == "module" {
-				// Conflict: name is both module and namespace
-				return // will be reported as error below
-			}
-			return // already seen as namespace
+	add := func(c Child) {
+		if c.Type == "module" {
+			moduleCount[c.Name]++
 		}
-		seen[name] = &childEntry{typ: "namespace"}
-		result = append(result, Child{Name: name, Type: "namespace"})
+		key := childKey{c.Name, c.Type}
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		result = append(result, c)
 	}
 
-	addModule := func(c Child) {
-		if e, ok := seen[c.Name]; ok {
-			if e.typ == "namespace" {
-				return // conflict: will be detected
-			}
-			e.moduleCount++
-			if e.moduleCount > 1 {
-				return // conflict: will be reported
-			}
-			return // already have this module from another source
-		}
-		seen[c.Name] = &childEntry{typ: "module", moduleCount: 1}
-		result = append(result, c)
+	addNamespace := func(name string) {
+		add(Child{Name: name, Type: "namespace"})
 	}
 
 	for i, sc := range cs.configs {
@@ -120,11 +109,7 @@ func (cs *CompositeSource) ListChildren(namespace string) ([]Child, error) {
 				continue
 			}
 			for _, c := range children {
-				if c.Type == "module" {
-					addModule(c)
-				} else {
-					addNamespace(c.Name)
-				}
+				add(c)
 			}
 
 		case namespace == "" && prefix != "":
@@ -149,27 +134,15 @@ func (cs *CompositeSource) ListChildren(namespace string) ([]Child, error) {
 				continue
 			}
 			for _, c := range children {
-				if c.Type == "module" {
-					addModule(c)
-				} else {
-					addNamespace(c.Name)
-				}
+				add(c)
 			}
 		}
 	}
 
-	// Проверка конфликтов
-	for name, e := range seen {
-		if e.moduleCount > 1 {
-			return nil, fmt.Errorf("discovery: conflict: module %q found in multiple sources", name)
-		}
-		if e.typ == "module" {
-			// Check if it's also a namespace (shouldn't happen, but check)
-			for _, c := range result {
-				if c.Name == name && c.Type != "module" {
-					return nil, fmt.Errorf("discovery: conflict: %q is both module and namespace", name)
-				}
-			}
+	// Модуль с одним именем из нескольких sources — конфликт.
+	for _, c := range result {
+		if c.Type == "module" && moduleCount[c.Name] > 1 {
+			return nil, fmt.Errorf("discovery: conflict: module %q found in multiple sources", c.Name)
 		}
 	}
 
