@@ -3,7 +3,10 @@ package execmodule
 import (
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestLoadModuleParsesCommands(t *testing.T) {
@@ -412,4 +415,60 @@ commands:
 	if mod.Detach != "" {
 		t.Fatalf("expected empty detach, got %q", mod.Detach)
 	}
+}
+
+func TestParseModuleRejectsFIFOAndHugeFile(t *testing.T) {
+	t.Run("fifo", func(t *testing.T) {
+		fifo := filepath.Join(t.TempDir(), "x.yaml")
+		if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+			t.Fatalf("mkfifo: %v", err)
+		}
+		t.Cleanup(func() {
+			if f, err := os.OpenFile(fifo, os.O_RDWR, 0); err == nil {
+				f.Close()
+			}
+		})
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := ParseModule(fifo, filepath.Dir(fifo))
+			errCh <- err
+		}()
+		select {
+		case err := <-errCh:
+			if err == nil {
+				t.Fatal("ParseModule(FIFO): ожидалась ошибка")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("ParseModule завис на FIFO")
+		}
+	})
+
+	const limit = 1 << 20
+	t.Run("больше лимита", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "big.yaml")
+		writeFile(t, path, "# "+strings.Repeat("a", limit-2)+"\nname: big\n")
+		if info, _ := os.Stat(path); info.Size() <= limit {
+			t.Fatalf("размер файла %d, нужно > %d", info.Size(), limit)
+		}
+		_, err := ParseModule(path, filepath.Dir(path))
+		if err == nil || !strings.Contains(err.Error(), "размер") {
+			t.Fatalf("ParseModule(файл > 1 МиБ): err = %v, want ошибка с \"размер\"", err)
+		}
+	})
+
+	t.Run("ровно лимит", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "ok.yaml")
+		head := "name: ok\n# "
+		writeFile(t, path, head+strings.Repeat("a", limit-len(head)))
+		if info, _ := os.Stat(path); info.Size() != limit {
+			t.Fatalf("размер файла %d, want %d", info.Size(), limit)
+		}
+		mod, err := ParseModule(path, filepath.Dir(path))
+		if err != nil {
+			t.Fatalf("ParseModule(файл ровно в лимит): %v", err)
+		}
+		if mod.Name != "ok" {
+			t.Fatalf("Name = %q, want %q", mod.Name, "ok")
+		}
+	})
 }

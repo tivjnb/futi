@@ -223,7 +223,8 @@ func nsName(prefix, name string) string {
 	return prefix + name
 }
 
-// statFile сообщает, что path — существующий файл (не каталог).
+// statFile сообщает, что path — существующий обычный файл (не каталог, FIFO,
+// устройство или сокет).
 // Отсутствие пути (в том числе когда родитель — не каталог) и каталог — это
 // false без ошибки; любая другая ошибка stat (например, EACCES) возвращается
 // вызывающему: её нельзя трактовать как «модуля нет».
@@ -235,15 +236,16 @@ func statFile(path string) (bool, error) {
 		}
 		return false, err
 	}
-	return !info.IsDir(), nil
+	return info.Mode().IsRegular(), nil
 }
 
+// fileExists сообщает, что path — существующий обычный файл.
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil {
 		return false
 	}
-	return !info.IsDir()
+	return info.Mode().IsRegular()
 }
 
 // ListChildren возвращает непосредственных детей namespace:

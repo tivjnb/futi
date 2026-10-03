@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestResolveSingleYAML(t *testing.T) {
@@ -767,5 +769,33 @@ func TestGlobalSourceResolvePackageCheckStatError(t *testing.T) {
 	}
 	if !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("ожидался fs.ErrPermission, получено: %v", err)
+	}
+}
+
+func TestResolveFIFOManifestIsNotFound(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "x.yaml")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+	// Снимаем возможную блокировку, чтобы горутина не протекла при падении теста.
+	t.Cleanup(func() {
+		if f, err := os.OpenFile(fifo, os.O_RDWR, 0); err == nil {
+			f.Close()
+		}
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, _, err := NewGlobalSource(dir).Resolve("x")
+		errCh <- err
+	}()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Resolve(\"x\") с FIFO вместо манифеста: err = %v, want ErrNotFound", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Resolve завис на FIFO")
 	}
 }
