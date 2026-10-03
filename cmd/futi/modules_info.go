@@ -16,6 +16,9 @@ func runModulesPath(w io.Writer, source discovery.Source, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: futi modules path <name>")
 	}
+	if err := validateResolveName(args[0]); err != nil {
+		return err
+	}
 	manifestPath, _, err := source.Resolve(args[0])
 	if err != nil {
 		return fmt.Errorf("modules path: %w", err)
@@ -29,6 +32,9 @@ func runModulesPath(w io.Writer, source discovery.Source, args []string) error {
 func runModulesInfo(w io.Writer, source discovery.Source, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: futi modules info <name>")
+	}
+	if err := validateResolveName(args[0]); err != nil {
+		return err
 	}
 	manifestPath, moduleRoot, err := source.Resolve(args[0])
 	if err != nil {

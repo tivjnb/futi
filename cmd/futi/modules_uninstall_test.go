@@ -210,7 +210,7 @@ func TestUninstall_SingleModuleKeepsRootWithSlash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(root+"/"), newTestCache(), []string{"n/m", "--force", "--yes"})
+	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(root+"/"), newTestCache(), []string{"n.m", "--force", "--yes"})
 	if err != nil {
 		t.Fatalf("runModulesUninstall: %v", err)
 	}
@@ -219,5 +219,28 @@ func TestUninstall_SingleModuleKeepsRootWithSlash(t *testing.T) {
 	}
 	if _, statErr := os.Stat(moduleDir); !os.IsNotExist(statErr) {
 		t.Fatal("модуль должен быть удалён")
+	}
+}
+
+// "dev/config" раньше резолвился в манифест пакета dev и удалял весь dev/.
+func TestUninstall_SlashNameRejectedKeepsPackage(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "m")
+	t.Setenv("FUTI_MODULES_DIR", root)
+	t.Chdir(t.TempDir())
+
+	pkgDir := filepath.Join(root, "dev")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "config.yaml"), []byte("name: dev\ncommands:\n  run:\n    cmd: echo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(root), newTestCache(), []string{"dev/config", "--force", "--yes"})
+	if err == nil || !strings.Contains(err.Error(), "invalid module name") {
+		t.Fatalf("err = %v, want invalid module name", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(pkgDir, "config.yaml")); statErr != nil {
+		t.Fatalf("пакет должен остаться цел: %v", statErr)
 	}
 }

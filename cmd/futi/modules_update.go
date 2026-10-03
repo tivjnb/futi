@@ -46,6 +46,9 @@ func parseUpdateArgs(args []string) (*updateArgs, error) {
 	}
 	if len(positional) == 1 {
 		cfg.name = positional[0]
+		if err := validateResolveName(cfg.name); err != nil {
+			return nil, err
+		}
 	}
 	return cfg, nil
 }

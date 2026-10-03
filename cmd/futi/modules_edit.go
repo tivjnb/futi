@@ -195,6 +195,9 @@ func parseAddCommandArgs(args []string) (*addCommandArgs, error) {
 		return nil, fmt.Errorf("usage: futi modules add_command <module> <command> [--desc <text>] [--cmd <shell>]")
 	}
 	cfg.module, cfg.command = positional[0], positional[1]
+	if err := validateResolveName(cfg.module); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 
@@ -226,6 +229,9 @@ func runModulesRemoveCommand(w io.Writer, source discovery.Source, args []string
 		return fmt.Errorf("usage: futi modules remove_command <module> <command>")
 	}
 	module, command := args[0], args[1]
+	if err := validateResolveName(module); err != nil {
+		return err
+	}
 
 	manifestPath, _, err := source.Resolve(module)
 	if err != nil {

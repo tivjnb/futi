@@ -30,6 +30,22 @@ func validateModuleName(name string) error {
 	return nil
 }
 
+// validateResolveName проверяет имя, которое пойдёт в Source.Resolve
+// (uninstall, info, path, update, add_command, remove_command): namespace
+// только в точечной форме (a.b). Слэш запрещён: Resolve режет имя по ".",
+// и "dev/config" обходил бы проверки пакета/сегмента config, а uninstall
+// удалял бы весь каталог. Слэш остаётся допустимым для install/init —
+// там имя задаёт путь размещения и в Resolve не попадает.
+func validateResolveName(name string) error {
+	if err := validateModuleName(name); err != nil {
+		return err
+	}
+	if strings.Contains(name, "/") {
+		return fmt.Errorf("invalid module name %q: namespace записывается через точку (a.b), не через /", name)
+	}
+	return nil
+}
+
 // normalizePath приводит путь к абсолютному чистому виду и по возможности
 // резолвит симлинки (если путь не существует — остаётся Abs+Clean).
 func normalizePath(path string) string {

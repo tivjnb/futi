@@ -57,8 +57,9 @@ func parseUninstallArgs(args []string) (*uninstallArgs, error) {
 		return nil, fmt.Errorf("expected one module name, got %d", len(positional))
 	}
 	cfg.name = positional[0]
-	// Имя проверяем до Resolve: "" / "." иначе резолвятся в корень каталога модулей.
-	if err := validateModuleName(cfg.name); err != nil {
+	// Имя проверяем до Resolve: "" / "." иначе резолвятся в корень каталога модулей,
+	// а "a/b" обходит проверки пакета в Resolve.
+	if err := validateResolveName(cfg.name); err != nil {
 		return nil, err
 	}
 	return cfg, nil

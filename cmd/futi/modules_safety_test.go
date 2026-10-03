@@ -23,6 +23,19 @@ func TestValidateModuleName(t *testing.T) {
 	}
 }
 
+func TestValidateResolveName(t *testing.T) {
+	for _, name := range []string{"qr", "dev.deploy", "my-mod"} {
+		if err := validateResolveName(name); err != nil {
+			t.Errorf("validateResolveName(%q) unexpected error: %v", name, err)
+		}
+	}
+	for _, name := range []string{"", "dev/config", "images/qr", "a/../b", "/abs"} {
+		if err := validateResolveName(name); err == nil {
+			t.Errorf("validateResolveName(%q) must fail", name)
+		}
+	}
+}
+
 func TestEnsureWithinRoot(t *testing.T) {
 	root := t.TempDir()
 	inside := filepath.Join(root, "qr")
