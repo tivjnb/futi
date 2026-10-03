@@ -202,8 +202,8 @@ func TestValidateCollectsAllErrors(t *testing.T) {
 			"build": {
 				Cmd: "docker build",
 				Params: []Param{
-					{Name: "tag", Type: "float"},     // ошибка 2: невалидный тип
-					{Name: "tag", Type: "string"},    // ошибка 3: дубликат
+					{Name: "tag", Type: "float"},  // ошибка 2: невалидный тип
+					{Name: "tag", Type: "string"}, // ошибка 3: дубликат
 				},
 			},
 		},
@@ -273,7 +273,6 @@ func TestValidateNegativePositionalMin(t *testing.T) {
 		t.Fatalf("unexpected warnings: %v", warnings)
 	}
 }
-
 
 func TestValidateDefaultCmdParams(t *testing.T) {
 	mod := &Module{

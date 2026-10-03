@@ -60,9 +60,11 @@ func NewGlobalSource(rootDir string) *GlobalSource {
 }
 
 // Resolve реализует SaltStack-модель:
-//   namespace "dev.deploy" → dev/deploy.yaml или dev/deploy/config.yaml
-//   если найдены оба — ошибка конфликта
-//   если ни один — ошибка not found
+//
+//	namespace "dev.deploy" → dev/deploy.yaml или dev/deploy/config.yaml
+//	если найдены оба — ошибка конфликта
+//	если ни один — ошибка not found
+//
 // Пустой namespace и пустые сегменты ("a..b", ".a", "a.") — ошибка:
 // иначе пустой путь резолвился бы в корневой config.yaml.
 // Пакет — лист: если любой родительский каталог пути содержит config.yaml,
@@ -368,6 +370,7 @@ func (s *GlobalSource) namespaceDir(namespace string) (string, error) {
 //   - *.yaml файлы (кроме config.yaml) → child module
 //   - поддиректории с config.yaml → child module (пакет)
 //   - поддиректории без config.yaml → child namespace
+//
 // Записи, которые Resolve не найдёт, пропускаются (см. classifyEntry).
 // Пустой namespace = корень RootDir.
 func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {

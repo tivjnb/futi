@@ -15,8 +15,8 @@ import (
 	"futi/internal/config"
 	"futi/internal/discovery"
 	"futi/internal/execmodule"
-	"futi/internal/modulerunner"
 	"futi/internal/modulecache"
+	"futi/internal/modulerunner"
 
 	"github.com/olekukonko/tablewriter"
 )

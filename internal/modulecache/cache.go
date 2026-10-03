@@ -36,9 +36,9 @@ type Cache struct {
 	mu              sync.RWMutex
 	storage         Storage
 	policy          RefreshPolicy
-	entries         map[string]entry  // in-memory: ALL (global + local)
-	persistentPaths map[string]bool   // set путей глобальных модулей
-	lastRefresh     time.Time         // для every_t_min политики и cacheFile
+	entries         map[string]entry // in-memory: ALL (global + local)
+	persistentPaths map[string]bool  // set путей глобальных модулей
+	lastRefresh     time.Time        // для every_t_min политики и cacheFile
 }
 
 // New создаёт Cache с заданными Storage и RefreshPolicy (DI).

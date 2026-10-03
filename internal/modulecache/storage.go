@@ -25,9 +25,9 @@ type entry struct {
 
 // cacheFile — формат на диске (gob-сериализуемый).
 type cacheFile struct {
-	Version         int               // версионирование схемы; текущая = 1
-	LastRefreshTime time.Time         // для every_t_min политики
-	Entries         map[string]entry  // только persistent (глобальные) модули
+	Version         int              // версионирование схемы; текущая = 1
+	LastRefreshTime time.Time        // для every_t_min политики
+	Entries         map[string]entry // только persistent (глобальные) модули
 }
 
 // Текущая версия схемы cacheFile. При несовпадении — rebuild с пустого состояния.

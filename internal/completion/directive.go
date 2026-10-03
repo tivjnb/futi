@@ -31,12 +31,12 @@ const (
 // String возвращает имя директивы (для stderr-сообщения об отладке).
 func (d Directive) String() string {
 	names := map[Directive]string{
-		ShellCompDirectiveDefault:        "ShellCompDirectiveDefault",
-		ShellCompDirectiveError:          "ShellCompDirectiveError",
-		ShellCompDirectiveNoSpace:        "ShellCompDirectiveNoSpace",
-		ShellCompDirectiveNoFileComp:     "ShellCompDirectiveNoFileComp",
-		ShellCompDirectiveFilterFileExt:  "ShellCompDirectiveFilterFileExt",
-		ShellCompDirectiveFilterDirs:     "ShellCompDirectiveFilterDirs",
+		ShellCompDirectiveDefault:       "ShellCompDirectiveDefault",
+		ShellCompDirectiveError:         "ShellCompDirectiveError",
+		ShellCompDirectiveNoSpace:       "ShellCompDirectiveNoSpace",
+		ShellCompDirectiveNoFileComp:    "ShellCompDirectiveNoFileComp",
+		ShellCompDirectiveFilterFileExt: "ShellCompDirectiveFilterFileExt",
+		ShellCompDirectiveFilterDirs:    "ShellCompDirectiveFilterDirs",
 	}
 
 	// Комбинации флагов не имеют одиночного имени — выводим битовую сумму.

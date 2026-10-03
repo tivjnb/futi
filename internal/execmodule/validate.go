@@ -7,7 +7,7 @@ import (
 
 // Допустимые типы параметров. Пустой тип означает string (по умолчанию).
 var validParamTypes = map[string]bool{
-	"":      true,
+	"":       true,
 	"string": true,
 	"bool":   true,
 	"int":    true,
