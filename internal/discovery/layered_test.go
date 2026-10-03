@@ -303,6 +303,34 @@ func TestLayeredRecursiveSameAsBeforeNoCycles(t *testing.T) {
 	}
 }
 
+// TestLayeredRecursiveKeepsModuleWithoutParentNamespace: модуль из
+// ./futi.yaml с точкой в имени (`my.tool`), когда namespace `my` нет ни в
+// одном слое, не теряется в рекурсивном листинге — как и в ListChildren("").
+// Такие записи идут после обхода дерева, в исходном порядке.
+func TestLayeredRecursiveKeepsModuleWithoutParentNamespace(t *testing.T) {
+	local := t.TempDir()
+	writeFile(t, filepath.Join(local, "futi.yaml"), "name: my.tool\n")
+	global := t.TempDir()
+	writeFile(t, filepath.Join(global, "ok.yaml"), "name: ok\n")
+
+	s := NewLayeredSource(
+		NewFileSource(filepath.Join(local, "futi.yaml"), local, "my.tool"),
+		NewGlobalSource(global),
+	)
+
+	got, err := s.ListChildrenRecursive("")
+	if err != nil {
+		t.Fatalf("ListChildrenRecursive: %v", err)
+	}
+	want := []Child{
+		{Name: "ok", Type: "module", ManifestPath: filepath.Join(global, "ok.yaml"), ModuleRoot: global},
+		{Name: "my.tool", Type: "module", ManifestPath: filepath.Join(local, "futi.yaml"), ModuleRoot: local},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListChildrenRecursive(\"\") =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
 // nameType — имя и тип записи листинга (без путей) для сравнения множеств.
 type nameType struct{ name, typ string }
 

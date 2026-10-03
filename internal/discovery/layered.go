@@ -173,13 +173,17 @@ func (s *LayeredSource) ListChildrenRecursive(namespace string) ([]Child, error)
 }
 
 // mergeRecursive сливает рекурсивные листинги (имена — пути от общего
-// контекста, namespace идёт раньше своих потомков) в один. Ключ — пара
-// (имя, тип), побеждает запись из более раннего списка. Порядок — как при
-// рекурсии через ListChildren по объединённому дереву: обход в глубину,
-// дети каждого namespace — в порядке списков, внутри списка — в его порядке.
+// контекста) в один. Ключ — пара (имя, тип), побеждает запись из более
+// раннего списка. Порядок — как при рекурсии через ListChildren по
+// объединённому дереву: обход в глубину, дети каждого namespace — в порядке
+// списков, внутри списка — в его порядке. Предусловие обхода — родитель-
+// namespace записи присутствует в объединённых списках. Записи без него
+// (модуль `my.tool` из ./futi.yaml при отсутствии namespace `my`) обход не
+// посещает — они добавляются после него в исходном порядке.
 func mergeRecursive(lists [][]Child) []Child {
 	type childKey struct{ name, typ string }
 	seen := make(map[childKey]bool)
+	var merged []Child
 	byParent := make(map[string][]Child)
 	for _, list := range lists {
 		for _, c := range list {
@@ -188,6 +192,7 @@ func mergeRecursive(lists [][]Child) []Child {
 				continue
 			}
 			seen[key] = true
+			merged = append(merged, c)
 			parent := ""
 			if i := strings.LastIndex(c.Name, "."); i >= 0 {
 				parent = c.Name[:i]
@@ -197,15 +202,22 @@ func mergeRecursive(lists [][]Child) []Child {
 	}
 
 	var result []Child
+	visited := make(map[childKey]bool)
 	var walk func(parent string)
 	walk = func(parent string) {
 		for _, c := range byParent[parent] {
 			result = append(result, c)
+			visited[childKey{c.Name, c.Type}] = true
 			if c.Type == "namespace" {
 				walk(c.Name)
 			}
 		}
 	}
 	walk("")
+	for _, c := range merged {
+		if !visited[childKey{c.Name, c.Type}] {
+			result = append(result, c)
+		}
+	}
 	return result
 }
