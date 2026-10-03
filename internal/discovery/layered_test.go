@@ -238,6 +238,177 @@ func TestLayeredSourceListChildrenRecursive(t *testing.T) {
 	}
 }
 
+// TestLayeredRecursiveSameAsBeforeNoCycles: на дереве без циклов рекурсивный
+// листинг двух слоёв совпадает с прежним (рекурсия через ListChildren):
+// дети каждого namespace — сначала верхнего слоя, затем новые ключи нижнего,
+// обход в глубину; пара (имя, тип) берётся из верхнего слоя, Conflict
+// сохраняется.
+func TestLayeredRecursiveSameAsBeforeNoCycles(t *testing.T) {
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+	writeFile(t, filepath.Join(dir1, "docker.yaml"), "name: docker\n")
+	writeFile(t, filepath.Join(dir1, "tools.yaml"), "name: tools\n")
+	writeFile(t, filepath.Join(dir1, "dev", "deploy.yaml"), "name: deploy\n")
+	writeFile(t, filepath.Join(dir1, "dev", "sub", "x.yaml"), "name: x\n")
+
+	writeFile(t, filepath.Join(dir2, "docker.yaml"), "name: docker\n")
+	writeFile(t, filepath.Join(dir2, "dev", "build.yaml"), "name: build\n")
+	writeFile(t, filepath.Join(dir2, "dev", "c.yaml"), "name: c\n")
+	writeFile(t, filepath.Join(dir2, "dev", "c", "config.yaml"), "name: c\n")
+	writeFile(t, filepath.Join(dir2, "dev", "sub", "y.yaml"), "name: y\n")
+	writeFile(t, filepath.Join(dir2, "tools", "build.yaml"), "name: build\n")
+	writeFile(t, filepath.Join(dir2, "pkg", "config.yaml"), "name: pkg\n")
+	writeFile(t, filepath.Join(dir2, "images", "png.yaml"), "name: png\n")
+
+	s := NewLayeredSource(NewGlobalSource(dir1), NewGlobalSource(dir2))
+
+	got, err := s.ListChildrenRecursive("")
+	if err != nil {
+		t.Fatalf("ListChildrenRecursive: %v", err)
+	}
+	want := []Child{
+		{Name: "dev", Type: "namespace"},
+		{Name: "dev.deploy", Type: "module", ManifestPath: filepath.Join(dir1, "dev", "deploy.yaml"), ModuleRoot: filepath.Join(dir1, "dev")},
+		{Name: "dev.sub", Type: "namespace"},
+		{Name: "dev.sub.x", Type: "module", ManifestPath: filepath.Join(dir1, "dev", "sub", "x.yaml"), ModuleRoot: filepath.Join(dir1, "dev", "sub")},
+		{Name: "dev.sub.y", Type: "module", ManifestPath: filepath.Join(dir2, "dev", "sub", "y.yaml"), ModuleRoot: filepath.Join(dir2, "dev", "sub")},
+		{Name: "dev.build", Type: "module", ManifestPath: filepath.Join(dir2, "dev", "build.yaml"), ModuleRoot: filepath.Join(dir2, "dev")},
+		{Name: "dev.c", Type: "module", ManifestPath: filepath.Join(dir2, "dev", "c.yaml"), ModuleRoot: filepath.Join(dir2, "dev"), Conflict: true},
+		{Name: "docker", Type: "module", ManifestPath: filepath.Join(dir1, "docker.yaml"), ModuleRoot: dir1},
+		{Name: "tools", Type: "module", ManifestPath: filepath.Join(dir1, "tools.yaml"), ModuleRoot: dir1},
+		{Name: "images", Type: "namespace"},
+		{Name: "images.png", Type: "module", ManifestPath: filepath.Join(dir2, "images", "png.yaml"), ModuleRoot: filepath.Join(dir2, "images")},
+		{Name: "pkg", Type: "module", ManifestPath: filepath.Join(dir2, "pkg", "config.yaml"), ModuleRoot: filepath.Join(dir2, "pkg")},
+		{Name: "tools", Type: "namespace"},
+		{Name: "tools.build", Type: "module", ManifestPath: filepath.Join(dir2, "tools", "build.yaml"), ModuleRoot: filepath.Join(dir2, "tools")},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListChildrenRecursive(\"\") =\n%+v\nwant\n%+v", got, want)
+	}
+
+	got, err = s.ListChildrenRecursive("dev")
+	if err != nil {
+		t.Fatalf("ListChildrenRecursive(dev): %v", err)
+	}
+	wantDev := []Child{
+		{Name: "deploy", Type: "module", ManifestPath: filepath.Join(dir1, "dev", "deploy.yaml"), ModuleRoot: filepath.Join(dir1, "dev")},
+		{Name: "sub", Type: "namespace"},
+		{Name: "sub.x", Type: "module", ManifestPath: filepath.Join(dir1, "dev", "sub", "x.yaml"), ModuleRoot: filepath.Join(dir1, "dev", "sub")},
+		{Name: "sub.y", Type: "module", ManifestPath: filepath.Join(dir2, "dev", "sub", "y.yaml"), ModuleRoot: filepath.Join(dir2, "dev", "sub")},
+		{Name: "build", Type: "module", ManifestPath: filepath.Join(dir2, "dev", "build.yaml"), ModuleRoot: filepath.Join(dir2, "dev")},
+		{Name: "c", Type: "module", ManifestPath: filepath.Join(dir2, "dev", "c.yaml"), ModuleRoot: filepath.Join(dir2, "dev"), Conflict: true},
+	}
+	if !reflect.DeepEqual(got, wantDev) {
+		t.Fatalf("ListChildrenRecursive(dev) =\n%+v\nwant\n%+v", got, wantDev)
+	}
+}
+
+// nameType — имя и тип записи листинга (без путей) для сравнения множеств.
+type nameType struct{ name, typ string }
+
+func nameTypeSet(children []Child) map[nameType]int {
+	set := make(map[nameType]int)
+	for _, c := range children {
+		set[nameType{c.Name, c.Type}]++
+	}
+	return set
+}
+
+// TestLayeredRecursiveLoopMatchesGlobal: симлинк a/loop -> .. (цикл) —
+// Layered и Composite (mount без префикса и с префиксом) дают то же
+// конечное множество (имя, тип), что и сам GlobalSource, без мусора
+// из повторного обхода через цикл.
+func TestLayeredRecursiveLoopMatchesGlobal(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "top.yaml"), "name: top\n")
+	writeFile(t, filepath.Join(root, "a", "m.yaml"), "name: m\n")
+	symlinkOrFail(t, "..", filepath.Join(root, "a", "loop"))
+
+	want := map[nameType]int{
+		{"a", "namespace"}:      1,
+		{"a.loop", "namespace"}: 1,
+		{"a.m", "module"}:       1,
+		{"top", "module"}:       1,
+	}
+	wantPrefixed := map[nameType]int{
+		{"p", "namespace"}:        1,
+		{"p.a", "namespace"}:      1,
+		{"p.a.loop", "namespace"}: 1,
+		{"p.a.m", "module"}:       1,
+		{"p.top", "module"}:       1,
+	}
+
+	global := NewGlobalSource(root)
+	plain := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: root}}})
+	mounted := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: root, Mountpoint: "p"}}})
+
+	tests := []struct {
+		name string
+		src  Source
+		want map[nameType]int
+	}{
+		{"global", global, want},
+		{"layered(global)", NewLayeredSource(global), want},
+		{"composite без префикса", plain, want},
+		{"composite с префиксом p", mounted, wantPrefixed},
+		{"layered(composite)", NewLayeredSource(plain), want},
+		{"layered(composite p)", NewLayeredSource(mounted), wantPrefixed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			children, err := tt.src.ListChildrenRecursive("")
+			if err != nil {
+				t.Fatalf("ListChildrenRecursive: %v", err)
+			}
+			if got := nameTypeSet(children); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("ListChildrenRecursive(\"\"): %d записей (%d разных пар), want %v", len(children), len(got), tt.want)
+			}
+		})
+	}
+}
+
+// TestLayeredRecursiveLayerErrors фиксирует решение об ошибках слоёв:
+// слой, у которого нет запрошенного namespace, пропускается, если другой
+// слой его листит (как в ListChildren); единственный слой — ошибка
+// пробрасывается; ошибка внутри поддерева слоя (конфликт модуля из двух
+// sources в Composite на глубине) пробрасывается всегда — иначе пропал бы
+// весь слой, а конфликт остался бы незамеченным.
+func TestLayeredRecursiveLayerErrors(t *testing.T) {
+	onlyNs := t.TempDir()
+	writeFile(t, filepath.Join(onlyNs, "ns", "m.yaml"), "name: m\n")
+
+	conflictDir1 := t.TempDir()
+	conflictDir2 := t.TempDir()
+	writeFile(t, filepath.Join(conflictDir1, "ns", "docker.yaml"), "name: docker\n")
+	writeFile(t, filepath.Join(conflictDir2, "ns", "docker.yaml"), "name: docker\n")
+	conflicting := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: conflictDir1}, {Path: conflictDir2}}})
+
+	local := t.TempDir()
+	writeFile(t, filepath.Join(local, "futi.yaml"), "name: local\n")
+	fileSrc := NewFileSource(filepath.Join(local, "futi.yaml"), local, "local")
+
+	tests := []struct {
+		name      string
+		src       Source
+		namespace string
+		wantErr   bool
+	}{
+		{"namespace только в нижнем слое", NewLayeredSource(NewGlobalSource(t.TempDir()), NewGlobalSource(onlyNs)), "ns", false},
+		{"единственный слой без namespace", NewLayeredSource(NewGlobalSource(onlyNs)), "nope", true},
+		{"единственный слой с конфликтом", NewLayeredSource(conflicting), "", true},
+		{"FileSource поверх конфликта", NewLayeredSource(fileSrc, conflicting), "", true},
+		{"конфликт за namespace другого слоя", NewLayeredSource(NewGlobalSource(onlyNs), conflicting), "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.src.ListChildrenRecursive(tt.namespace)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ListChildrenRecursive(%q) err = %v, wantErr %v", tt.namespace, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // makeConflictSource создаёт источник с конфликтной парой a/b.yaml + a/b/config.yaml.
 func makeConflictSource(t *testing.T) *GlobalSource {
 	t.Helper()

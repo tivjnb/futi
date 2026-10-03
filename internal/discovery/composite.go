@@ -149,30 +149,67 @@ func (cs *CompositeSource) ListChildren(namespace string) ([]Child, error) {
 	return result, nil
 }
 
-// ListChildrenRecursive рекурсивно обходит поддерево namespace,
-// объединяя результаты из всех sources.
+// ListChildrenRecursive рекурсивно обходит поддерево namespace, объединяя
+// результаты из всех sources. Обход делегируется каждому GlobalSource
+// (защита от циклов симлинков — в нём); source, смонтированный ниже
+// namespace, даёт синтетические namespace-записи для сегментов префикса.
+// Слияние — как в ListChildren: ключ (имя, тип), source с ошибкой
+// пропускается; модуль с одним именем из нескольких sources на любом
+// уровне — ошибка конфликта.
 func (cs *CompositeSource) ListChildrenRecursive(namespace string) ([]Child, error) {
-	children, err := cs.ListChildren(namespace)
-	if err != nil {
-		return nil, err
+	var lists [][]Child
+	moduleCount := make(map[string]int)
+
+	for i, sc := range cs.configs {
+		prefix := sc.FullPrefix()
+
+		var relNs, mountRest string
+		switch {
+		case prefix == namespace:
+			// Source смонтирован ровно тут — всё его дерево
+		case namespace == "" && prefix != "":
+			mountRest = prefix
+		case strings.HasPrefix(prefix, namespace+"."):
+			mountRest = prefix[len(namespace)+1:]
+		case prefix == "":
+			// Source содержит namespace в своём дереве
+			relNs = namespace
+		case strings.HasPrefix(namespace, prefix+"."):
+			relNs = namespace[len(prefix)+1:]
+		default:
+			continue
+		}
+
+		var list []Child
+		if mountRest != "" {
+			// Source смонтирован ниже — namespace для каждого сегмента префикса
+			segments := strings.Split(mountRest, ".")
+			for j := range segments {
+				list = append(list, Child{Name: strings.Join(segments[:j+1], "."), Type: "namespace"})
+			}
+		}
+
+		children, err := cs.sources[i].ListChildrenRecursive(relNs)
+		if err == nil {
+			for _, c := range children {
+				if mountRest != "" {
+					c.Name = mountRest + "." + c.Name
+				}
+				if c.Type == "module" {
+					moduleCount[c.Name]++
+				}
+				list = append(list, c)
+			}
+		}
+		lists = append(lists, list)
 	}
 
-	var result []Child
-	for _, c := range children {
-		result = append(result, c)
-		if c.Type == "namespace" {
-			fullNs := c.Name
-			if namespace != "" {
-				fullNs = namespace + "." + c.Name
-			}
-			subChildren, err := cs.ListChildrenRecursive(fullNs)
-			if err != nil {
-				return nil, err
-			}
-			for _, sc := range subChildren {
-				sc.Name = c.Name + "." + sc.Name
-				result = append(result, sc)
-			}
+	result := mergeRecursive(lists)
+
+	// Модуль с одним именем из нескольких sources — конфликт.
+	for _, c := range result {
+		if c.Type == "module" && moduleCount[c.Name] > 1 {
+			return nil, fmt.Errorf("discovery: conflict: module %q found in multiple sources", c.Name)
 		}
 	}
 

@@ -3,6 +3,7 @@ package discovery
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // FileSource — источник из одного YAML-файла модуля.
@@ -140,30 +141,72 @@ func (s *LayeredSource) ListChildren(namespace string) ([]Child, error) {
 	return result, nil
 }
 
+// ListChildrenRecursive делегирует обход поддерева каждому слою (защита от
+// циклов симлинков — в самих слоях) и сливает результаты как ListChildren:
+// ключ — пара (имя, тип), побеждает верхний слой, Conflict сохраняется.
+// Слой, который не может листить сам namespace (например, его там нет),
+// пропускается, если namespace листит другой слой; если не может никто —
+// ошибка. Ошибка внутри поддерева слоя (namespace слой листит, а обход —
+// нет: конфликт модуля из двух sources в Composite) пробрасывается всегда:
+// иначе пропал бы весь слой, а конфликт остался бы незамеченным.
 func (s *LayeredSource) ListChildrenRecursive(namespace string) ([]Child, error) {
-	children, err := s.ListChildren(namespace)
-	if err != nil {
-		return nil, err
-	}
+	var lists [][]Child
+	var anyErr error
+	foundAny := false
 
-	var result []Child
-	for _, c := range children {
-		result = append(result, c)
-		if c.Type == "namespace" {
-			fullNs := c.Name
-			if namespace != "" {
-				fullNs = namespace + "." + c.Name
-			}
-			subChildren, err := s.ListChildrenRecursive(fullNs)
-			if err != nil {
+	for _, layer := range s.layers {
+		children, err := layer.ListChildrenRecursive(namespace)
+		if err != nil {
+			if _, levelErr := layer.ListChildren(namespace); levelErr == nil {
 				return nil, err
 			}
-			for _, sc := range subChildren {
-				sc.Name = c.Name + "." + sc.Name
-				result = append(result, sc)
+			anyErr = err
+			continue
+		}
+		foundAny = true
+		lists = append(lists, children)
+	}
+
+	if !foundAny && anyErr != nil {
+		return nil, anyErr
+	}
+	return mergeRecursive(lists), nil
+}
+
+// mergeRecursive сливает рекурсивные листинги (имена — пути от общего
+// контекста, namespace идёт раньше своих потомков) в один. Ключ — пара
+// (имя, тип), побеждает запись из более раннего списка. Порядок — как при
+// рекурсии через ListChildren по объединённому дереву: обход в глубину,
+// дети каждого namespace — в порядке списков, внутри списка — в его порядке.
+func mergeRecursive(lists [][]Child) []Child {
+	type childKey struct{ name, typ string }
+	seen := make(map[childKey]bool)
+	byParent := make(map[string][]Child)
+	for _, list := range lists {
+		for _, c := range list {
+			key := childKey{c.Name, c.Type}
+			if seen[key] {
+				continue
 			}
+			seen[key] = true
+			parent := ""
+			if i := strings.LastIndex(c.Name, "."); i >= 0 {
+				parent = c.Name[:i]
+			}
+			byParent[parent] = append(byParent[parent], c)
 		}
 	}
 
-	return result, nil
+	var result []Child
+	var walk func(parent string)
+	walk = func(parent string) {
+		for _, c := range byParent[parent] {
+			result = append(result, c)
+			if c.Type == "namespace" {
+				walk(c.Name)
+			}
+		}
+	}
+	walk("")
+	return result
 }
