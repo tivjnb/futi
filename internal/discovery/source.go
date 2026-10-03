@@ -304,6 +304,26 @@ func fileExists(path string) bool {
 	return info.Mode().IsRegular()
 }
 
+// namespaceDir возвращает каталог namespace ("" — RootDir). Сегменты
+// проверяются по правилам Resolve: пустой сегмент ("a..b", ".git", "a.") —
+// ошибка invalid namespace (filepath.Join схлопнул бы его в другой каталог),
+// зарезервированный "config" — namespace не найден.
+func (s *GlobalSource) namespaceDir(namespace string) (string, error) {
+	if namespace == "" {
+		return s.RootDir, nil
+	}
+	segments := strings.Split(namespace, ".")
+	for _, seg := range segments {
+		if seg == "" {
+			return "", fmt.Errorf("discovery: invalid namespace %q: empty segment", namespace)
+		}
+		if !validSegment(seg) {
+			return "", fmt.Errorf("discovery: namespace %q not found", namespace)
+		}
+	}
+	return filepath.Join(s.RootDir, filepath.Join(segments...)), nil
+}
+
 // ListChildren возвращает непосредственных детей namespace:
 //   - *.yaml файлы (кроме config.yaml) → child module
 //   - поддиректории с config.yaml → child module (пакет)
@@ -311,12 +331,9 @@ func fileExists(path string) bool {
 // Записи, которые Resolve не найдёт, пропускаются (см. classifyEntry).
 // Пустой namespace = корень RootDir.
 func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {
-	var dir string
-	if namespace == "" {
-		dir = s.RootDir
-	} else {
-		segments := strings.Split(namespace, ".")
-		dir = filepath.Join(s.RootDir, filepath.Join(segments...))
+	dir, err := s.namespaceDir(namespace)
+	if err != nil {
+		return nil, err
 	}
 
 	entries, err := readModuleEntries(dir)
@@ -361,14 +378,11 @@ func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {
 // от контекста (например для контекста "images": "png", "converter",
 // "converter.to_png").
 func (s *GlobalSource) ListChildrenRecursive(namespace string) ([]Child, error) {
-	// Проверяем существование namespace
-	var dir string
-	if namespace == "" {
-		dir = s.RootDir
-	} else {
-		segments := strings.Split(namespace, ".")
-		dir = filepath.Join(s.RootDir, filepath.Join(segments...))
+	dir, err := s.namespaceDir(namespace)
+	if err != nil {
+		return nil, err
 	}
+	// Проверяем существование namespace
 	if _, err := os.Stat(dir); err != nil {
 		if os.IsNotExist(err) {
 			if namespace == "" {

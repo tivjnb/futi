@@ -632,6 +632,41 @@ func TestListSkipsUnresolvableEntries(t *testing.T) {
 	}
 }
 
+// TestListChildrenRejectsUnresolvableNamespace: аргумент namespace проверяется
+// по тем же правилам, что в Resolve. Сегмент "config" зарезервирован →
+// «namespace not found»; пустой сегмент ("a..b", ".git") → «invalid namespace:
+// empty segment» (filepath.Join схлопнул бы его и залистил root/a/b, root/git).
+func TestListChildrenRejectsUnresolvableNamespace(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "config", "c.yaml"), "name: c\n")
+	writeFile(t, filepath.Join(root, "a", "b", "x.yaml"), "name: x\n")
+	writeFile(t, filepath.Join(root, "git", "g.yaml"), "name: g\n")
+	s := NewGlobalSource(root)
+
+	listings := map[string]func(string) ([]Child, error){
+		"ListChildren":          s.ListChildren,
+		"ListChildrenRecursive": s.ListChildrenRecursive,
+	}
+	tests := []struct {
+		namespace string
+		wantErr   string
+	}{
+		{"config", "not found"},
+		{"a.config", "not found"},
+		{"a..b", "empty segment"},
+		{".git", "empty segment"},
+		{"a.", "empty segment"},
+	}
+	for method, list := range listings {
+		for _, tc := range tests {
+			children, err := list(tc.namespace)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("%s(%q) = %v, %v; want ошибку с %q", method, tc.namespace, childKeys(children), err, tc.wantErr)
+			}
+		}
+	}
+}
+
 // TestListingsAgree: List, ListChildrenRecursive и рекурсивный обход через
 // ListChildren дают одно и то же множество модулей с теми же манифестами,
 // и каждый листнутый модуль находится Resolve по своему имени.
