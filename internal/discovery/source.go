@@ -137,7 +137,8 @@ func (s *GlobalSource) withinPackage(segments []string) (bool, error) {
 // Симлинки поддерживаются (dotfiles-менеджеры, dev-симлинки из репо):
 // симлинк на .yaml-файл и симлинк на директорию (namespace или пакет)
 // обрабатываются так же, как реальные файлы/директории. Циклы симлинков
-// (a → b → a) и повторный обход алиасов отсекаются по резолвнутому пути.
+// (a → b → a) отсекаются по резолвнутому пути среди предков текущего пути;
+// алиасы на один каталог раскрываются независимо (см. walkModules).
 // Записи, которые Resolve не найдёт, пропускаются (см. classifyEntry):
 // битые симлинки, FIFO и устройства с именем *.yaml, имена с точкой,
 // пустые и "config".
@@ -156,20 +157,25 @@ func (s *GlobalSource) List() ([]ModuleInfo, error) {
 }
 
 // walkModules рекурсивно обходит dir и собирает модули в *modules.
-// nsPrefix — namespace-префикс ("" для корня). visited — множество
-// резолвнутых (EvalSymlinks) путей уже обойдённых директорий: защита от
-// циклов симлинков и повторного обхода алиасов на один каталог.
+// nsPrefix — namespace-префикс ("" для корня). ancestors — множество
+// резолвнутых (EvalSymlinks) путей каталогов ТЕКУЩЕГО пути обхода (предков
+// dir): при входе dir добавляется, при выходе убирается. Цикл симлинков
+// (каталог уже среди предков) отсекается, а алиасы на один каталог
+// раскрываются независимо — как их видит ListChildren по каждому имени.
+// Риск: при веерных алиасах (k симлинков на каталог, содержащий такие же
+// симлинки) число записей растёт как k^глубина; лимита нет осознанно.
 // Пакет (директория с config.yaml) — лист: внутрь не заходим, его *.yaml
 // не модули (согласовано с Resolve и ListChildrenRecursive).
-func (s *GlobalSource) walkModules(dir, nsPrefix string, modules *[]ModuleInfo, visited map[string]bool) {
+func (s *GlobalSource) walkModules(dir, nsPrefix string, modules *[]ModuleInfo, ancestors map[string]bool) {
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return // недоступная директория — пропускаем
 	}
-	if visited[real] {
+	if ancestors[real] {
 		return
 	}
-	visited[real] = true
+	ancestors[real] = true
+	defer delete(ancestors, real)
 
 	entries, err := readModuleEntries(dir)
 	if err != nil {
@@ -178,7 +184,7 @@ func (s *GlobalSource) walkModules(dir, nsPrefix string, modules *[]ModuleInfo, 
 
 	for _, e := range entries {
 		if e.kind == entryNamespace {
-			s.walkModules(e.path, nsPrefix+e.name+".", modules, visited)
+			s.walkModules(e.path, nsPrefix+e.name+".", modules, ancestors)
 			continue
 		}
 		*modules = append(*modules, ModuleInfo{
@@ -437,25 +443,46 @@ func (s *GlobalSource) ListChildrenRecursive(namespace string) ([]Child, error) 
 	}
 
 	var result []Child
-	s.walkChildrenRecursive(dir, "", &result, make(map[string]bool))
+	s.walkChildrenRecursive(dir, "", &result, s.startAncestors(namespace))
 	return result, nil
+}
+
+// startAncestors возвращает множество realpath'ов предков стартового
+// каталога namespace (RootDir и промежуточные каталоги, без самого
+// каталога): старт с поддерева даёт тот же результат, что и из корня.
+// Недоступные предки пропускаются.
+func (s *GlobalSource) startAncestors(namespace string) map[string]bool {
+	ancestors := make(map[string]bool)
+	if namespace == "" {
+		return ancestors
+	}
+	segments := strings.Split(namespace, ".")
+	for i := 0; i < len(segments); i++ {
+		dir := filepath.Join(s.RootDir, filepath.Join(segments[:i]...))
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			ancestors[real] = true
+		}
+	}
+	return ancestors
 }
 
 // walkChildrenRecursive обходит директорию dir. prefix — префикс для
 // детей текущего уровня: при "" дети не получают префикса, иначе
 // fullName = prefix + "." + childName.
-// visited — множество резолвнутых путей уже обойдённых директорий:
-// защита от циклов симлинков (a → b → a) — обход каждого реального
-// каталога выполняется один раз (первым встреченным путём).
-func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child, visited map[string]bool) {
+// ancestors — множество резолвнутых путей каталогов текущего пути обхода
+// (включая предков стартового каталога): защита от циклов симлинков
+// (a → b → a); алиасы на один каталог раскрываются независимо.
+// Риск: при веерных алиасах число записей растёт как k^глубина; лимита нет.
+func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child, ancestors map[string]bool) {
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return // недоступная директория — пропускаем
 	}
-	if visited[real] {
+	if ancestors[real] {
 		return
 	}
-	visited[real] = true
+	ancestors[real] = true
+	defer delete(ancestors, real)
 
 	entries, err := readModuleEntries(dir)
 	if err != nil {
@@ -469,7 +496,7 @@ func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child
 		}
 		if e.kind == entryNamespace {
 			*result = append(*result, Child{Name: fullName, Type: "namespace"})
-			s.walkChildrenRecursive(e.path, fullName, result, visited)
+			s.walkChildrenRecursive(e.path, fullName, result, ancestors)
 			continue
 		}
 		// Модуль (в т.ч. пакет — лист: внутрь не углубляемся).

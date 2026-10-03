@@ -449,10 +449,9 @@ func TestListSymlinkedModules(t *testing.T) {
 
 // TestListSymlinkCycleTerminates проверяет защиту от циклов симлинков:
 // взаимные симлинки a → b → a не приводят к бесконечной рекурсии.
-// Семантика: каждый реальный каталог обходится один раз — первым
-// встреченным путём (при сортировке a < b содержимое b доступно как
-// a.loop.*, прямой путь b уже «использован» через a.loop).
-// Дубликатов модулей по ManifestPath нет.
+// Семантика: каталог, уже лежащий среди предков текущего пути, не
+// раскрывается повторно (a.loop.loop не существует), но содержимое
+// доступно и прямым путём, и через алиас. Дубликатов по ManifestPath нет.
 func TestListSymlinkCycleTerminates(t *testing.T) {
 	dir := t.TempDir()
 	root := filepath.Join(dir, "root")
@@ -1083,5 +1082,84 @@ func TestResolveFIFOManifestIsNotFound(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Resolve завис на FIFO")
+	}
+}
+
+// recursiveEntries — «тип:имя» всех записей ListChildrenRecursive(ns), отсортированные.
+func recursiveEntries(t *testing.T, s *GlobalSource, ns string) []string {
+	t.Helper()
+	rec, err := s.ListChildrenRecursive(ns)
+	if err != nil {
+		t.Fatalf("ListChildrenRecursive(%q): %v", ns, err)
+	}
+	var got []string
+	for _, c := range rec {
+		got = append(got, c.Type+":"+c.Name)
+	}
+	sort.Strings(got)
+	return got
+}
+
+// TestRecursiveAliasesAreBothExpanded: два симлинка на один каталог
+// (a/x -> real, b/y -> real) раскрываются оба, а не только первый по
+// порядку обхода; все листинги согласованы с ListChildren по каждому алиасу.
+func TestRecursiveAliasesAreBothExpanded(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "root")
+	real := filepath.Join(root, "real")
+	writeFile(t, filepath.Join(real, "m.yaml"), "name: m\n")
+	mkdir(t, filepath.Join(root, "a"))
+	mkdir(t, filepath.Join(root, "b"))
+	symlinkOrFail(t, real, filepath.Join(root, "a", "x"))
+	symlinkOrFail(t, real, filepath.Join(root, "b", "y"))
+	s := NewGlobalSource(root)
+
+	wantRec := []string{
+		"module:a.x.m", "module:b.y.m", "module:real.m",
+		"namespace:a", "namespace:a.x", "namespace:b", "namespace:b.y", "namespace:real",
+	}
+	if got := recursiveEntries(t, s, ""); !slices.Equal(got, wantRec) {
+		t.Errorf("ListChildrenRecursive(\"\") = %v, want %v", got, wantRec)
+	}
+
+	wantList := []string{"a.x.m", "b.y.m", "real.m"}
+	var gotList []string
+	for name := range listNames(t, s) {
+		gotList = append(gotList, name)
+	}
+	sort.Strings(gotList)
+	if !slices.Equal(gotList, wantList) {
+		t.Errorf("List = %v, want %v", gotList, wantList)
+	}
+
+	for _, ns := range []string{"a.x", "b.y"} {
+		children, err := s.ListChildren(ns)
+		if err != nil || len(children) != 1 || children[0].Name != "m" {
+			t.Errorf("ListChildren(%q) = %v, %v; want [m]", ns, children, err)
+		}
+	}
+}
+
+// TestRecursiveLoopStillTerminates: a/loop -> .. (в корень) конечен;
+// запись namespace a.loop остаётся, записей a.loop.* нет (корень — предок).
+// Старт с корня и со стартового namespace "a" дают согласованный результат.
+func TestRecursiveLoopStillTerminates(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "root")
+	writeFile(t, filepath.Join(root, "a", "m.yaml"), "name: m\n")
+	symlinkOrFail(t, "..", filepath.Join(root, "a", "loop"))
+	s := NewGlobalSource(root)
+
+	wantRoot := []string{"module:a.m", "namespace:a", "namespace:a.loop"}
+	if got := recursiveEntries(t, s, ""); !slices.Equal(got, wantRoot) {
+		t.Errorf("ListChildrenRecursive(\"\") = %v, want %v", got, wantRoot)
+	}
+	wantA := []string{"module:m", "namespace:loop"}
+	if got := recursiveEntries(t, s, "a"); !slices.Equal(got, wantA) {
+		t.Errorf("ListChildrenRecursive(\"a\") = %v, want %v", got, wantA)
+	}
+	names := listNames(t, s)
+	if len(names) != 1 || names["a.m"] == "" {
+		t.Errorf("List = %v, want только a.m", names)
 	}
 }
