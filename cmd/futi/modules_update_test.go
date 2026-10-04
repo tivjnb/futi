@@ -242,10 +242,14 @@ func TestRunModulesUpdateStopsWhenHookCatchesSIGTERM(t *testing.T) {
 	}
 	ready := filepath.Join(t.TempDir(), "ready")
 	attach := `trap "exit 0" TERM; echo ready > ` + ready + `; while :; do sleep 0.05; done`
-	os.WriteFile(filepath.Join(srcA, "config.yaml"),
-		[]byte("name: a\nattach: '"+attach+"'\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644)
-	os.WriteFile(filepath.Join(srcB, "config.yaml"),
-		[]byte("name: b\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(srcA, "config.yaml"),
+		[]byte("name: a\nattach: '"+attach+"'\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcB, "config.yaml"),
+		[]byte("name: b\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	done := make(chan error, 1)
 	go func() {
@@ -261,8 +265,8 @@ func TestRunModulesUpdateStopsWhenHookCatchesSIGTERM(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("runModulesUpdate не завершился")
 	}
-	if err == nil {
-		t.Fatal("ожидалась ошибка прерывания")
+	if sig, ok := interruptSignal(err); !ok || sig != syscall.SIGTERM {
+		t.Fatalf("interruptSignal(%v) = (%v, %v), want (SIGTERM, true)", err, sig, ok)
 	}
 	data, _ := os.ReadFile(filepath.Join(global, "b", "config.yaml"))
 	if strings.Contains(string(data), "echo v2") {

@@ -369,6 +369,8 @@ func TestRunWithConfigSignalAfterWaitNotLost(t *testing.T) {
 		{"первый пересылаемый", []os.Signal{syscall.SIGINT, syscall.SIGHUP}, func(s syscall.Signal) bool { return s == syscall.SIGHUP }, syscall.SIGHUP, true},
 		{"непересылаемый", []os.Signal{syscall.SIGINT}, forwardsNone, 0, false},
 		{"пустой канал", nil, forwardsAll, 0, false},
+		{"SIGQUIT уступает SIGTERM", []os.Signal{syscall.SIGQUIT, syscall.SIGTERM}, forwardsAll, syscall.SIGTERM, true},
+		{"SIGTERM не уступает SIGQUIT", []os.Signal{syscall.SIGTERM, syscall.SIGQUIT}, forwardsAll, syscall.SIGTERM, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -382,6 +384,47 @@ func TestRunWithConfigSignalAfterWaitNotLost(t *testing.T) {
 			}
 			if len(ch) != 0 {
 				t.Fatalf("в канале осталось %d сигналов, want 0", len(ch))
+			}
+		})
+	}
+}
+
+// Прерывающий сигнал (SIGINT, SIGTERM, SIGHUP) вытесняет запомненный
+// SIGQUIT: иначе команда, перехватившая второй сигнал, не прервала бы update.
+func TestMergeForwarded(t *testing.T) {
+	cases := []struct {
+		cur, next, want syscall.Signal
+	}{
+		{0, syscall.SIGQUIT, syscall.SIGQUIT},
+		{0, syscall.SIGTERM, syscall.SIGTERM},
+		{syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGTERM},
+		{syscall.SIGQUIT, syscall.SIGINT, syscall.SIGINT},
+		{syscall.SIGQUIT, syscall.SIGHUP, syscall.SIGHUP},
+		{syscall.SIGQUIT, syscall.SIGQUIT, syscall.SIGQUIT},
+		{syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGTERM},
+		{syscall.SIGTERM, syscall.SIGHUP, syscall.SIGTERM},
+		{syscall.SIGINT, syscall.SIGTERM, syscall.SIGINT},
+	}
+	for _, tc := range cases {
+		if got := mergeForwarded(tc.cur, tc.next); got != tc.want {
+			t.Errorf("mergeForwarded(%v, %v) = %v, want %v", tc.cur, tc.next, got, tc.want)
+		}
+	}
+}
+
+func TestInterruptedErrorMessage(t *testing.T) {
+	cases := []struct {
+		name string
+		err  *InterruptedError
+		want string
+	}{
+		{"без ошибки Wait", &InterruptedError{Signal: syscall.SIGTERM}, "interrupted by SIGTERM"},
+		{"с ошибкой Wait", &InterruptedError{Signal: syscall.SIGQUIT, Err: errors.New("exit status 2")}, "interrupted by SIGQUIT: exit status 2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.err.Error(); got != tc.want {
+				t.Fatalf("Error() = %q, want %q", got, tc.want)
 			}
 		})
 	}

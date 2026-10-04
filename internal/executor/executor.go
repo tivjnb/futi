@@ -181,8 +181,8 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 
 	// signalChild — единственное место доставки пересылаемого сигнала.
 	signalChild := func(sig syscall.Signal) { _ = command.Process.Signal(sig) }
-	// interruptedBy — первый пересланный сигнал; 0 — пересылки не было.
-	// Пишет только горутина пересылки; читается после forwardDone.
+	// interruptedBy — пересланный сигнал (см. mergeForwarded); 0 — пересылки
+	// не было. Пишет только горутина пересылки; читается после forwardDone.
 	var interruptedBy syscall.Signal
 	stopForward := make(chan struct{})
 	forwardDone := make(chan struct{})
@@ -196,9 +196,7 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 					continue
 				}
 				signalChild(sig)
-				if interruptedBy == 0 {
-					interruptedBy = sig
-				}
+				interruptedBy = mergeForwarded(interruptedBy, sig)
 			case <-stopForward:
 				return
 			}
@@ -211,8 +209,8 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 	// Сигнал, пришедший между Wait и снятием подписки, ребёнку уже не нужен,
 	// но прерывание futi терять нельзя.
 	signal.Stop(sigCh)
-	if sig, ok := drainSignals(sigCh, forwardsSignal); ok && interruptedBy == 0 {
-		interruptedBy = sig
+	if sig, ok := drainSignals(sigCh, forwardsSignal); ok {
+		interruptedBy = mergeForwarded(interruptedBy, sig)
 	}
 
 	runErr := waitErr
@@ -240,18 +238,29 @@ func forwardsSignal(sig syscall.Signal) bool {
 	return false
 }
 
-// drainSignals неблокирующе вычитывает ch до конца и возвращает первый
-// сигнал, для которого forwards истинна.
+// drainSignals неблокирующе вычитывает ch до конца и возвращает сигнал,
+// для которого forwards истинна, выбранный по правилу mergeForwarded.
 func drainSignals(ch <-chan os.Signal, forwards func(syscall.Signal) bool) (syscall.Signal, bool) {
 	var found syscall.Signal
 	for {
 		select {
 		case s := <-ch:
-			if sig, ok := s.(syscall.Signal); ok && found == 0 && forwards(sig) {
-				found = sig
+			if sig, ok := s.(syscall.Signal); ok && forwards(sig) {
+				found = mergeForwarded(found, sig)
 			}
 		default:
 			return found, found != 0
 		}
 	}
+}
+
+// mergeForwarded выбирает сигнал прерывания из запомненного cur и нового
+// next: запоминается первый, но SIGQUIT (не прерывающий futi) уступает
+// следующему SIGINT/SIGTERM/SIGHUP — иначе команда, перехватившая его и
+// вышедшая обычным кодом, не прервала бы futi.
+func mergeForwarded(cur, next syscall.Signal) syscall.Signal {
+	if cur == 0 || (cur == syscall.SIGQUIT && next != syscall.SIGQUIT) {
+		return next
+	}
+	return cur
 }

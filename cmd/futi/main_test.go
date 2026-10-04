@@ -1842,6 +1842,10 @@ func TestExitCodeFromErrorSignaled(t *testing.T) {
 		{"wrapped", fmt.Errorf("x: %w", runErr), 143},
 		// Ребёнок перехватил пересланный SIGQUIT и вышел с 0: код как при гибели от него.
 		{"InterruptedError QUIT", &executor.InterruptedError{Signal: syscall.SIGQUIT}, 131},
+		// Ребёнок после пересланного SIGQUIT вышел с 2: код по сигналу futi.
+		{"InterruptedError QUIT с кодом 2", &executor.InterruptedError{Signal: syscall.SIGQUIT, Err: exec.Command("sh", "-c", "exit 2").Run()}, 131},
+		// Ребёнок добит SIGKILL после пересланного SIGTERM: код по его гибели.
+		{"InterruptedError TERM, убит KILL", &executor.InterruptedError{Signal: syscall.SIGTERM, Err: exec.Command("sh", "-c", "kill -KILL $$").Run()}, 137},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
