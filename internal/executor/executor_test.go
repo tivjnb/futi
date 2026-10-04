@@ -6,8 +6,10 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -238,5 +240,32 @@ func TestRunWithConfigWrapsExitError(t *testing.T) {
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 3 {
 		t.Fatalf("err = %v, want *exec.ExitError с кодом 3", err)
+	}
+}
+
+// Сигнал, проигнорированный при старте futi (nohup, фоновая команда шелла),
+// должен остаться игнорируемым у ребёнка: Notify сбросил бы SIG_IGN при exec.
+func TestRunWithConfigKeepsInheritedIgnoredSignal(t *testing.T) {
+	if _, err := os.Stat("/proc/self/status"); err != nil {
+		t.Skip("нужен /proc")
+	}
+	signal.Ignore(syscall.SIGHUP)
+	t.Cleanup(func() { signal.Reset(syscall.SIGHUP) })
+
+	var buf bytes.Buffer
+	if err := RunWithConfig(context.Background(), &Config{Stdout: &buf}, "grep", "SigIgn", "/proc/self/status"); err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	fields := strings.Fields(buf.String())
+	if len(fields) != 2 {
+		t.Fatalf("неожиданный вывод: %q", buf.String())
+	}
+	mask, err := strconv.ParseUint(fields[1], 16, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// SIGHUP = 1 -> бит 0.
+	if mask&1 == 0 {
+		t.Fatalf("SIGHUP не игнорируется у ребёнка: SigIgn = %s", fields[1])
 	}
 }

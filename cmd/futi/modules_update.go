@@ -79,6 +79,9 @@ func runModulesUpdate(w io.Writer, source discovery.Source, cache *modulecache.C
 	for _, e := range entries {
 		if err := updateOne(w, source, cache, e.Name, cfg.skipAttach); err != nil {
 			fmt.Fprintf(os.Stderr, "update %s: %v\n", e.Name, err)
+			if _, interrupted := interruptSignal(err); interrupted {
+				return fmt.Errorf("update %s interrupted: %w", e.Name, err)
+			}
 			failed = append(failed, e.Name)
 		}
 	}
@@ -183,6 +186,9 @@ func updateOne(w io.Writer, source discovery.Source, cache *modulecache.Cache, n
 	if mod.Attach != "" && !skipAttach {
 		if err := modulerunner.RunHook(context.Background(), mod.Attach, moduleRoot, name, os.Stdout, os.Stderr); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: attach failed; module may be partially initialized: %v\n", err)
+			if _, interrupted := interruptSignal(err); interrupted {
+				return fmt.Errorf("attach interrupted: %w", err)
+			}
 		}
 	}
 

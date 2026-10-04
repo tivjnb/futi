@@ -8,10 +8,12 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"futi/internal/config"
 	"futi/internal/discovery"
@@ -841,6 +843,40 @@ func exitCodeFromError(err error) int {
 	return 1
 }
 
+// interruptSignal возвращает сигнал (SIGINT, SIGTERM или SIGHUP), которым убит
+// дочерний процесс из err. Для остальных сигналов (SIGQUIT, SIGSEGV и т.п.) и
+// ошибок без *exec.ExitError — false.
+func interruptSignal(err error) (syscall.Signal, bool) {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return 0, false
+	}
+	ws, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() {
+		return 0, false
+	}
+	switch sig := ws.Signal(); sig {
+	case syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP:
+		return sig, true
+	}
+	return 0, false
+}
+
+// exitAfterRunError завершает процесс после ошибки запуска команды. Если
+// ребёнок убит прерывающим сигналом, futi поднимает тот же сигнал на себя и
+// гибнет от него: шелл (bash) иначе решит, что команда сама обработала
+// Ctrl+C, и не прервёт цикл. Код выхода шелла остаётся 128+N.
+func exitAfterRunError(err error) {
+	if sig, ok := interruptSignal(err); ok {
+		signal.Reset(sig)
+		if killErr := syscall.Kill(os.Getpid(), sig); killErr == nil {
+			// Доставка сигнала асинхронна; обычно процесс умирает здесь.
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	os.Exit(exitCodeFromError(err))
+}
+
 // formatRunError форматирует ошибку выполнения команды для вывода в stderr.
 // Для *execmodule.TemplateError (ошибка парсинга/выполнения cmd-шаблона) даёт
 // дружелюбное многострочное сообщение без длинной цепочки обёрток и технического
@@ -1032,6 +1068,6 @@ func main() {
 	}
 	if err := modulerunner.Run(context.Background(), source, pa.namespace, pa.command, pa.params, pa.args, pa.argsList, nil, nil, cache); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", formatRunError(err))
-		os.Exit(exitCodeFromError(err))
+		exitAfterRunError(err)
 	}
 }

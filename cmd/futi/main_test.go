@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"futi/internal/config"
@@ -1845,5 +1846,70 @@ func TestExitCodeFromErrorSignaled(t *testing.T) {
 				t.Fatalf("exitCodeFromError(%v) = %d, want %d", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestInterruptSignal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	killed := func(sig string) error {
+		return exec.Command("sh", "-c", "kill -"+sig+" $$").Run()
+	}
+	cases := []struct {
+		name    string
+		err     error
+		want    syscall.Signal
+		wantHit bool
+	}{
+		{"INT", killed("INT"), syscall.SIGINT, true},
+		{"TERM wrapped", fmt.Errorf("x: %w", killed("TERM")), syscall.SIGTERM, true},
+		{"HUP", killed("HUP"), syscall.SIGHUP, true},
+		{"QUIT не прерывающий", killed("QUIT"), 0, false},
+		{"обычный код", exec.Command("sh", "-c", "exit 3").Run(), 0, false},
+		{"не ExitError", errors.New("boom"), 0, false},
+		{"nil", nil, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := interruptSignal(tc.err)
+			if ok != tc.wantHit || got != tc.want {
+				t.Fatalf("interruptSignal(%v) = (%v, %v), want (%v, %v)", tc.err, got, ok, tc.want, tc.wantHit)
+			}
+		})
+	}
+}
+
+// futi, чей ребёнок убит SIGINT, сам должен погибнуть от SIGINT (а не выйти
+// с кодом 130): иначе bash не прервёт цикл по Ctrl+C.
+func TestFutiDiesFromSignalWhenChildInterrupted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "futi")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	mods := filepath.Join(tmp, "mods", "m")
+	if err := os.MkdirAll(mods, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := "name: m\ncmd: \"sh -c 'kill -INT $$'\"\n"
+	if err := os.WriteFile(filepath.Join(mods, "config.yaml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "m")
+	cmd.Env = append(os.Environ(),
+		"FUTI_MODULES_DIR="+filepath.Join(tmp, "mods"),
+		"HOME="+tmp, "XDG_CACHE_HOME="+filepath.Join(tmp, "cache"))
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("ожидалась ошибка")
+	}
+	ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() || ws.Signal() != syscall.SIGINT {
+		t.Fatalf("futi завершился %v, want гибель от SIGINT", cmd.ProcessState)
 	}
 }

@@ -122,3 +122,34 @@ func TestRunModulesUpdateNoMetaError(t *testing.T) {
 		t.Fatalf("expected no-meta error, got %v", err)
 	}
 }
+
+// Ребёнок (хук attach), убитый SIGINT, прерывает обновление всех модулей:
+// следующие модули не трогаются.
+func TestRunModulesUpdateAllStopsOnInterrupt(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	parent := t.TempDir()
+	srcA := makeSourceModule(t, parent, "a", "")
+	srcB := makeSourceModule(t, parent, "b", "")
+	cache := newTestCache()
+	for _, src := range []string{srcA, srcB} {
+		if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src, "--skip-attach"}); err != nil {
+			t.Fatalf("install: %v", err)
+		}
+	}
+	os.WriteFile(filepath.Join(srcA, "config.yaml"),
+		[]byte("name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644)
+	os.WriteFile(filepath.Join(srcB, "config.yaml"),
+		[]byte("name: b\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644)
+
+	err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, nil)
+	if err == nil {
+		t.Fatal("ожидалась ошибка прерывания")
+	}
+	data, _ := os.ReadFile(filepath.Join(global, "b", "config.yaml"))
+	if strings.Contains(string(data), "echo v2") {
+		t.Fatal("модуль b не должен обновляться после прерывания a")
+	}
+}

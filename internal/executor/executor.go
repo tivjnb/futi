@@ -109,10 +109,21 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 
 	// Подписка до Start: сигнал, пришедший сразу после старта, не потеряется.
 	// signal.Notify (а не Ignore): игнорирование наследуется через exec, и
-	// ребёнок перестал бы реагировать на Ctrl+C.
+	// ребёнок перестал бы реагировать на Ctrl+C. Сигналы, проигнорированные
+	// при старте futi (nohup, фоновая команда шелла), не перехватываем: Notify
+	// снял бы SIG_IGN, а при exec обработчик сброшен в SIG_DFL — ребёнок потерял
+	// бы игнорирование.
 	sigCh := make(chan os.Signal, 4)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP)
-	defer signal.Stop(sigCh)
+	var watched []os.Signal
+	for _, sig := range []os.Signal{syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP} {
+		if !signal.Ignored(sig) {
+			watched = append(watched, sig)
+		}
+	}
+	if len(watched) > 0 { // Notify без сигналов подписал бы на все
+		signal.Notify(sigCh, watched...)
+		defer signal.Stop(sigCh)
+	}
 
 	if err := command.Start(); err != nil {
 		return fmt.Errorf("executor: run %q: %w", executable, err)

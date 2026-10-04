@@ -579,7 +579,7 @@ futi echo_mod echo -- hello world    # namespace=echo_mod, command=echo, args="h
 futi echo_mod -- hello world         # default cmd модуля echo_mod, args="hello world"
 ```
 
-**Stdin, сигналы и код выхода.** Команда модуля наследует stdin futi: пайпы (`echo data | futi m c`) и интерактивные утилиты (`ssh`, `psql`, `docker exec -it`) работают. Ctrl+C (SIGINT/SIGQUIT) получает сама команда — futi ждёт её завершения и ничего не делает сам. SIGTERM и SIGHUP, полученные futi, пересылаются команде. Код выхода futi равен коду команды; если команда убита сигналом N — `128+N` (например, 143 для SIGTERM).
+**Stdin, сигналы и код выхода.** Команда модуля наследует stdin futi: пайпы (`echo data | futi m c`) и интерактивные утилиты (`ssh`, `psql`, `docker exec -it`) работают. Ctrl+C (SIGINT/SIGQUIT) получает сама команда — futi ждёт её завершения и ничего не делает сам. SIGTERM и SIGHUP, полученные futi, пересылаются команде. Код выхода futi равен коду команды; если команда убита сигналом N — `128+N` (например, 143 для SIGTERM); при гибели команды от SIGINT/SIGTERM/SIGHUP futi сам завершается тем же сигналом, поэтому шелл прерывает циклы по Ctrl+C. Сигналы, проигнорированные при запуске futi (`nohup`, фоновая команда шелла), остаются игнорируемыми и для команды.
 
 ### Навигация через `list`
 
