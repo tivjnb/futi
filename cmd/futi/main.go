@@ -977,7 +977,12 @@ func main() {
 		}
 		if err := runModules(os.Stdout, os.Stdin, source, cache, os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "modules: %v\n", err)
-			exitAfterRunError(err)
+			// Прерванный хук — futi гибнет тем же сигналом; код хука, git
+			// или curl наружу не пробрасывается: прочие ошибки дают 1.
+			if _, ok := interruptSignal(err); ok {
+				exitAfterRunError(err)
+			}
+			os.Exit(1)
 		}
 		return
 	}
