@@ -579,6 +579,8 @@ futi echo_mod echo -- hello world    # namespace=echo_mod, command=echo, args="h
 futi echo_mod -- hello world         # default cmd модуля echo_mod, args="hello world"
 ```
 
+**Stdin, сигналы и код выхода.** Команда модуля наследует stdin futi: пайпы (`echo data | futi m c`) и интерактивные утилиты (`ssh`, `psql`, `docker exec -it`) работают. Ctrl+C (SIGINT/SIGQUIT) получает сама команда — futi ждёт её завершения и ничего не делает сам. SIGTERM и SIGHUP, полученные futi, пересылаются команде. Код выхода futi равен коду команды; если команда убита сигналом N — `128+N` (например, 143 для SIGTERM).
+
 ### Навигация через `list`
 
 `list` показывает содержимое текущего уровня иерархии:
@@ -867,7 +869,7 @@ attach: ".venv/bin/python -m pip install -r requirements.txt"
 detach: "rm -rf .venv"
 ```
 
-Хуки выполняются в каталоге модуля; доступны `{{.module_name}}`, `{{.module_root}}`, `{{.env.FOO}}`, `{{quote ...}}` и переменные окружения FUTI_MODULE_NAME / FUTI_MODULE_ROOT. Провал `attach` при install откатывает установку (модуль удаляется); при update — только предупреждение, новое дерево сохраняется. Провал `detach` при uninstall — предупреждение (или отказ с `--strict-detach`).
+Хуки выполняются в каталоге модуля; доступны `{{.module_name}}`, `{{.module_root}}`, `{{.env.FOO}}`, `{{quote ...}}` и переменные окружения FUTI_MODULE_NAME / FUTI_MODULE_ROOT. Хуки наследуют stdin futi и выполняются без таймаута: зависший хук прерывается Ctrl+C. Провал `attach` при install откатывает установку (модуль удаляется); при update — только предупреждение, новое дерево сохраняется. Провал `detach` при uninstall — предупреждение (или отказ с `--strict-detach`).
 
 Каждая установка пишет sidecar `__futi_meta.yaml` рядом с config.yaml (источник, тип, ref/commit, hash дерева, даты) — по нему работают:
 

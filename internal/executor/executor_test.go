@@ -3,10 +3,15 @@ package executor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestRunWithConfigExecutesScriptWithArgs(t *testing.T) {
@@ -59,5 +64,179 @@ func TestConfigBuilders(t *testing.T) {
 func TestRunWithConfigRejectsNilContext(t *testing.T) {
 	if err := RunWithConfig(context.TODO(), &Config{}, "script.sh"); err == nil {
 		t.Fatal("expected an error for nil context")
+	}
+}
+
+// replaceStdin подменяет os.Stdin файлом с content до конца теста.
+func replaceStdin(t *testing.T, content string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "stdin")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdin
+	os.Stdin = f
+	t.Cleanup(func() {
+		os.Stdin = orig
+		f.Close()
+	})
+}
+
+func TestRunWithConfigInheritsStdin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cat недоступен на Windows")
+	}
+	replaceStdin(t, "hello")
+
+	var buf bytes.Buffer
+	if err := RunWithConfig(context.Background(), &Config{Stdout: &buf}, "cat"); err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if got := buf.String(); got != "hello" {
+		t.Fatalf("stdout = %q, want %q", got, "hello")
+	}
+}
+
+func TestRunWithConfigExplicitStdinWins(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cat недоступен на Windows")
+	}
+	replaceStdin(t, "hello")
+
+	var buf bytes.Buffer
+	cfg := &Config{Stdin: strings.NewReader("x"), Stdout: &buf}
+	if err := RunWithConfig(context.Background(), cfg, "cat"); err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if got := buf.String(); got != "x" {
+		t.Fatalf("stdout = %q, want %q", got, "x")
+	}
+}
+
+// waitForFile ждёт появления файла (опрос с дедлайном).
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("файл %s не появился за 5с", path)
+}
+
+// signalChildEnv возвращает окружение с путями маркеров MARK и READY.
+func signalChildEnv(t *testing.T) (env []string, mark, ready string) {
+	t.Helper()
+	dir := t.TempDir()
+	mark = filepath.Join(dir, "mark")
+	ready = filepath.Join(dir, "ready")
+	env = append(os.Environ(), "MARK="+mark, "READY="+ready)
+	return env, mark, ready
+}
+
+func TestRunWithConfigForwardsSIGTERM(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	env, mark, ready := signalChildEnv(t)
+	script := `trap 'echo term > "$MARK"; exit 0' TERM; echo ready > "$READY"; while :; do sleep 0.05; done`
+
+	done := make(chan error, 1)
+	go func() {
+		done <- RunWithConfig(context.Background(), &Config{Env: env}, "sh", "-c", script)
+	}()
+	waitForFile(t, ready)
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunWithConfig: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWithConfig не завершился")
+	}
+	data, err := os.ReadFile(mark)
+	if err != nil {
+		t.Fatalf("ребёнок не получил SIGTERM: %v", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != "term" {
+		t.Fatalf("mark = %q, want %q", got, "term")
+	}
+}
+
+func TestRunWithConfigDoesNotForwardSIGINT(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	env, mark, ready := signalChildEnv(t)
+	// SIGINT шлём только тестовому процессу (не группе): ребёнок его не получает.
+	script := `trap 'echo int > "$MARK"' INT; echo ready > "$READY"; sleep 0.3; exit 0`
+
+	done := make(chan error, 1)
+	go func() {
+		done <- RunWithConfig(context.Background(), &Config{Env: env}, "sh", "-c", script)
+	}()
+	waitForFile(t, ready)
+	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunWithConfig: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWithConfig не завершился")
+	}
+	if _, err := os.Stat(mark); err == nil {
+		t.Fatal("SIGINT переслан ребёнку, а не должен")
+	}
+}
+
+func TestRunWithConfigCancelSendsSIGTERM(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	env, mark, ready := signalChildEnv(t)
+	script := `trap 'echo term > "$MARK"; exit 0' TERM; echo ready > "$READY"; while :; do sleep 0.05; done`
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- RunWithConfig(ctx, &Config{Env: env}, "sh", "-c", script)
+	}()
+	waitForFile(t, ready)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWithConfig не завершился")
+	}
+	data, err := os.ReadFile(mark)
+	if err != nil {
+		t.Fatalf("ребёнок не получил SIGTERM при отмене: %v", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != "term" {
+		t.Fatalf("mark = %q, want %q", got, "term")
+	}
+}
+
+func TestRunWithConfigWrapsExitError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh недоступен на Windows")
+	}
+	err := RunWithConfig(context.Background(), &Config{}, "sh", "-c", "exit 3")
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 3 {
+		t.Fatalf("err = %v, want *exec.ExitError с кодом 3", err)
 	}
 }

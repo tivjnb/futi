@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -74,5 +75,35 @@ func TestRunHookPropagatesExitCode(t *testing.T) {
 	}
 	if exitErr.ExitCode() != 7 {
 		t.Fatalf("exit code: got %d, want 7", exitErr.ExitCode())
+	}
+}
+
+func TestRunHookInheritsStdin(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "in")
+	if err := os.WriteFile(in, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdin
+	os.Stdin = f
+	t.Cleanup(func() {
+		os.Stdin = orig
+		f.Close()
+	})
+
+	var out bytes.Buffer
+	if err := RunHook(context.Background(), `cat > "$FUTI_MODULE_ROOT/out"`, dir, "m", &out, &out); err != nil {
+		t.Fatalf("RunHook: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "data" {
+		t.Fatalf("out = %q, want %q", got, "data")
 	}
 }

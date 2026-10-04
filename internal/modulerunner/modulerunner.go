@@ -60,6 +60,7 @@ func LoadModuleVerified(loader ModuleLoader, manifestPath, moduleRoot string) (*
 // args — строка после `--` (для {{.args}}), argsList — массив (для {{.args_list}}).
 // command="" означает вызов default cmd модуля (Module.Cmd).
 // stdout/stderr — опциональные writers для перехвата вывода (nil = os.Stdout/os.Stderr).
+// stdin команды всегда наследуется от futi (os.Stdin).
 // loader — опциональный загрузчик модулей с кэшем (nil = без кэша, прямой LoadModule).
 func Run(
 	ctx context.Context,

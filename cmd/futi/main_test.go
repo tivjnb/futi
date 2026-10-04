@@ -1824,3 +1824,26 @@ func TestRunListEmptyNamespaceOnProdSourceChain(t *testing.T) {
 		t.Fatalf("в выводе нет модуля a:\n%s", buf.String())
 	}
 }
+
+func TestExitCodeFromErrorSignaled(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	runErr := exec.Command("sh", "-c", "kill -TERM $$").Run()
+
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"direct", runErr, 143},
+		{"wrapped", fmt.Errorf("x: %w", runErr), 143},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := exitCodeFromError(tc.err); got != tc.want {
+				t.Fatalf("exitCodeFromError(%v) = %d, want %d", tc.err, got, tc.want)
+			}
+		})
+	}
+}

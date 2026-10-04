@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"futi/internal/config"
 	"futi/internal/discovery"
@@ -823,7 +824,8 @@ ENVIRONMENT
 }
 
 // exitCodeFromError извлекает код завершения из ошибки.
-// Если ошибка содержит *exec.ExitError — возвращает её ExitCode().
+// Если ошибка содержит *exec.ExitError: при гибели процесса от сигнала N —
+// 128+N (как в shell), иначе её ExitCode().
 // Иначе — 1 (стандартный код ошибки для futi).
 func exitCodeFromError(err error) int {
 	if err == nil {
@@ -831,6 +833,9 @@ func exitCodeFromError(err error) int {
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
+		if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			return 128 + int(ws.Signal())
+		}
 		return exitErr.ExitCode()
 	}
 	return 1
