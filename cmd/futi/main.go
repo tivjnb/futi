@@ -889,9 +889,12 @@ func isInterruptSignal(sig syscall.Signal) bool {
 func exitAfterRunError(err error) {
 	if sig, ok := interruptSignal(err); ok {
 		signal.Reset(sig)
-		if killErr := syscall.Kill(os.Getpid(), sig); killErr == nil {
-			// Доставка сигнала асинхронна; обычно процесс умирает здесь.
-			time.Sleep(200 * time.Millisecond)
+		// На Windows Signal вернёт ошибку: тогда сразу выходим с кодом.
+		if p, findErr := os.FindProcess(os.Getpid()); findErr == nil {
+			if p.Signal(sig) == nil {
+				// Доставка сигнала асинхронна; обычно процесс умирает здесь.
+				time.Sleep(200 * time.Millisecond)
+			}
 		}
 	}
 	os.Exit(exitCodeFromError(err))
@@ -974,7 +977,7 @@ func main() {
 		}
 		if err := runModules(os.Stdout, os.Stdin, source, cache, os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "modules: %v\n", err)
-			os.Exit(1)
+			exitAfterRunError(err)
 		}
 		return
 	}

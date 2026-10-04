@@ -305,3 +305,60 @@ func TestFutiUpdateInterruptPrintsErrorOnce(t *testing.T) {
 		t.Fatalf("в stderr %d вхождений signal: interrupt, want 1:\n%s", n, stderr)
 	}
 }
+
+// Собранный futi при прерывании attach в `modules update` гибнет от того же
+// сигнала (а не выходит с кодом 1): иначе bash продолжит цикл
+// `for m in a b c; do futi modules update $m; done` после Ctrl+C.
+func TestFutiModulesUpdateDiesFromSignalWhenAttachInterrupted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	tmp := t.TempDir()
+	bin := builtFutiBinary(t)
+	mods := filepath.Join(tmp, "mods")
+	src := makeSourceModule(t, t.TempDir(), "a", "")
+	env := append(os.Environ(),
+		"FUTI_MODULES_DIR="+mods,
+		"HOME="+tmp, "XDG_CACHE_HOME="+filepath.Join(tmp, "cache"))
+	run := func(args ...string) (*exec.Cmd, error) {
+		cmd := exec.Command(bin, args...)
+		cmd.Dir = tmp
+		cmd.Env = env
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+		return cmd, cmd.Run()
+	}
+	if _, err := run("modules", "install", src, "--skip-attach"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	writeFile(t, filepath.Join(src, "config.yaml"),
+		"name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
+
+	cmd, err := run("modules", "update")
+	if err == nil {
+		t.Fatal("ожидалась ошибка прерывания")
+	}
+	ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() || ws.Signal() != syscall.SIGINT {
+		t.Fatalf("futi завершился %v, want гибель от SIGINT", cmd.ProcessState)
+	}
+}
+
+// Обычная (не прерывающая) ошибка modules-команды по-прежнему даёт код 1.
+func TestFutiModulesOrdinaryErrorExitsWithOne(t *testing.T) {
+	tmp := t.TempDir()
+	cmd := exec.Command(builtFutiBinary(t), "modules", "update", "no-such-module")
+	cmd.Dir = tmp
+	cmd.Env = append(os.Environ(),
+		"FUTI_MODULES_DIR="+filepath.Join(tmp, "mods"),
+		"HOME="+tmp, "XDG_CACHE_HOME="+filepath.Join(tmp, "cache"))
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("ожидалась ошибка")
+	}
+	if code := cmd.ProcessState.ExitCode(); code != 1 {
+		t.Fatalf("код выхода = %d, want 1", code)
+	}
+}

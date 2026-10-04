@@ -9,7 +9,7 @@ import (
 )
 
 // startInOwnGroup на платформах без групп процессов POSIX ничего не делает
-// (изоляция там и не включается: foregroundTTY всегда true).
+// (изоляция там и не включается: controllingTTY всегда true).
 func startInOwnGroup(*exec.Cmd) {}
 
 // signalGroup без групп процессов шлёт sig только самому процессу.
