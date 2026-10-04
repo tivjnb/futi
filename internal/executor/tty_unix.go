@@ -27,6 +27,17 @@ func isForegroundTTY() bool {
 	return ok && pgrp == syscall.Getpgrp()
 }
 
+// hasControllingTTY: у процесса есть управляющий терминал, если /dev/tty
+// открывается.
+func hasControllingTTY() bool {
+	tty, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0)
+	if err != nil {
+		return false
+	}
+	tty.Close()
+	return true
+}
+
 // terminalPgrp возвращает группу переднего плана терминала fd
 // (ioctl TIOCGPGRP); false — fd не управляющий терминал.
 func terminalPgrp(fd uintptr) (int, bool) {

@@ -2,11 +2,13 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -20,6 +22,10 @@ var cancelWaitDelay = 5 * time.Second
 // ребёнка. Переменная — тесты задают состояние явно (go test, запущенный из
 // терминала, сам находится в foreground-группе).
 var foregroundTTY = isForegroundTTY
+
+// controllingTTY сообщает, есть ли у futi управляющий терминал (неважно,
+// на переднем плане или в фоне). Переменная — для тестов.
+var controllingTTY = hasControllingTTY
 
 // InterruptedError — futi во время работы команды получил прерывающий сигнал
 // и переслал его команде (либо сигнал пришёл сразу после её завершения).
@@ -64,12 +70,13 @@ type Config struct {
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
-	// IsolateWithoutTTY: если при старте futi не в foreground-группе
-	// терминала (CI, </dev/null, фон), команда запускается в своей группе
-	// процессов, и все перехваченные сигналы (и SIGTERM при отмене ctx)
-	// получает вся группа — внуки составной команды не остаются сиротами.
-	// С терминалом флаг ни на что не влияет: команда остаётся в группе
-	// терминала. Решение принимается один раз при старте.
+	// IsolateWithoutTTY: если при старте у futi нет управляющего терминала
+	// (CI, cron, ssh без tty), команда запускается в своей группе процессов,
+	// и все перехваченные сигналы (и SIGTERM при отмене ctx) получает вся
+	// группа — внуки составной команды не остаются сиротами. С управляющим
+	// терминалом (в том числе в фоне или с перенаправленным вводом) флаг ни
+	// на что не влияет: команда остаётся в группе futi. Решение принимается
+	// один раз при старте.
 	IsolateWithoutTTY bool
 }
 
@@ -124,9 +131,10 @@ func Run(ctx context.Context, scriptPath string, args ...string) error {
 //     без терминала (CI, фон, перенаправленный ввод/вывод) они адресные
 //     (kill -INT) и пересылаются. Терминал проверяется в момент сигнала.
 //
-// С cfg.IsolateWithoutTTY и без терминала на старте команда запускается в
-// своей группе процессов: все четыре сигнала пересылаются группе, отмена
-// ctx шлёт SIGTERM группе.
+// С cfg.IsolateWithoutTTY и без управляющего терминала на старте команда
+// запускается в своей группе процессов: все четыре сигнала пересылаются
+// группе, отмена ctx шлёт SIGTERM группе, через cancelWaitDelay — SIGKILL
+// оставшимся в ней.
 //
 // Если сигнал переслан (или пришёл между завершением ребёнка и снятием
 // подписки), возвращается ошибка с *InterruptedError, даже если ребёнок
@@ -165,12 +173,21 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 			command.Stdin = cfg.Stdin
 		}
 	}
-	// Изоляция решается один раз при старте: после fg группа команды так и
-	// останется не в foreground-группе терминала.
-	isolated := cfg != nil && cfg.IsolateWithoutTTY && !foregroundTTY()
+	// Изоляция решается один раз при старте и только без управляющего
+	// терминала: в фоне терминала хук своей группы, читающий tty, остановился
+	// бы SIGTTIN, а fg разбудил бы только группу futi.
+	isolated := cfg != nil && cfg.IsolateWithoutTTY && !controllingTTY()
+	// groupKill — таймер SIGKILL группе после отмены ctx: os/exec через
+	// WaitDelay добивает только лидера, а внук, игнорирующий SIGTERM, пережил
+	// бы его. Ставится в горутине os/exec (Cancel), читается после Wait.
+	var groupKill atomic.Pointer[time.Timer]
 	if isolated {
 		startInOwnGroup(command)
-		command.Cancel = func() error { return signalGroup(command.Process, syscall.SIGTERM) }
+		killDelay := cancelWaitDelay
+		command.Cancel = func() error {
+			groupKill.Store(time.AfterFunc(killDelay, func() { _ = signalGroup(command.Process, syscall.SIGKILL) }))
+			return signalGroup(command.Process, syscall.SIGTERM)
+		}
 	}
 
 	// Подписка до Start: сигнал, пришедший сразу после старта, не потеряется.
@@ -230,6 +247,11 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 	}()
 
 	waitErr := command.Wait()
+	// Лидер мог умереть от SIGTERM раньше внуков: таймер снимается, только
+	// если группа уже пуста, иначе SIGKILL всё же достанется оставшимся.
+	if t := groupKill.Load(); t != nil && errors.Is(signalGroup(command.Process, 0), os.ErrProcessDone) {
+		t.Stop()
+	}
 	close(stopForward)
 	<-forwardDone
 	// Сигнал, пришедший между Wait и снятием подписки, ребёнку уже не нужен,

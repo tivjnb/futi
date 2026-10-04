@@ -23,7 +23,7 @@ import (
 // Env процесса: полное окружение пользователя + FUTI_MODULE_NAME,
 // FUTI_MODULE_ROOT. cwd = moduleRoot. FUTI_CWD удалён (WORKDIR.md §2.4):
 // cwd хука = moduleRoot, в скрипте getcwd() даёт то же.
-// Без терминала хук запускается в своей группе процессов
+// Без управляющего терминала хук запускается в своей группе процессов
 // (executor.Config.IsolateWithoutTTY): сигналы futi получают и процессы,
 // порождённые составной командой.
 func RunHook(ctx context.Context, hookCmd, moduleRoot, moduleName string, stdout, stderr io.Writer) error {
