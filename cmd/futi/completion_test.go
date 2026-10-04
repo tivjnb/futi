@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -243,5 +244,52 @@ func TestRunCompleteSanitizesSpecialChars(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected sanitized line %q, got %q", "weird\tline1 line2 with tabs", out.String())
+	}
+}
+
+// TestCompletionFishAlwaysPassesCursor: слово под курсором (commandline -ct)
+// всегда уходит в __complete последним аргументом, иначе futi do<TAB> вызывает
+// __complete без аргументов (audit F20).
+func TestCompletionFishAlwaysPassesCursor(t *testing.T) {
+	if !strings.Contains(fishCompletionScript, "\n    set args $args \"$cursor\"\n") {
+		t.Error("скрипт не содержит безусловного set args $args \"$cursor\"")
+	}
+	if strings.Contains(fishCompletionScript, `if test -z "$cursor"`) {
+		t.Error("скрипт добавляет курсор только для пустого слова")
+	}
+}
+
+// TestCompletionFishRealShell прогоняет скрипт в настоящем fish; без fish пропускается.
+func TestCompletionFishRealShell(t *testing.T) {
+	fishPath, err := exec.LookPath("fish")
+	if err != nil {
+		t.Skip("fish не установлен")
+	}
+	tmp := t.TempDir()
+	binDir := filepath.Join(tmp, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command("go", "build", "-o", filepath.Join(binDir, "futi"), ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	modules := filepath.Join(tmp, "modules")
+	writeFile(t, filepath.Join(modules, "docker.yaml"), "name: docker\ndescription: Docker management\ncommands:\n  build:\n    description: Build\n    cmd: echo build\n")
+
+	cmd := exec.Command(fishPath, "--no-config", "-c", "futi completion fish | source; complete -C 'futi do'")
+	cmd.Env = append(os.Environ(),
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FUTI_MODULES_DIR="+modules,
+		"HOME="+tmp,
+		"XDG_CACHE_HOME="+filepath.Join(tmp, "cache"),
+		"XDG_CONFIG_HOME="+filepath.Join(tmp, "config"),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("fish: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "docker") {
+		t.Errorf("вывод fish не содержит docker: %q", out)
 	}
 }
