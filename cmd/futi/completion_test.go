@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -247,11 +248,15 @@ func TestRunCompleteSanitizesSpecialChars(t *testing.T) {
 	}
 }
 
+// fishPassesCursorRe находит безусловную строку set args $args "$cursor"
+// независимо от отступа и перевода строки.
+var fishPassesCursorRe = regexp.MustCompile(`(?m)^\s*set args \$args "\$cursor"\s*$`)
+
 // TestCompletionFishAlwaysPassesCursor: слово под курсором (commandline -ct)
 // всегда уходит в __complete последним аргументом, иначе futi do<TAB> вызывает
 // __complete без аргументов (audit F20).
 func TestCompletionFishAlwaysPassesCursor(t *testing.T) {
-	if !strings.Contains(fishCompletionScript, "\n    set args $args \"$cursor\"\n") {
+	if !fishPassesCursorRe.MatchString(fishCompletionScript) {
 		t.Error("скрипт не содержит безусловного set args $args \"$cursor\"")
 	}
 	if strings.Contains(fishCompletionScript, `if test -z "$cursor"`) {
@@ -289,7 +294,14 @@ func TestCompletionFishRealShell(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fish: %v\n%s", err, out)
 	}
-	if !strings.Contains(string(out), "docker") {
-		t.Errorf("вывод fish не содержит docker: %q", out)
+	found := false
+	for _, line := range strings.Split(string(out), "\n") {
+		name, _, _ := strings.Cut(strings.TrimSpace(line), "\t")
+		if name == "docker" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("вывод fish не содержит строки docker: %q", out)
 	}
 }

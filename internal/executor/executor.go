@@ -14,7 +14,10 @@ import (
 )
 
 // cancelWaitDelay — сколько ждать завершения ребёнка после SIGTERM при отмене
-// контекста; затем Go посылает SIGKILL. Переменная — для тестов.
+// контекста; затем Go посылает SIGKILL. Тот же WaitDelay ограничивает и
+// ожидание закрытия I/O-пайпов после выхода ребёнка (внук, унаследовавший
+// stdout/stderr, держит их открытыми): по истечении Wait возвращает
+// exec.ErrWaitDelay. Переменная — для тестов.
 var cancelWaitDelay = 5 * time.Second
 
 // foregroundTTY сообщает, находится ли futi в foreground-группе управляющего
@@ -134,7 +137,9 @@ func Run(ctx context.Context, scriptPath string, args ...string) error {
 // С cfg.IsolateWithoutTTY и без управляющего терминала на старте команда
 // запускается в своей группе процессов: все четыре сигнала пересылаются
 // группе, отмена ctx шлёт SIGTERM группе, через cancelWaitDelay — SIGKILL
-// оставшимся в ней.
+// оставшимся в ней. Этот SIGKILL может прийти уже после возврата
+// RunWithConfig (группа ещё не опустела) и только пока процесс futi жив:
+// если futi завершится раньше, внук, игнорирующий SIGTERM, переживёт его.
 //
 // Если сигнал переслан (или пришёл между завершением ребёнка и снятием
 // подписки), возвращается ошибка с *InterruptedError, даже если ребёнок
@@ -180,6 +185,7 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 	// groupKill — таймер SIGKILL группе после отмены ctx: os/exec через
 	// WaitDelay добивает только лидера, а внук, игнорирующий SIGTERM, пережил
 	// бы его. Ставится в горутине os/exec (Cancel), читается после Wait.
+	// Таймер может сработать и после возврата функции, если группа не опустела.
 	var groupKill atomic.Pointer[time.Timer]
 	if isolated {
 		startInOwnGroup(command)

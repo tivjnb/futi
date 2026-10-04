@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"futi/internal/testutil"
 )
 
 func TestRunWithConfigExecutesScriptWithArgs(t *testing.T) {
@@ -69,30 +71,11 @@ func TestRunWithConfigRejectsNilContext(t *testing.T) {
 	}
 }
 
-// replaceStdin подменяет os.Stdin файлом с content до конца теста.
-func replaceStdin(t *testing.T, content string) {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "stdin")
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	orig := os.Stdin
-	os.Stdin = f
-	t.Cleanup(func() {
-		os.Stdin = orig
-		f.Close()
-	})
-}
-
 func TestRunWithConfigInheritsStdin(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("cat недоступен на Windows")
 	}
-	replaceStdin(t, "hello")
+	testutil.ReplaceStdin(t, "hello")
 
 	var buf bytes.Buffer
 	if err := RunWithConfig(context.Background(), &Config{Stdout: &buf}, "cat"); err != nil {
@@ -107,7 +90,7 @@ func TestRunWithConfigExplicitStdinWins(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("cat недоступен на Windows")
 	}
-	replaceStdin(t, "hello")
+	testutil.ReplaceStdin(t, "hello")
 
 	var buf bytes.Buffer
 	cfg := &Config{Stdin: strings.NewReader("x"), Stdout: &buf}
@@ -117,19 +100,6 @@ func TestRunWithConfigExplicitStdinWins(t *testing.T) {
 	if got := buf.String(); got != "x" {
 		t.Fatalf("stdout = %q, want %q", got, "x")
 	}
-}
-
-// waitForFile ждёт появления файла (опрос с дедлайном).
-func waitForFile(t *testing.T, path string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("файл %s не появился за 5с", path)
 }
 
 // signalChildEnv возвращает окружение с путями маркеров MARK и READY.
@@ -168,7 +138,7 @@ func runUntilSignalled(t *testing.T, cfg *Config, ready, script string, sig sysc
 	go func() {
 		done <- RunWithConfig(context.Background(), cfg, "sh", "-c", script)
 	}()
-	waitForFile(t, ready)
+	testutil.WaitForFile(t, ready, 5*time.Second)
 	if err := syscall.Kill(os.Getpid(), sig); err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +238,7 @@ func TestRunWithConfigDoesNotForwardSIGINT(t *testing.T) {
 	go func() {
 		done <- RunWithConfig(context.Background(), &Config{Env: env}, "sh", "-c", script)
 	}()
-	waitForFile(t, ready)
+	testutil.WaitForFile(t, ready, 5*time.Second)
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +276,7 @@ func TestRunWithConfigCancelSendsSIGTERM(t *testing.T) {
 	go func() {
 		done <- RunWithConfig(ctx, &Config{Env: env}, "sh", "-c", script)
 	}()
-	waitForFile(t, ready)
+	testutil.WaitForFile(t, ready, 5*time.Second)
 	cancel()
 	select {
 	case <-done:
@@ -340,7 +310,7 @@ func TestRunWithConfigCancelKillsChildIgnoringSIGTERM(t *testing.T) {
 	go func() {
 		done <- RunWithConfig(ctx, &Config{Env: env}, "sh", "-c", script)
 	}()
-	waitForFile(t, ready)
+	testutil.WaitForFile(t, ready, 5*time.Second)
 	start := time.Now()
 	cancel()
 	var err error
@@ -384,7 +354,7 @@ func TestRunWithConfigIsolatedGroupGetsSIGTERM(t *testing.T) {
 	env, mark, ready, script := isolatedGrandchildEnv(t)
 
 	err := runUntilSignalled(t, &Config{Env: env, IsolateWithoutTTY: true}, ready, script, syscall.SIGTERM)
-	waitForFile(t, mark)
+	testutil.WaitForFile(t, mark, 5*time.Second)
 	assertMark(t, mark, "gc")
 	var intErr *InterruptedError
 	if !errors.As(err, &intErr) || intErr.Signal != syscall.SIGTERM {
@@ -406,7 +376,7 @@ func TestRunWithConfigIsolatedCancelSignalsGroup(t *testing.T) {
 	go func() {
 		done <- RunWithConfig(ctx, &Config{Env: env, IsolateWithoutTTY: true}, "sh", "-c", script)
 	}()
-	waitForFile(t, ready)
+	testutil.WaitForFile(t, ready, 5*time.Second)
 	cancel()
 	var err error
 	select {
@@ -414,7 +384,7 @@ func TestRunWithConfigIsolatedCancelSignalsGroup(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("RunWithConfig не завершился")
 	}
-	waitForFile(t, mark)
+	testutil.WaitForFile(t, mark, 5*time.Second)
 	assertMark(t, mark, "gc")
 	// Отмена — не пересылка сигнала futi: лидер убит SIGTERM, но это не
 	// прерывание futi.
@@ -493,7 +463,7 @@ func TestRunWithConfigIsolatedCancelKillsGroupIgnoringSIGTERM(t *testing.T) {
 	go func() {
 		done <- RunWithConfig(ctx, &Config{Env: env, IsolateWithoutTTY: true}, "sh", "-c", `sh -c "$INNER" & wait`)
 	}()
-	waitForFile(t, ready)
+	testutil.WaitForFile(t, ready, 5*time.Second)
 	pid := readPid(t, ready)
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 	cancel()
@@ -520,7 +490,7 @@ func TestRunWithConfigIsolatedForwardsSIGINT(t *testing.T) {
 	go func() {
 		done <- RunWithConfig(context.Background(), &Config{Env: env, IsolateWithoutTTY: true}, "sh", "-c", script)
 	}()
-	waitForFile(t, ready)
+	testutil.WaitForFile(t, ready, 5*time.Second)
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
 		t.Fatal(err)
 	}

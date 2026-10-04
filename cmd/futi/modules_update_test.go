@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"futi/internal/discovery"
 	"futi/internal/metayaml"
+	"futi/internal/testutil"
 )
 
 func TestRunModulesUpdateNoChange(t *testing.T) {
@@ -26,7 +28,7 @@ func TestRunModulesUpdateNoChange(t *testing.T) {
 	}
 	// Файл, созданный ПОСЛЕ установки (локальная модификация — не источник).
 	dest := filepath.Join(global, "qr")
-	os.WriteFile(filepath.Join(dest, "local_mod.txt"), []byte("keep\n"), 0o644)
+	writeFile(t, filepath.Join(dest, "local_mod.txt"), "keep\n")
 
 	var b bytes.Buffer
 	if err := runModulesUpdate(&b, discovery.NewGlobalSource(global), cache, []string{"qr"}); err != nil {
@@ -58,8 +60,7 @@ func TestRunModulesUpdateSourceChanged(t *testing.T) {
 	}
 
 	// Источник изменился.
-	os.WriteFile(filepath.Join(src, "config.yaml"),
-		[]byte("name: qr\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644)
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	oldMeta, _ := metayaml.Read(filepath.Join(global, "qr", metayaml.FileName))
 	oldInstalledAt := oldMeta.Lockfile.InstalledAt
@@ -99,8 +100,7 @@ func TestRunModulesUpdateAttachFailureWarns(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 	// Источник изменился: новая версия с failing attach.
-	os.WriteFile(filepath.Join(src, "config.yaml"),
-		[]byte("name: qr\nattach: \"exit 5\"\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644)
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\nattach: \"exit 5\"\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	if err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, []string{"qr"}); err != nil {
 		t.Fatalf("attach failure on update must be warning, not error: %v", err)
@@ -141,10 +141,8 @@ func TestRunModulesUpdateAllStopsOnInterrupt(t *testing.T) {
 			t.Fatalf("install: %v", err)
 		}
 	}
-	os.WriteFile(filepath.Join(srcA, "config.yaml"),
-		[]byte("name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644)
-	os.WriteFile(filepath.Join(srcB, "config.yaml"),
-		[]byte("name: b\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644)
+	writeFile(t, filepath.Join(srcA, "config.yaml"), "name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
+	writeFile(t, filepath.Join(srcB, "config.yaml"), "name: b\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, nil)
 	if err == nil {
@@ -168,8 +166,7 @@ func TestRunModulesUpdateInterruptedAttachInvalidatesCache(t *testing.T) {
 	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src, "--skip-attach"}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	os.WriteFile(filepath.Join(src, "config.yaml"),
-		[]byte("name: qr\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644)
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	// Посторонняя запись в кэше — update должен её сбросить.
 	stranger := makeSourceModule(t, t.TempDir(), "stranger", "")
@@ -198,8 +195,7 @@ func TestRunModulesUpdateInterruptPrintsErrorOnce(t *testing.T) {
 	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src, "--skip-attach"}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	os.WriteFile(filepath.Join(src, "config.yaml"),
-		[]byte("name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644)
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -242,20 +238,16 @@ func TestRunModulesUpdateStopsWhenHookCatchesSIGTERM(t *testing.T) {
 	}
 	ready := filepath.Join(t.TempDir(), "ready")
 	attach := `trap "exit 0" TERM; echo ready > ` + ready + `; while :; do sleep 0.05; done`
-	if err := os.WriteFile(filepath.Join(srcA, "config.yaml"),
-		[]byte("name: a\nattach: '"+attach+"'\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(srcB, "config.yaml"),
-		[]byte("name: b\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, filepath.Join(srcA, "config.yaml"),
+		"name: a\nattach: '"+attach+"'\ncommands:\n  run:\n    cmd: echo v2\n")
+	writeFile(t, filepath.Join(srcB, "config.yaml"),
+		"name: b\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	done := make(chan error, 1)
 	go func() {
 		done <- runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, nil)
 	}()
-	waitForReady(t, ready)
+	testutil.WaitForFile(t, ready, 5*time.Second)
 	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
@@ -274,15 +266,43 @@ func TestRunModulesUpdateStopsWhenHookCatchesSIGTERM(t *testing.T) {
 	}
 }
 
-// waitForReady ждёт появления файла (опрос с дедлайном).
-func waitForReady(t *testing.T, path string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+// Собранный futi при прерывании attach печатает ошибку ровно один раз:
+// предупреждение и строка цикла update её не дублируют.
+func TestFutiUpdateInterruptPrintsErrorOnce(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
 	}
-	t.Fatalf("файл %s не появился за 5с", path)
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "futi")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	mods := filepath.Join(tmp, "mods")
+	src := makeSourceModule(t, t.TempDir(), "a", "")
+	env := append(os.Environ(),
+		"FUTI_MODULES_DIR="+mods,
+		"HOME="+tmp, "XDG_CACHE_HOME="+filepath.Join(tmp, "cache"))
+	run := func(args ...string) ([]byte, error) {
+		cmd := exec.Command(bin, args...)
+		cmd.Dir = tmp
+		cmd.Env = env
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		return stderr.Bytes(), err
+	}
+	if out, err := run("modules", "install", src, "--skip-attach"); err != nil {
+		t.Fatalf("install: %v\n%s", err, out)
+	}
+	writeFile(t, filepath.Join(src, "config.yaml"),
+		"name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
+
+	stderr, err := run("modules", "update")
+	if err == nil {
+		t.Fatal("ожидалась ошибка прерывания")
+	}
+	t.Logf("stderr:\n%s", stderr)
+	if n := strings.Count(string(stderr), "signal: interrupt"); n != 1 {
+		t.Fatalf("в stderr %d вхождений signal: interrupt, want 1:\n%s", n, stderr)
+	}
 }

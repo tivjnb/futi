@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"futi/internal/testutil"
 )
 
 func TestRunHookRunsInModuleRoot(t *testing.T) {
@@ -82,20 +84,7 @@ func TestRunHookPropagatesExitCode(t *testing.T) {
 
 func TestRunHookInheritsStdin(t *testing.T) {
 	dir := t.TempDir()
-	in := filepath.Join(dir, "in")
-	if err := os.WriteFile(in, []byte("data"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	f, err := os.Open(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	orig := os.Stdin
-	os.Stdin = f
-	t.Cleanup(func() {
-		os.Stdin = orig
-		f.Close()
-	})
+	testutil.ReplaceStdin(t, "data")
 
 	var out bytes.Buffer
 	if err := RunHook(context.Background(), `cat > "$FUTI_MODULE_ROOT/out"`, dir, "m", &out, &out); err != nil {

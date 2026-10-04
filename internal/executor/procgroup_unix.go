@@ -18,7 +18,9 @@ func startInOwnGroup(command *exec.Cmd) {
 // signalGroup шлёт sig всей группе процессов, лидер которой — p. Группа уже
 // пуста (ESRCH) — os.ErrProcessDone. После reap лидера pgid теоретически может
 // достаться новой группе: защиты вроде pidfd для групп нет, но pgid занят,
-// пока в группе есть хоть один процесс, и риск переиспользования пренебрежим.
+// пока в группе есть хоть один процесс. Для отложенного SIGKILL окно
+// переиспользования — до cancelWaitDelay (если группа опустеет сама после
+// проверки), а не микросекунды; риск по-прежнему низкий.
 func signalGroup(p *os.Process, sig syscall.Signal) error {
 	err := syscall.Kill(-p.Pid, sig)
 	if errors.Is(err, syscall.ESRCH) {
