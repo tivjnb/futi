@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -151,13 +152,13 @@ func setForegroundTTY(t *testing.T, foreground bool) {
 	t.Cleanup(func() { foregroundTTY = orig })
 }
 
-// runUntilSignalled запускает script, ждёт READY, шлёт sig тестовому процессу
-// и возвращает ошибку RunWithConfig.
-func runUntilSignalled(t *testing.T, env []string, ready, script string, sig syscall.Signal) error {
+// runUntilSignalled запускает script с cfg, ждёт READY, шлёт sig тестовому
+// процессу и возвращает ошибку RunWithConfig.
+func runUntilSignalled(t *testing.T, cfg *Config, ready, script string, sig syscall.Signal) error {
 	t.Helper()
 	done := make(chan error, 1)
 	go func() {
-		done <- RunWithConfig(context.Background(), &Config{Env: env}, "sh", "-c", script)
+		done <- RunWithConfig(context.Background(), cfg, "sh", "-c", script)
 	}()
 	waitForFile(t, ready)
 	if err := syscall.Kill(os.Getpid(), sig); err != nil {
@@ -204,7 +205,7 @@ func TestRunWithConfigForwardsSIGTERM(t *testing.T) {
 	env, mark, ready := signalChildEnv(t)
 	script := `trap 'echo term > "$MARK"; exit 0' TERM; echo ready > "$READY"; while :; do sleep 0.05; done`
 
-	err := runUntilSignalled(t, env, ready, script, syscall.SIGTERM)
+	err := runUntilSignalled(t, &Config{Env: env}, ready, script, syscall.SIGTERM)
 	assertMark(t, mark, "term")
 	assertInterrupted(t, err, syscall.SIGTERM)
 }
@@ -216,7 +217,7 @@ func TestRunWithConfigForwardsSIGHUP(t *testing.T) {
 	env, mark, ready := signalChildEnv(t)
 	script := `trap 'echo hup > "$MARK"; exit 0' HUP; echo ready > "$READY"; while :; do sleep 0.05; done`
 
-	err := runUntilSignalled(t, env, ready, script, syscall.SIGHUP)
+	err := runUntilSignalled(t, &Config{Env: env}, ready, script, syscall.SIGHUP)
 	assertMark(t, mark, "hup")
 	assertInterrupted(t, err, syscall.SIGHUP)
 }
@@ -231,7 +232,7 @@ func TestRunWithConfigForwardsSIGINTWithoutTTY(t *testing.T) {
 	env, mark, ready := signalChildEnv(t)
 	script := `trap 'echo int > "$MARK"; exit 0' INT; echo ready > "$READY"; while :; do sleep 0.05; done`
 
-	err := runUntilSignalled(t, env, ready, script, syscall.SIGINT)
+	err := runUntilSignalled(t, &Config{Env: env}, ready, script, syscall.SIGINT)
 	assertMark(t, mark, "int")
 	assertInterrupted(t, err, syscall.SIGINT)
 }
@@ -350,6 +351,138 @@ func TestRunWithConfigCancelKillsChildIgnoringSIGTERM(t *testing.T) {
 	ws, ok := exitErr.Sys().(syscall.WaitStatus)
 	if !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
 		t.Fatalf("ребёнок завершён не SIGKILL: %v", err)
+	}
+}
+
+// isolatedGrandchildEnv готовит составную команду (как хук через sh -c):
+// внук в фоне ловит SIGTERM и пишет gc в MARK, внешний sh ждёт его. Внук
+// живёт ограниченное время, чтобы не остаться навсегда при провале теста;
+// stderr внука заглушён — sh сообщил бы «Terminated» о своём sleep, убитом
+// групповым SIGTERM.
+func isolatedGrandchildEnv(t *testing.T) (env []string, mark, ready, script string) {
+	t.Helper()
+	env, mark, ready = signalChildEnv(t)
+	inner := `exec 2>/dev/null; trap 'echo gc > "$MARK"; exit 0' TERM; echo ready > "$READY"; i=0; while [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done`
+	return append(env, "INNER="+inner), mark, ready, `sh -c "$INNER" & wait`
+}
+
+// Без терминала изолированная команда — своя группа: адресный SIGTERM futi
+// получает и внук составной команды, а не только её sh.
+func TestRunWithConfigIsolatedGroupGetsSIGTERM(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	setForegroundTTY(t, false)
+	env, mark, ready, script := isolatedGrandchildEnv(t)
+
+	err := runUntilSignalled(t, &Config{Env: env, IsolateWithoutTTY: true}, ready, script, syscall.SIGTERM)
+	waitForFile(t, mark)
+	assertMark(t, mark, "gc")
+	var intErr *InterruptedError
+	if !errors.As(err, &intErr) || intErr.Signal != syscall.SIGTERM {
+		t.Fatalf("err = %v, want *InterruptedError{Signal: SIGTERM}", err)
+	}
+}
+
+// Отмена ctx изолированной команды шлёт SIGTERM всей группе.
+func TestRunWithConfigIsolatedCancelSignalsGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	setForegroundTTY(t, false)
+	env, mark, ready, script := isolatedGrandchildEnv(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- RunWithConfig(ctx, &Config{Env: env, IsolateWithoutTTY: true}, "sh", "-c", script)
+	}()
+	waitForFile(t, ready)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWithConfig не завершился")
+	}
+	waitForFile(t, mark)
+	assertMark(t, mark, "gc")
+}
+
+// Изоляция решается при старте: после fg (futi перешёл на передний план)
+// Ctrl+C терминал доставляет только группе futi, поэтому SIGINT по-прежнему
+// пересылается группе команды.
+func TestRunWithConfigIsolatedForwardsSIGINTAfterFg(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	var foreground atomic.Bool
+	orig := foregroundTTY
+	foregroundTTY = foreground.Load
+	t.Cleanup(func() { foregroundTTY = orig })
+	env, mark, ready := signalChildEnv(t)
+	script := `trap 'echo int > "$MARK"; exit 0' INT; echo ready > "$READY"; i=0; while [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done`
+
+	done := make(chan error, 1)
+	go func() {
+		done <- RunWithConfig(context.Background(), &Config{Env: env, IsolateWithoutTTY: true}, "sh", "-c", script)
+	}()
+	waitForFile(t, ready)
+	foreground.Store(true)
+	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWithConfig не завершился")
+	}
+	assertMark(t, mark, "int")
+	assertInterrupted(t, err, syscall.SIGINT)
+}
+
+// childGroup запускает sh с cfg и возвращает pid ребёнка и его группу
+// процессов (поле pgrp из /proc/<pid>/stat).
+func childGroup(t *testing.T, cfg *Config) (pid, pgrp int) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("нужен /proc")
+	}
+	var buf bytes.Buffer
+	cfg.Stdout = &buf
+	if err := RunWithConfig(context.Background(), cfg, "sh", "-c", `echo $$ $(cut -d" " -f5 /proc/$$/stat)`); err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	fields := strings.Fields(buf.String())
+	if len(fields) != 2 {
+		t.Fatalf("неожиданный вывод: %q", buf.String())
+	}
+	pid, err := strconv.Atoi(fields[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pgrp, err = strconv.Atoi(fields[1]); err != nil {
+		t.Fatal(err)
+	}
+	return pid, pgrp
+}
+
+// С терминалом изоляция не включается: ребёнок остаётся в группе futi
+// (foreground-группе терминала), интерактивные команды работают.
+func TestRunWithConfigNotIsolatedWithTTY(t *testing.T) {
+	setForegroundTTY(t, true)
+	_, pgrp := childGroup(t, &Config{IsolateWithoutTTY: true})
+	if want := syscall.Getpgrp(); pgrp != want {
+		t.Fatalf("pgrp ребёнка = %d, want %d (группа теста)", pgrp, want)
+	}
+}
+
+func TestRunWithConfigIsolatedOwnGroup(t *testing.T) {
+	setForegroundTTY(t, false)
+	pid, pgrp := childGroup(t, &Config{IsolateWithoutTTY: true})
+	if pgrp != pid {
+		t.Fatalf("pgrp ребёнка = %d, want %d (своя группа; группа теста %d)", pgrp, pid, syscall.Getpgrp())
 	}
 }
 

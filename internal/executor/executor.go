@@ -64,6 +64,13 @@ type Config struct {
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
+	// IsolateWithoutTTY: если при старте futi не в foreground-группе
+	// терминала (CI, </dev/null, фон), команда запускается в своей группе
+	// процессов, и все перехваченные сигналы (и SIGTERM при отмене ctx)
+	// получает вся группа — внуки составной команды не остаются сиротами.
+	// С терминалом флаг ни на что не влияет: команда остаётся в группе
+	// терминала. Решение принимается один раз при старте.
+	IsolateWithoutTTY bool
 }
 
 // NewConfig returns an empty execution config.
@@ -117,6 +124,10 @@ func Run(ctx context.Context, scriptPath string, args ...string) error {
 //     без терминала (CI, фон, перенаправленный ввод/вывод) они адресные
 //     (kill -INT) и пересылаются. Терминал проверяется в момент сигнала.
 //
+// С cfg.IsolateWithoutTTY и без терминала на старте команда запускается в
+// своей группе процессов: все четыре сигнала пересылаются группе, отмена
+// ctx шлёт SIGTERM группе.
+//
 // Если сигнал переслан (или пришёл между завершением ребёнка и снятием
 // подписки), возвращается ошибка с *InterruptedError, даже если ребёнок
 // вышел с 0. Отмена ctx посылает ребёнку SIGTERM, через cancelWaitDelay —
@@ -154,6 +165,13 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 			command.Stdin = cfg.Stdin
 		}
 	}
+	// Изоляция решается один раз при старте: после fg группа команды так и
+	// останется не в foreground-группе терминала.
+	isolated := cfg != nil && cfg.IsolateWithoutTTY && !foregroundTTY()
+	if isolated {
+		startInOwnGroup(command)
+		command.Cancel = func() error { return signalGroup(command.Process, syscall.SIGTERM) }
+	}
 
 	// Подписка до Start: сигнал, пришедший сразу после старта, не потеряется.
 	// signal.Notify (а не Ignore): игнорирование наследуется через exec, и
@@ -179,8 +197,16 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 		return fmt.Errorf("executor: run %q: %w", executable, err)
 	}
 
-	// signalChild — единственное место доставки пересылаемого сигнала.
+	// signalChild — единственное место доставки пересылаемого сигнала,
+	// forwards — решение, пересылать ли его.
 	signalChild := func(sig syscall.Signal) { _ = command.Process.Signal(sig) }
+	forwards := forwardsSignal
+	if isolated {
+		// Терминал своей группе команды ничего не доставляет — пересылается
+		// всё. Ошибка (ESRCH: группа уже пуста) не важна, как и выше.
+		signalChild = func(sig syscall.Signal) { _ = signalGroup(command.Process, sig) }
+		forwards = func(syscall.Signal) bool { return true }
+	}
 	// interruptedBy — пересланный сигнал (см. mergeForwarded); 0 — пересылки
 	// не было. Пишет только горутина пересылки; читается после forwardDone.
 	var interruptedBy syscall.Signal
@@ -192,7 +218,7 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 			select {
 			case s := <-sigCh:
 				sig, ok := s.(syscall.Signal)
-				if !ok || !forwardsSignal(sig) {
+				if !ok || !forwards(sig) {
 					continue
 				}
 				signalChild(sig)
@@ -209,7 +235,7 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 	// Сигнал, пришедший между Wait и снятием подписки, ребёнку уже не нужен,
 	// но прерывание futi терять нельзя.
 	signal.Stop(sigCh)
-	if sig, ok := drainSignals(sigCh, forwardsSignal); ok {
+	if sig, ok := drainSignals(sigCh, forwards); ok {
 		interruptedBy = mergeForwarded(interruptedBy, sig)
 	}
 
