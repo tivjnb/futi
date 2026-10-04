@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -243,5 +245,56 @@ func TestRunCompleteSanitizesSpecialChars(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected sanitized line %q, got %q", "weird\tline1 line2 with tabs", out.String())
+	}
+}
+
+// fishPassesCursorRe находит безусловную строку set args $args "$cursor"
+// независимо от отступа и перевода строки.
+var fishPassesCursorRe = regexp.MustCompile(`(?m)^\s*set args \$args "\$cursor"\s*$`)
+
+// TestCompletionFishAlwaysPassesCursor: слово под курсором (commandline -ct)
+// всегда уходит в __complete последним аргументом, иначе futi do<TAB> вызывает
+// __complete без аргументов (audit F20).
+func TestCompletionFishAlwaysPassesCursor(t *testing.T) {
+	if !fishPassesCursorRe.MatchString(fishCompletionScript) {
+		t.Error("скрипт не содержит безусловного set args $args \"$cursor\"")
+	}
+	if strings.Contains(fishCompletionScript, `if test -z "$cursor"`) {
+		t.Error("скрипт добавляет курсор только для пустого слова")
+	}
+}
+
+// TestCompletionFishRealShell прогоняет скрипт в настоящем fish; без fish пропускается.
+func TestCompletionFishRealShell(t *testing.T) {
+	fishPath, err := exec.LookPath("fish")
+	if err != nil {
+		t.Skip("fish не установлен")
+	}
+	tmp := t.TempDir()
+	binDir := filepath.Dir(builtFutiBinary(t))
+	modules := filepath.Join(tmp, "modules")
+	writeFile(t, filepath.Join(modules, "docker.yaml"), "name: docker\ndescription: Docker management\ncommands:\n  build:\n    description: Build\n    cmd: echo build\n")
+
+	cmd := exec.Command(fishPath, "--no-config", "-c", "futi completion fish | source; complete -C 'futi do'")
+	cmd.Env = append(os.Environ(),
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FUTI_MODULES_DIR="+modules,
+		"HOME="+tmp,
+		"XDG_CACHE_HOME="+filepath.Join(tmp, "cache"),
+		"XDG_CONFIG_HOME="+filepath.Join(tmp, "config"),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("fish: %v\n%s", err, out)
+	}
+	found := false
+	for _, line := range strings.Split(string(out), "\n") {
+		name, _, _ := strings.Cut(strings.TrimSpace(line), "\t")
+		if name == "docker" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("вывод fish не содержит строки docker: %q", out)
 	}
 }

@@ -16,10 +16,9 @@ function __futi_perform_completion
     set -l args (commandline -opc)
     set -l cursor (commandline -ct)
 
-    if test -z "$cursor"
-        # Cursor at end of line: append an empty toComplete argument.
-        set args $args ""
-    end
+    # commandline -opc не включает токен под курсором: всегда передаём его
+    # последним аргументом toComplete (пустым, если курсор на новом слове).
+    set args $args "$cursor"
 
     set -l results ($args[1] __complete $args[2..-1] 2>/dev/null)
 

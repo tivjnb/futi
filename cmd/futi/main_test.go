@@ -11,13 +11,53 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 
 	"futi/internal/config"
 	"futi/internal/discovery"
 	"futi/internal/execmodule"
+	"futi/internal/executor"
 	"futi/internal/modulecache"
 )
+
+var (
+	futiBinOnce sync.Once
+	futiBinDir  string // каталог с собранным бинарём futi; удаляется в TestMain
+	futiBinErr  error
+)
+
+// TestMain удаляет каталог общего бинаря futi, собранного builtFutiBinary.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if futiBinDir != "" {
+		os.RemoveAll(futiBinDir)
+	}
+	os.Exit(code)
+}
+
+// builtFutiBinary собирает futi один раз на запуск тестов и возвращает путь
+// к бинарю (файл с именем futi в каталоге futiBinDir). Ошибка сборки — Fatal
+// в каждом вызывающем тесте.
+func builtFutiBinary(t testing.TB) string {
+	t.Helper()
+	futiBinOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "futi-test-bin-")
+		if err != nil {
+			futiBinErr = err
+			return
+		}
+		futiBinDir = dir
+		if out, err := exec.Command("go", "build", "-o", filepath.Join(dir, "futi"), ".").CombinedOutput(); err != nil {
+			futiBinErr = fmt.Errorf("go build: %v\n%s", err, out)
+		}
+	})
+	if futiBinErr != nil {
+		t.Fatal(futiBinErr)
+	}
+	return filepath.Join(futiBinDir, "futi")
+}
 
 // stubLoader — тестовый загрузчик модулей, который возвращает
 // предзаготовленный модуль для любого пути и считает вызовы.
@@ -1822,5 +1862,99 @@ func TestRunListEmptyNamespaceOnProdSourceChain(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "a") {
 		t.Fatalf("в выводе нет модуля a:\n%s", buf.String())
+	}
+}
+
+func TestExitCodeFromErrorSignaled(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	runErr := exec.Command("sh", "-c", "kill -TERM $$").Run()
+
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"direct", runErr, 143},
+		{"wrapped", fmt.Errorf("x: %w", runErr), 143},
+		// Ребёнок перехватил пересланный SIGQUIT и вышел с 0: код как при гибели от него.
+		{"InterruptedError QUIT", &executor.InterruptedError{Signal: syscall.SIGQUIT}, 131},
+		// Ребёнок после пересланного SIGQUIT вышел с 2: код по сигналу futi.
+		{"InterruptedError QUIT с кодом 2", &executor.InterruptedError{Signal: syscall.SIGQUIT, Err: exec.Command("sh", "-c", "exit 2").Run()}, 131},
+		// Ребёнок добит SIGKILL после пересланного SIGTERM: код по его гибели.
+		{"InterruptedError TERM, убит KILL", &executor.InterruptedError{Signal: syscall.SIGTERM, Err: exec.Command("sh", "-c", "kill -KILL $$").Run()}, 137},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := exitCodeFromError(tc.err); got != tc.want {
+				t.Fatalf("exitCodeFromError(%v) = %d, want %d", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestInterruptSignal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	killed := func(sig string) error {
+		return exec.Command("sh", "-c", "kill -"+sig+" $$").Run()
+	}
+	cases := []struct {
+		name    string
+		err     error
+		want    syscall.Signal
+		wantHit bool
+	}{
+		{"INT", killed("INT"), syscall.SIGINT, true},
+		{"TERM wrapped", fmt.Errorf("x: %w", killed("TERM")), syscall.SIGTERM, true},
+		{"HUP", killed("HUP"), syscall.SIGHUP, true},
+		{"QUIT не прерывающий", killed("QUIT"), 0, false},
+		{"обычный код", exec.Command("sh", "-c", "exit 3").Run(), 0, false},
+		{"не ExitError", errors.New("boom"), 0, false},
+		{"nil", nil, 0, false},
+		{"InterruptedError TERM", &executor.InterruptedError{Signal: syscall.SIGTERM}, syscall.SIGTERM, true},
+		{"InterruptedError QUIT не прерывающий", &executor.InterruptedError{Signal: syscall.SIGQUIT}, 0, false},
+		{"InterruptedError HUP wrapped", fmt.Errorf("x: %w", &executor.InterruptedError{Signal: syscall.SIGHUP}), syscall.SIGHUP, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := interruptSignal(tc.err)
+			if ok != tc.wantHit || got != tc.want {
+				t.Fatalf("interruptSignal(%v) = (%v, %v), want (%v, %v)", tc.err, got, ok, tc.want, tc.wantHit)
+			}
+		})
+	}
+}
+
+// futi, чей ребёнок убит SIGINT, сам должен погибнуть от SIGINT (а не выйти
+// с кодом 130): иначе bash не прервёт цикл по Ctrl+C.
+func TestFutiDiesFromSignalWhenChildInterrupted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	tmp := t.TempDir()
+	bin := builtFutiBinary(t)
+	mods := filepath.Join(tmp, "mods", "m")
+	if err := os.MkdirAll(mods, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := "name: m\ncmd: \"sh -c 'kill -INT $$'\"\n"
+	if err := os.WriteFile(filepath.Join(mods, "config.yaml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "m")
+	cmd.Env = append(os.Environ(),
+		"FUTI_MODULES_DIR="+filepath.Join(tmp, "mods"),
+		"HOME="+tmp, "XDG_CACHE_HOME="+filepath.Join(tmp, "cache"))
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("ожидалась ошибка")
+	}
+	ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() || ws.Signal() != syscall.SIGINT {
+		t.Fatalf("futi завершился %v, want гибель от SIGINT", cmd.ProcessState)
 	}
 }

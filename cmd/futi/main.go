@@ -8,13 +8,17 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
+	"time"
 
 	"futi/internal/config"
 	"futi/internal/discovery"
 	"futi/internal/execmodule"
+	"futi/internal/executor"
 	"futi/internal/modulecache"
 	"futi/internal/modulerunner"
 
@@ -823,17 +827,77 @@ ENVIRONMENT
 }
 
 // exitCodeFromError извлекает код завершения из ошибки.
-// Если ошибка содержит *exec.ExitError — возвращает её ExitCode().
-// Иначе — 1 (стандартный код ошибки для futi).
+// При гибели процесса от сигнала N (*exec.ExitError) — 128+N (как в shell);
+// иначе, если команда прервана сигналом N, полученным futi
+// (*executor.InterruptedError), — тоже 128+N; иначе ExitCode() из
+// *exec.ExitError. Остальное — 1 (стандартный код ошибки для futi).
 func exitCodeFromError(err error) int {
 	if err == nil {
 		return 0
 	}
 	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	hasExitErr := errors.As(err, &exitErr)
+	if hasExitErr {
+		if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			return 128 + int(ws.Signal())
+		}
+	}
+	var intErr *executor.InterruptedError
+	if errors.As(err, &intErr) {
+		return 128 + int(intErr.Signal)
+	}
+	if hasExitErr {
 		return exitErr.ExitCode()
 	}
 	return 1
+}
+
+// interruptSignal возвращает прерывающий сигнал (SIGINT, SIGTERM или SIGHUP)
+// из err: полученный futi и пересланный команде (*executor.InterruptedError —
+// даже если команда его перехватила и вышла обычным кодом) или тот, которым
+// убит дочерний процесс (*exec.ExitError). Для остальных сигналов (SIGQUIT,
+// SIGSEGV и т.п.) и прочих ошибок — false.
+func interruptSignal(err error) (syscall.Signal, bool) {
+	var intErr *executor.InterruptedError
+	if errors.As(err, &intErr) && isInterruptSignal(intErr.Signal) {
+		return intErr.Signal, true
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return 0, false
+	}
+	ws, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() || !isInterruptSignal(ws.Signal()) {
+		return 0, false
+	}
+	return ws.Signal(), true
+}
+
+// isInterruptSignal — сигнал, прерывающий futi и циклы шелла.
+func isInterruptSignal(sig syscall.Signal) bool {
+	switch sig {
+	case syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP:
+		return true
+	}
+	return false
+}
+
+// exitAfterRunError завершает процесс после ошибки запуска команды. Если
+// ребёнок убит прерывающим сигналом, futi поднимает тот же сигнал на себя и
+// гибнет от него: шелл (bash) иначе решит, что команда сама обработала
+// Ctrl+C, и не прервёт цикл. Код выхода шелла остаётся 128+N.
+func exitAfterRunError(err error) {
+	if sig, ok := interruptSignal(err); ok {
+		signal.Reset(sig)
+		// На Windows Signal вернёт ошибку: тогда сразу выходим с кодом.
+		if p, findErr := os.FindProcess(os.Getpid()); findErr == nil {
+			if p.Signal(sig) == nil {
+				// Доставка сигнала асинхронна; обычно процесс умирает здесь.
+				time.Sleep(200 * time.Millisecond)
+			}
+		}
+	}
+	os.Exit(exitCodeFromError(err))
 }
 
 // formatRunError форматирует ошибку выполнения команды для вывода в stderr.
@@ -913,6 +977,11 @@ func main() {
 		}
 		if err := runModules(os.Stdout, os.Stdin, source, cache, os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "modules: %v\n", err)
+			// Прерванный хук — futi гибнет тем же сигналом; код хука, git
+			// или curl наружу не пробрасывается: прочие ошибки дают 1.
+			if _, ok := interruptSignal(err); ok {
+				exitAfterRunError(err)
+			}
 			os.Exit(1)
 		}
 		return
@@ -1027,6 +1096,6 @@ func main() {
 	}
 	if err := modulerunner.Run(context.Background(), source, pa.namespace, pa.command, pa.params, pa.args, pa.argsList, nil, nil, cache); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", formatRunError(err))
-		os.Exit(exitCodeFromError(err))
+		exitAfterRunError(err)
 	}
 }

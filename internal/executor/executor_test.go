@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+
+	"futi/internal/testutil"
 )
 
 func TestRunWithConfigExecutesScriptWithArgs(t *testing.T) {
@@ -59,5 +62,36 @@ func TestConfigBuilders(t *testing.T) {
 func TestRunWithConfigRejectsNilContext(t *testing.T) {
 	if err := RunWithConfig(context.TODO(), &Config{}, "script.sh"); err == nil {
 		t.Fatal("expected an error for nil context")
+	}
+}
+
+func TestRunWithConfigInheritsStdin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cat недоступен на Windows")
+	}
+	testutil.ReplaceStdin(t, "hello")
+
+	var buf bytes.Buffer
+	if err := RunWithConfig(context.Background(), &Config{Stdout: &buf}, "cat"); err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if got := buf.String(); got != "hello" {
+		t.Fatalf("stdout = %q, want %q", got, "hello")
+	}
+}
+
+func TestRunWithConfigExplicitStdinWins(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cat недоступен на Windows")
+	}
+	testutil.ReplaceStdin(t, "hello")
+
+	var buf bytes.Buffer
+	cfg := &Config{Stdin: strings.NewReader("x"), Stdout: &buf}
+	if err := RunWithConfig(context.Background(), cfg, "cat"); err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if got := buf.String(); got != "x" {
+		t.Fatalf("stdout = %q, want %q", got, "x")
 	}
 }

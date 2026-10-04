@@ -5,10 +5,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"futi/internal/testutil"
 )
 
 func TestRunHookRunsInModuleRoot(t *testing.T) {
@@ -74,5 +77,22 @@ func TestRunHookPropagatesExitCode(t *testing.T) {
 	}
 	if exitErr.ExitCode() != 7 {
 		t.Fatalf("exit code: got %d, want 7", exitErr.ExitCode())
+	}
+}
+
+func TestRunHookInheritsStdin(t *testing.T) {
+	dir := t.TempDir()
+	testutil.ReplaceStdin(t, "data")
+
+	var out bytes.Buffer
+	if err := RunHook(context.Background(), `cat > "$FUTI_MODULE_ROOT/out"`, dir, "m", &out, &out); err != nil {
+		t.Fatalf("RunHook: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "data" {
+		t.Fatalf("out = %q, want %q", got, "data")
 	}
 }
