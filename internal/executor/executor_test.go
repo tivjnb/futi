@@ -180,7 +180,10 @@ func TestRunWithConfigDoesNotForwardSIGINT(t *testing.T) {
 	}
 	env, mark, ready := signalChildEnv(t)
 	// SIGINT шлём только тестовому процессу (не группе): ребёнок его не получает.
-	script := `trap 'echo int > "$MARK"' INT; echo ready > "$READY"; sleep 0.3; exit 0`
+	// Ребёнок живёт, пока тест не создаст SENT (сигнал отправлен); дедлайн ~10 с.
+	script := `trap 'echo int > "$MARK"' INT; echo ready > "$READY"; i=0; while [ ! -e "$SENT" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done; exit 0`
+	sent := filepath.Join(filepath.Dir(ready), "sent")
+	env = append(env, "SENT="+sent)
 
 	done := make(chan error, 1)
 	go func() {
@@ -188,6 +191,11 @@ func TestRunWithConfigDoesNotForwardSIGINT(t *testing.T) {
 	}()
 	waitForFile(t, ready)
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	// Даём рантайму доставить сигнал, затем отпускаем ребёнка.
+	time.Sleep(100 * time.Millisecond)
+	if err := os.WriteFile(sent, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	select {

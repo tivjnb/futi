@@ -68,8 +68,9 @@ func Run(ctx context.Context, scriptPath string, args ...string) error {
 // RunWithConfig executes a script at scriptPath with the provided arguments and execution settings.
 //
 // nil-поля cfg (и nil cfg) означают наследование os.Stdin/os.Stdout/os.Stderr.
-// Пока ребёнок работает, SIGINT и SIGQUIT перехватываются без действия (терминал
-// сам доставляет их всей foreground-группе, включая ребёнка), а SIGTERM и SIGHUP
+// Пока ребёнок работает, SIGINT (Ctrl+C) и SIGQUIT (Ctrl+\) перехватываются без
+// действия (терминал сам доставляет их всей foreground-группе, включая ребёнка),
+// а SIGTERM и SIGHUP
 // пересылаются ребёнку; результат ребёнка возвращается после его завершения.
 // Отмена ctx посылает ребёнку SIGTERM, через cancelWaitDelay — SIGKILL.
 // Ошибка ненулевого/сигнального завершения оборачивает *exec.ExitError.
@@ -113,6 +114,8 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 	// при старте futi (nohup, фоновая команда шелла), не перехватываем: Notify
 	// снял бы SIG_IGN, а при exec обработчик сброшен в SIG_DFL — ребёнок потерял
 	// бы игнорирование.
+	// Наследование игнорирования работает для SIGINT и SIGHUP; для SIGQUIT и
+	// SIGTERM рантайм Go ставит свой обработчик, и Ignored для них не срабатывает.
 	sigCh := make(chan os.Signal, 4)
 	var watched []os.Signal
 	for _, sig := range []os.Signal{syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP} {

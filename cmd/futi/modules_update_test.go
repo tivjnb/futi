@@ -183,3 +183,38 @@ func TestRunModulesUpdateInterruptedAttachInvalidatesCache(t *testing.T) {
 		t.Fatalf("кэш должен быть сброшен после прерванного attach, записей: %d", got)
 	}
 }
+
+// При прерывании attach ошибка печатается один раз (возвращённой ошибкой в
+// main), а не дублируется предупреждением и строкой цикла.
+func TestRunModulesUpdateInterruptPrintsErrorOnce(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "a", "")
+	cache := newTestCache()
+	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src, "--skip-attach"}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	os.WriteFile(filepath.Join(src, "config.yaml"),
+		[]byte("name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644)
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	origStderr := os.Stderr
+	os.Stderr = w
+	updErr := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, nil)
+	os.Stderr = origStderr
+	w.Close()
+	var captured bytes.Buffer
+	captured.ReadFrom(r)
+
+	if updErr == nil {
+		t.Fatal("ожидалась ошибка прерывания")
+	}
+	if n := strings.Count(captured.String(), "signal: interrupt"); n != 0 {
+		t.Fatalf("в stderr %d упоминаний сигнала, want 0 (ошибку печатает main):\n%s", n, captured.String())
+	}
+}

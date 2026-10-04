@@ -141,6 +141,9 @@ func runModulesUninstall(w io.Writer, stdin io.Reader, source discovery.Source, 
 	if metaErr == nil && !cfg.skipDetach {
 		if mod, err := execmodule.LoadModule(manifestPath, moduleRoot); err == nil && mod.Detach != "" {
 			if err := modulerunner.RunHook(context.Background(), mod.Detach, moduleRoot, cfg.name, os.Stdout, os.Stderr); err != nil {
+				if _, interrupted := interruptSignal(err); interrupted {
+					return fmt.Errorf("detach interrupted, nothing deleted: %w", err)
+				}
 				if cfg.strictDetach {
 					return fmt.Errorf("detach failed (strict), nothing deleted: %w", err)
 				}

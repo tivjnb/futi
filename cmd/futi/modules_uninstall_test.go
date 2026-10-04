@@ -244,3 +244,26 @@ func TestUninstall_SlashNameRejectedKeepsPackage(t *testing.T) {
 		t.Fatalf("пакет должен остаться цел: %v", statErr)
 	}
 }
+
+// Detach, убитый SIGINT (Ctrl+C), прерывает удаление: без --strict-detach
+// каталог модуля остаётся на месте.
+func TestRunModulesUninstallInterruptedDetachKeepsModule(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	moduleDir := filepath.Join(global, "qr")
+	os.MkdirAll(moduleDir, 0o755)
+	body := "name: qr\ndetach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo\n"
+	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644)
+	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
+
+	src := discovery.NewGlobalSource(global)
+	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), src, newTestCache(), []string{"qr", "--yes"})
+	if err == nil {
+		t.Fatal("ожидалась ошибка прерывания detach")
+	}
+	if _, statErr := os.Stat(moduleDir); statErr != nil {
+		t.Fatalf("модуль не должен удаляться при прерванном detach: %v", statErr)
+	}
+}

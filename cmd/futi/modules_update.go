@@ -78,10 +78,11 @@ func runModulesUpdate(w io.Writer, source discovery.Source, cache *modulecache.C
 	var failed []string
 	for _, e := range entries {
 		if err := updateOne(w, source, cache, e.Name, cfg.skipAttach); err != nil {
-			fmt.Fprintf(os.Stderr, "update %s: %v\n", e.Name, err)
+			// Прерывание печатает main возвращённой ошибкой — здесь не дублируем.
 			if _, interrupted := interruptSignal(err); interrupted {
 				return fmt.Errorf("update %s interrupted: %w", e.Name, err)
 			}
+			fmt.Fprintf(os.Stderr, "update %s: %v\n", e.Name, err)
 			failed = append(failed, e.Name)
 		}
 	}
@@ -187,9 +188,10 @@ func updateOne(w io.Writer, source discovery.Source, cache *modulecache.Cache, n
 	var interruptErr error
 	if mod.Attach != "" && !skipAttach {
 		if err := modulerunner.RunHook(context.Background(), mod.Attach, moduleRoot, name, os.Stdout, os.Stderr); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: attach failed; module may be partially initialized: %v\n", err)
 			if _, interrupted := interruptSignal(err); interrupted {
 				interruptErr = fmt.Errorf("attach interrupted: %w", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "Warning: attach failed; module may be partially initialized: %v\n", err)
 			}
 		}
 	}
