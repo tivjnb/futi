@@ -17,6 +17,7 @@ import (
 	"futi/internal/config"
 	"futi/internal/discovery"
 	"futi/internal/execmodule"
+	"futi/internal/executor"
 	"futi/internal/modulecache"
 )
 
@@ -1839,6 +1840,8 @@ func TestExitCodeFromErrorSignaled(t *testing.T) {
 	}{
 		{"direct", runErr, 143},
 		{"wrapped", fmt.Errorf("x: %w", runErr), 143},
+		// Ребёнок перехватил пересланный SIGQUIT и вышел с 0: код как при гибели от него.
+		{"InterruptedError QUIT", &executor.InterruptedError{Signal: syscall.SIGQUIT}, 131},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1869,6 +1872,9 @@ func TestInterruptSignal(t *testing.T) {
 		{"обычный код", exec.Command("sh", "-c", "exit 3").Run(), 0, false},
 		{"не ExitError", errors.New("boom"), 0, false},
 		{"nil", nil, 0, false},
+		{"InterruptedError TERM", &executor.InterruptedError{Signal: syscall.SIGTERM}, syscall.SIGTERM, true},
+		{"InterruptedError QUIT не прерывающий", &executor.InterruptedError{Signal: syscall.SIGQUIT}, 0, false},
+		{"InterruptedError HUP wrapped", fmt.Errorf("x: %w", &executor.InterruptedError{Signal: syscall.SIGHUP}), syscall.SIGHUP, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

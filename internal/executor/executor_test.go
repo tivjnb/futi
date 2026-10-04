@@ -142,6 +142,61 @@ func signalChildEnv(t *testing.T) (env []string, mark, ready string) {
 	return env, mark, ready
 }
 
+// setForegroundTTY задаёт ответ foregroundTTY до конца теста: go test,
+// запущенный из терминала, сам находится в foreground-группе.
+func setForegroundTTY(t *testing.T, foreground bool) {
+	t.Helper()
+	orig := foregroundTTY
+	foregroundTTY = func() bool { return foreground }
+	t.Cleanup(func() { foregroundTTY = orig })
+}
+
+// runUntilSignalled запускает script, ждёт READY, шлёт sig тестовому процессу
+// и возвращает ошибку RunWithConfig.
+func runUntilSignalled(t *testing.T, env []string, ready, script string, sig syscall.Signal) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		done <- RunWithConfig(context.Background(), &Config{Env: env}, "sh", "-c", script)
+	}()
+	waitForFile(t, ready)
+	if err := syscall.Kill(os.Getpid(), sig); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWithConfig не завершился")
+		return nil
+	}
+}
+
+// assertMark проверяет, что ребёнок записал want в MARK.
+func assertMark(t *testing.T, mark, want string) {
+	t.Helper()
+	data, err := os.ReadFile(mark)
+	if err != nil {
+		t.Fatalf("ребёнок не получил сигнал: %v", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != want {
+		t.Fatalf("mark = %q, want %q", got, want)
+	}
+}
+
+// assertInterrupted проверяет, что err — *InterruptedError с сигналом want
+// и без ошибки Wait (ребёнок вышел с 0).
+func assertInterrupted(t *testing.T, err error, want syscall.Signal) {
+	t.Helper()
+	var intErr *InterruptedError
+	if !errors.As(err, &intErr) {
+		t.Fatalf("err = %v, want *InterruptedError", err)
+	}
+	if intErr.Signal != want || intErr.Err != nil {
+		t.Fatalf("InterruptedError{Signal: %v, Err: %v}, want {Signal: %v, Err: nil}", intErr.Signal, intErr.Err, want)
+	}
+}
+
 func TestRunWithConfigForwardsSIGTERM(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("сигналы POSIX")
@@ -149,41 +204,56 @@ func TestRunWithConfigForwardsSIGTERM(t *testing.T) {
 	env, mark, ready := signalChildEnv(t)
 	script := `trap 'echo term > "$MARK"; exit 0' TERM; echo ready > "$READY"; while :; do sleep 0.05; done`
 
-	done := make(chan error, 1)
-	go func() {
-		done <- RunWithConfig(context.Background(), &Config{Env: env}, "sh", "-c", script)
-	}()
-	waitForFile(t, ready)
-	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
-		t.Fatal(err)
+	err := runUntilSignalled(t, env, ready, script, syscall.SIGTERM)
+	assertMark(t, mark, "term")
+	assertInterrupted(t, err, syscall.SIGTERM)
+}
+
+func TestRunWithConfigForwardsSIGHUP(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
 	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("RunWithConfig: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("RunWithConfig не завершился")
+	env, mark, ready := signalChildEnv(t)
+	script := `trap 'echo hup > "$MARK"; exit 0' HUP; echo ready > "$READY"; while :; do sleep 0.05; done`
+
+	err := runUntilSignalled(t, env, ready, script, syscall.SIGHUP)
+	assertMark(t, mark, "hup")
+	assertInterrupted(t, err, syscall.SIGHUP)
+}
+
+// Без терминала SIGINT, присланный futi (kill -INT, IDE, CI), адресный —
+// терминал его ребёнку не доставит, futi пересылает сам.
+func TestRunWithConfigForwardsSIGINTWithoutTTY(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
 	}
-	data, err := os.ReadFile(mark)
-	if err != nil {
-		t.Fatalf("ребёнок не получил SIGTERM: %v", err)
-	}
-	if got := strings.TrimSpace(string(data)); got != "term" {
-		t.Fatalf("mark = %q, want %q", got, "term")
-	}
+	setForegroundTTY(t, false)
+	env, mark, ready := signalChildEnv(t)
+	script := `trap 'echo int > "$MARK"; exit 0' INT; echo ready > "$READY"; while :; do sleep 0.05; done`
+
+	err := runUntilSignalled(t, env, ready, script, syscall.SIGINT)
+	assertMark(t, mark, "int")
+	assertInterrupted(t, err, syscall.SIGINT)
 }
 
 func TestRunWithConfigDoesNotForwardSIGINT(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("сигналы POSIX")
 	}
+	setForegroundTTY(t, true)
 	env, mark, ready := signalChildEnv(t)
-	// SIGINT шлём только тестовому процессу (не группе): ребёнок его не получает.
-	// Ребёнок живёт, пока тест не создаст SENT (сигнал отправлен); дедлайн ~10 с.
+	// SIGINT шлём только тестовому процессу (не группе): в foreground-режиме
+	// его доставляет терминал, futi не пересылает. Ребёнок живёт, пока тест
+	// не создаст SENT (сигнал получен процессом); дедлайн ~10 с.
 	script := `trap 'echo int > "$MARK"' INT; echo ready > "$READY"; i=0; while [ ! -e "$SENT" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done; exit 0`
 	sent := filepath.Join(filepath.Dir(ready), "sent")
 	env = append(env, "SENT="+sent)
+
+	// Своя подписка теста: SENT создаётся только после того, как рантайм
+	// доставил SIGINT подписчикам, а не после угаданной паузы.
+	gotInt := make(chan os.Signal, 1)
+	signal.Notify(gotInt, syscall.SIGINT)
+	t.Cleanup(func() { signal.Stop(gotInt) })
 
 	done := make(chan error, 1)
 	go func() {
@@ -193,15 +263,18 @@ func TestRunWithConfigDoesNotForwardSIGINT(t *testing.T) {
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
 		t.Fatal(err)
 	}
-	// Даём рантайму доставить сигнал, затем отпускаем ребёнка.
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-gotInt:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SIGINT не доставлен тестовому процессу")
+	}
 	if err := os.WriteFile(sent, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("RunWithConfig: %v", err)
+			t.Fatalf("RunWithConfig: %v, want nil", err)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("RunWithConfig не завершился")
@@ -237,6 +310,80 @@ func TestRunWithConfigCancelSendsSIGTERM(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(data)); got != "term" {
 		t.Fatalf("mark = %q, want %q", got, "term")
+	}
+}
+
+// Ребёнок, игнорирующий SIGTERM при отмене ctx, добивается SIGKILL через
+// cancelWaitDelay.
+func TestRunWithConfigCancelKillsChildIgnoringSIGTERM(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	origDelay := cancelWaitDelay
+	cancelWaitDelay = 200 * time.Millisecond
+	t.Cleanup(func() { cancelWaitDelay = origDelay })
+	env, _, ready := signalChildEnv(t)
+	script := `trap '' TERM; echo ready > "$READY"; while :; do sleep 0.05; done`
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- RunWithConfig(ctx, &Config{Env: env}, "sh", "-c", script)
+	}()
+	waitForFile(t, ready)
+	start := time.Now()
+	cancel()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWithConfig не завершился")
+	}
+	if elapsed := time.Since(start); elapsed >= 3*time.Second {
+		t.Fatalf("ребёнок убит через %v, want < 3s", elapsed)
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("err = %v, want *exec.ExitError", err)
+	}
+	ws, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
+		t.Fatalf("ребёнок завершён не SIGKILL: %v", err)
+	}
+}
+
+// Сигнал, пришедший между Wait и signal.Stop, остаётся в канале подписки и
+// должен распознаваться как прерывание, а не теряться.
+func TestRunWithConfigSignalAfterWaitNotLost(t *testing.T) {
+	forwardsAll := func(syscall.Signal) bool { return true }
+	forwardsNone := func(syscall.Signal) bool { return false }
+	cases := []struct {
+		name     string
+		queued   []os.Signal
+		forwards func(syscall.Signal) bool
+		want     syscall.Signal
+		wantHit  bool
+	}{
+		{"SIGTERM в канале", []os.Signal{syscall.SIGTERM}, forwardsAll, syscall.SIGTERM, true},
+		{"первый пересылаемый", []os.Signal{syscall.SIGINT, syscall.SIGHUP}, func(s syscall.Signal) bool { return s == syscall.SIGHUP }, syscall.SIGHUP, true},
+		{"непересылаемый", []os.Signal{syscall.SIGINT}, forwardsNone, 0, false},
+		{"пустой канал", nil, forwardsAll, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ch := make(chan os.Signal, 4)
+			for _, sig := range tc.queued {
+				ch <- sig
+			}
+			got, ok := drainSignals(ch, tc.forwards)
+			if ok != tc.wantHit || got != tc.want {
+				t.Fatalf("drainSignals(%v) = (%v, %v), want (%v, %v)", tc.queued, got, ok, tc.want, tc.wantHit)
+			}
+			if len(ch) != 0 {
+				t.Fatalf("в канале осталось %d сигналов, want 0", len(ch))
+			}
+		})
 	}
 }
 

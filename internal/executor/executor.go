@@ -12,8 +12,49 @@ import (
 )
 
 // cancelWaitDelay — сколько ждать завершения ребёнка после SIGTERM при отмене
-// контекста; затем Go посылает SIGKILL.
-const cancelWaitDelay = 5 * time.Second
+// контекста; затем Go посылает SIGKILL. Переменная — для тестов.
+var cancelWaitDelay = 5 * time.Second
+
+// foregroundTTY сообщает, находится ли futi в foreground-группе управляющего
+// терминала: тогда Ctrl+C и Ctrl+\ терминал доставляет всей группе, включая
+// ребёнка. Переменная — тесты задают состояние явно (go test, запущенный из
+// терминала, сам находится в foreground-группе).
+var foregroundTTY = isForegroundTTY
+
+// InterruptedError — futi во время работы команды получил прерывающий сигнал
+// и переслал его команде (либо сигнал пришёл сразу после её завершения).
+// Err — ошибка ожидания команды, nil при выходе с 0; *exec.ExitError из неё
+// достаётся через errors.As.
+type InterruptedError struct {
+	Signal syscall.Signal
+	Err    error
+}
+
+func (e *InterruptedError) Error() string {
+	msg := "interrupted by " + signalName(e.Signal)
+	if e.Err != nil {
+		msg += ": " + e.Err.Error()
+	}
+	return msg
+}
+
+func (e *InterruptedError) Unwrap() error { return e.Err }
+
+// signalName возвращает имя перехватываемого сигнала (SIGTERM), для прочих —
+// описание из syscall.
+func signalName(sig syscall.Signal) string {
+	switch sig {
+	case syscall.SIGINT:
+		return "SIGINT"
+	case syscall.SIGQUIT:
+		return "SIGQUIT"
+	case syscall.SIGTERM:
+		return "SIGTERM"
+	case syscall.SIGHUP:
+		return "SIGHUP"
+	}
+	return sig.String()
+}
 
 // Config controls how a script is executed.
 type Config struct {
@@ -68,12 +109,18 @@ func Run(ctx context.Context, scriptPath string, args ...string) error {
 // RunWithConfig executes a script at scriptPath with the provided arguments and execution settings.
 //
 // nil-поля cfg (и nil cfg) означают наследование os.Stdin/os.Stdout/os.Stderr.
-// Пока ребёнок работает, SIGINT (Ctrl+C) и SIGQUIT (Ctrl+\) перехватываются без
-// действия (терминал сам доставляет их всей foreground-группе, включая ребёнка),
-// а SIGTERM и SIGHUP
-// пересылаются ребёнку; результат ребёнка возвращается после его завершения.
-// Отмена ctx посылает ребёнку SIGTERM, через cancelWaitDelay — SIGKILL.
-// Ошибка ненулевого/сигнального завершения оборачивает *exec.ExitError.
+// Пока ребёнок работает, futi перехватывает SIGINT, SIGQUIT, SIGTERM и SIGHUP
+// (кроме проигнорированных при старте) и ждёт завершения ребёнка:
+//   - SIGTERM и SIGHUP пересылаются ребёнку;
+//   - SIGINT (Ctrl+C) и SIGQUIT (Ctrl+\) в foreground-группе терминала не
+//     пересылаются — терминал сам доставил их всей группе, включая ребёнка;
+//     без терминала (CI, фон, перенаправленный ввод/вывод) они адресные
+//     (kill -INT) и пересылаются. Терминал проверяется в момент сигнала.
+//
+// Если сигнал переслан (или пришёл между завершением ребёнка и снятием
+// подписки), возвращается ошибка с *InterruptedError, даже если ребёнок
+// вышел с 0. Отмена ctx посылает ребёнку SIGTERM, через cancelWaitDelay —
+// SIGKILL. Ошибка ненулевого/сигнального завершения оборачивает *exec.ExitError.
 func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...string) error {
 	if ctx == nil {
 		return fmt.Errorf("executor: context is required")
@@ -132,16 +179,25 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 		return fmt.Errorf("executor: run %q: %w", executable, err)
 	}
 
+	// signalChild — единственное место доставки пересылаемого сигнала.
+	signalChild := func(sig syscall.Signal) { _ = command.Process.Signal(sig) }
+	// interruptedBy — первый пересланный сигнал; 0 — пересылки не было.
+	// Пишет только горутина пересылки; читается после forwardDone.
+	var interruptedBy syscall.Signal
 	stopForward := make(chan struct{})
 	forwardDone := make(chan struct{})
 	go func() {
 		defer close(forwardDone)
 		for {
 			select {
-			case sig := <-sigCh:
-				// SIGINT/SIGQUIT терминал доставил ребёнку сам — не дублируем.
-				if sig == syscall.SIGTERM || sig == syscall.SIGHUP {
-					_ = command.Process.Signal(sig)
+			case s := <-sigCh:
+				sig, ok := s.(syscall.Signal)
+				if !ok || !forwardsSignal(sig) {
+					continue
+				}
+				signalChild(sig)
+				if interruptedBy == 0 {
+					interruptedBy = sig
 				}
 			case <-stopForward:
 				return
@@ -152,9 +208,50 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 	waitErr := command.Wait()
 	close(stopForward)
 	<-forwardDone
+	// Сигнал, пришедший между Wait и снятием подписки, ребёнку уже не нужен,
+	// но прерывание futi терять нельзя.
+	signal.Stop(sigCh)
+	if sig, ok := drainSignals(sigCh, forwardsSignal); ok && interruptedBy == 0 {
+		interruptedBy = sig
+	}
 
-	if waitErr != nil {
-		return fmt.Errorf("executor: run %q: %w", executable, waitErr)
+	runErr := waitErr
+	if interruptedBy != 0 {
+		runErr = &InterruptedError{Signal: interruptedBy, Err: waitErr}
+	}
+	if runErr != nil {
+		return fmt.Errorf("executor: run %q: %w", executable, runErr)
 	}
 	return nil
+}
+
+// forwardsSignal решает, пересылать ли ребёнку сигнал, полученный futi.
+// SIGTERM и SIGHUP терминал ребёнку не доставляет — пересылаются всегда.
+// SIGINT и SIGQUIT в foreground-группе терминала ребёнок уже получил сам;
+// без терминала они адресные — пересылаются. Терминал проверяется в момент
+// сигнала: futi могли перевести в фон или на передний план (bg/fg).
+func forwardsSignal(sig syscall.Signal) bool {
+	switch sig {
+	case syscall.SIGTERM, syscall.SIGHUP:
+		return true
+	case syscall.SIGINT, syscall.SIGQUIT:
+		return !foregroundTTY()
+	}
+	return false
+}
+
+// drainSignals неблокирующе вычитывает ch до конца и возвращает первый
+// сигнал, для которого forwards истинна.
+func drainSignals(ch <-chan os.Signal, forwards func(syscall.Signal) bool) (syscall.Signal, bool) {
+	var found syscall.Signal
+	for {
+		select {
+		case s := <-ch:
+			if sig, ok := s.(syscall.Signal); ok && found == 0 && forwards(sig) {
+				found = sig
+			}
+		default:
+			return found, found != 0
+		}
+	}
 }

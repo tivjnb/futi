@@ -18,6 +18,7 @@ import (
 	"futi/internal/config"
 	"futi/internal/discovery"
 	"futi/internal/execmodule"
+	"futi/internal/executor"
 	"futi/internal/modulecache"
 	"futi/internal/modulerunner"
 
@@ -826,40 +827,59 @@ ENVIRONMENT
 }
 
 // exitCodeFromError извлекает код завершения из ошибки.
-// Если ошибка содержит *exec.ExitError: при гибели процесса от сигнала N —
-// 128+N (как в shell), иначе её ExitCode().
-// Иначе — 1 (стандартный код ошибки для futi).
+// При гибели процесса от сигнала N (*exec.ExitError) — 128+N (как в shell);
+// иначе, если команда прервана сигналом N, полученным futi
+// (*executor.InterruptedError), — тоже 128+N; иначе ExitCode() из
+// *exec.ExitError. Остальное — 1 (стандартный код ошибки для futi).
 func exitCodeFromError(err error) int {
 	if err == nil {
 		return 0
 	}
 	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	hasExitErr := errors.As(err, &exitErr)
+	if hasExitErr {
 		if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
 			return 128 + int(ws.Signal())
 		}
+	}
+	var intErr *executor.InterruptedError
+	if errors.As(err, &intErr) {
+		return 128 + int(intErr.Signal)
+	}
+	if hasExitErr {
 		return exitErr.ExitCode()
 	}
 	return 1
 }
 
-// interruptSignal возвращает сигнал (SIGINT, SIGTERM или SIGHUP), которым убит
-// дочерний процесс из err. Для остальных сигналов (SIGQUIT, SIGSEGV и т.п.) и
-// ошибок без *exec.ExitError — false.
+// interruptSignal возвращает прерывающий сигнал (SIGINT, SIGTERM или SIGHUP)
+// из err: полученный futi и пересланный команде (*executor.InterruptedError —
+// даже если команда его перехватила и вышла обычным кодом) или тот, которым
+// убит дочерний процесс (*exec.ExitError). Для остальных сигналов (SIGQUIT,
+// SIGSEGV и т.п.) и прочих ошибок — false.
 func interruptSignal(err error) (syscall.Signal, bool) {
+	var intErr *executor.InterruptedError
+	if errors.As(err, &intErr) && isInterruptSignal(intErr.Signal) {
+		return intErr.Signal, true
+	}
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
 		return 0, false
 	}
 	ws, ok := exitErr.Sys().(syscall.WaitStatus)
-	if !ok || !ws.Signaled() {
+	if !ok || !ws.Signaled() || !isInterruptSignal(ws.Signal()) {
 		return 0, false
 	}
-	switch sig := ws.Signal(); sig {
+	return ws.Signal(), true
+}
+
+// isInterruptSignal — сигнал, прерывающий futi и циклы шелла.
+func isInterruptSignal(sig syscall.Signal) bool {
+	switch sig {
 	case syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP:
-		return sig, true
+		return true
 	}
-	return 0, false
+	return false
 }
 
 // exitAfterRunError завершает процесс после ошибки запуска команды. Если
