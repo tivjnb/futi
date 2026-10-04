@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 
@@ -20,6 +21,43 @@ import (
 	"futi/internal/executor"
 	"futi/internal/modulecache"
 )
+
+var (
+	futiBinOnce sync.Once
+	futiBinDir  string // каталог с собранным бинарём futi; удаляется в TestMain
+	futiBinErr  error
+)
+
+// TestMain удаляет каталог общего бинаря futi, собранного builtFutiBinary.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if futiBinDir != "" {
+		os.RemoveAll(futiBinDir)
+	}
+	os.Exit(code)
+}
+
+// builtFutiBinary собирает futi один раз на запуск тестов и возвращает путь
+// к бинарю (файл с именем futi в каталоге futiBinDir). Ошибка сборки — Fatal
+// в каждом вызывающем тесте.
+func builtFutiBinary(t testing.TB) string {
+	t.Helper()
+	futiBinOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "futi-test-bin-")
+		if err != nil {
+			futiBinErr = err
+			return
+		}
+		futiBinDir = dir
+		if out, err := exec.Command("go", "build", "-o", filepath.Join(dir, "futi"), ".").CombinedOutput(); err != nil {
+			futiBinErr = fmt.Errorf("go build: %v\n%s", err, out)
+		}
+	})
+	if futiBinErr != nil {
+		t.Fatal(futiBinErr)
+	}
+	return filepath.Join(futiBinDir, "futi")
+}
 
 // stubLoader — тестовый загрузчик модулей, который возвращает
 // предзаготовленный модуль для любого пути и считает вызовы.
@@ -1897,10 +1935,7 @@ func TestFutiDiesFromSignalWhenChildInterrupted(t *testing.T) {
 		t.Skip("сигналы POSIX")
 	}
 	tmp := t.TempDir()
-	bin := filepath.Join(tmp, "futi")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
-	}
+	bin := builtFutiBinary(t)
 	mods := filepath.Join(tmp, "mods", "m")
 	if err := os.MkdirAll(mods, 0o755); err != nil {
 		t.Fatal(err)

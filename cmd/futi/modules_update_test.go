@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -273,10 +274,7 @@ func TestFutiUpdateInterruptPrintsErrorOnce(t *testing.T) {
 		t.Skip("сигналы POSIX")
 	}
 	tmp := t.TempDir()
-	bin := filepath.Join(tmp, "futi")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
-	}
+	bin := builtFutiBinary(t)
 	mods := filepath.Join(tmp, "mods")
 	src := makeSourceModule(t, t.TempDir(), "a", "")
 	env := append(os.Environ(),
@@ -287,6 +285,7 @@ func TestFutiUpdateInterruptPrintsErrorOnce(t *testing.T) {
 		cmd.Dir = tmp
 		cmd.Env = env
 		var stderr bytes.Buffer
+		cmd.Stdout = io.Discard
 		cmd.Stderr = &stderr
 		err := cmd.Run()
 		return stderr.Bytes(), err

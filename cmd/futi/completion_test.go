@@ -271,14 +271,7 @@ func TestCompletionFishRealShell(t *testing.T) {
 		t.Skip("fish не установлен")
 	}
 	tmp := t.TempDir()
-	binDir := filepath.Join(tmp, "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	build := exec.Command("go", "build", "-o", filepath.Join(binDir, "futi"), ".")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
-	}
+	binDir := filepath.Dir(builtFutiBinary(t))
 	modules := filepath.Join(tmp, "modules")
 	writeFile(t, filepath.Join(modules, "docker.yaml"), "name: docker\ndescription: Docker management\ncommands:\n  build:\n    description: Build\n    cmd: echo build\n")
 
