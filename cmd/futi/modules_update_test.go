@@ -153,3 +153,33 @@ func TestRunModulesUpdateAllStopsOnInterrupt(t *testing.T) {
 		t.Fatal("модуль b не должен обновляться после прерывания a")
 	}
 }
+
+// Дерево модуля уже заменено, когда attach прерван сигналом, — кэш обязан
+// быть сброшен (иначе list/help покажут старое описание).
+func TestRunModulesUpdateInterruptedAttachInvalidatesCache(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	cache := newTestCache()
+	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src, "--skip-attach"}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	os.WriteFile(filepath.Join(src, "config.yaml"),
+		[]byte("name: qr\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n"), 0o644)
+
+	// Посторонняя запись в кэше — update должен её сбросить.
+	stranger := makeSourceModule(t, t.TempDir(), "stranger", "")
+	if _, err := cache.LoadModule(filepath.Join(stranger, "config.yaml"), stranger); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, []string{"qr"})
+	if err == nil {
+		t.Fatal("ожидалась ошибка прерывания")
+	}
+	if got := cache.ModuleCount(); got != 0 {
+		t.Fatalf("кэш должен быть сброшен после прерванного attach, записей: %d", got)
+	}
+}

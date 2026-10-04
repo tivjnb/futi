@@ -183,17 +183,22 @@ func updateOne(w io.Writer, source discovery.Source, cache *modulecache.Cache, n
 	}
 
 	// attach: провал → warn, НЕ rollback (§3.1, §5.3 шаг 7).
+	// Прерывание сигналом возвращаем после Invalidate: дерево уже заменено.
+	var interruptErr error
 	if mod.Attach != "" && !skipAttach {
 		if err := modulerunner.RunHook(context.Background(), mod.Attach, moduleRoot, name, os.Stdout, os.Stderr); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: attach failed; module may be partially initialized: %v\n", err)
 			if _, interrupted := interruptSignal(err); interrupted {
-				return fmt.Errorf("attach interrupted: %w", err)
+				interruptErr = fmt.Errorf("attach interrupted: %w", err)
 			}
 		}
 	}
 
 	if err := cache.Invalidate(); err != nil {
 		fmt.Fprintf(os.Stderr, "cache: %v (continuing)\n", err)
+	}
+	if interruptErr != nil {
+		return interruptErr
 	}
 
 	fmt.Fprintf(w, "%s: updated\n", name)
