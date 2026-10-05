@@ -1637,8 +1637,9 @@ func TestCacheFileOfPreviousVersionDoesNotBypassValidate(t *testing.T) {
 // манифеста совпадают: Module в нём мог быть разобран и проверен старой версией.
 func TestStartStaleBinaryReloadsModuleFromDisk(t *testing.T) {
 	policies := map[string]RefreshPolicy{
-		"every_time": AlwaysPolicy{},
-		"force_only": ForceOnlyPolicy{},
+		"every_time":  AlwaysPolicy{},
+		"force_only":  ForceOnlyPolicy{},
+		"every_t_min": EveryTMinPolicy{T: 30 * time.Minute},
 	}
 	for name, policy := range policies {
 		t.Run(name, func(t *testing.T) {

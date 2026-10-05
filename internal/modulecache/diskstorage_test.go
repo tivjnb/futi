@@ -268,7 +268,9 @@ func TestDiskStorageLegacyFileWithoutBinaryID(t *testing.T) {
 	if err := gob.NewEncoder(f).Encode(legacy); err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 
 	cf, err := newDiskStorageWithID(path, "a").Load()
 	if err != nil {
