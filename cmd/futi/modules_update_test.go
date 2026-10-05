@@ -312,3 +312,45 @@ func TestFutiModulesOrdinaryErrorExitsWithOne(t *testing.T) {
 		t.Fatalf("код выхода = %d, want 1", code)
 	}
 }
+
+func TestRunModulesUpdateAllUpdatesEachDir(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	project := t.TempDir()
+	t.Chdir(project)
+
+	srcGlobal := makeSourceModule(t, t.TempDir(), "tool", "")
+	srcLocal := makeSourceModule(t, t.TempDir(), "tool", "")
+	cache := newTestCache()
+	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{srcGlobal}); err != nil {
+		t.Fatalf("install global: %v", err)
+	}
+	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{srcLocal, "--local"}); err != nil {
+		t.Fatalf("install local: %v", err)
+	}
+
+	writeFile(t, filepath.Join(srcGlobal, "config.yaml"), "name: tool\ncommands:\n  run:\n    cmd: echo global-v2\n")
+	writeFile(t, filepath.Join(srcLocal, "config.yaml"), "name: tool\ncommands:\n  run:\n    cmd: echo local-v2\n")
+
+	var b bytes.Buffer
+	if err := runModulesUpdate(&b, discovery.NewGlobalSource(global), cache, nil); err != nil {
+		t.Fatalf("runModulesUpdate: %v", err)
+	}
+
+	for dir, want := range map[string]string{
+		filepath.Join(global, "tool"):           "echo global-v2",
+		filepath.Join(project, ".futi", "tool"): "echo local-v2",
+	} {
+		data, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), want) {
+			t.Errorf("%s: want %q, got:\n%s", dir, want, data)
+		}
+	}
+	// Одноимённые модули различаются в выводе путём каталога.
+	if !strings.Contains(b.String(), "tool ("+filepath.Join(global, "tool")+"): updated") {
+		t.Errorf("output must name global dir: %s", b.String())
+	}
+}

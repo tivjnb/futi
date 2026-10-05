@@ -75,15 +75,27 @@ func runModulesUpdate(w io.Writer, source discovery.Source, cache *modulecache.C
 		return nil
 	}
 
+	// Одноимённые модули из разных корней различаем в выводе путём каталога.
+	counts := make(map[string]int)
+	for _, e := range entries {
+		counts[e.Name]++
+	}
+
 	var failed []string
 	for _, e := range entries {
-		if err := updateOne(w, source, cache, e.Name, cfg.skipAttach); err != nil {
+		label := e.Name
+		if counts[e.Name] > 1 {
+			label = fmt.Sprintf("%s (%s)", e.Name, e.Dir)
+		}
+		// Обновляем именно найденный каталог, а не то, что отдаст Resolve по имени.
+		manifestPath := filepath.Join(e.Dir, "config.yaml")
+		if err := updateAt(w, cache, e.Name, label, e.Dir, manifestPath, cfg.skipAttach); err != nil {
 			// Прерывание печатает main возвращённой ошибкой — здесь не дублируем.
 			if _, interrupted := interruptSignal(err); interrupted {
-				return fmt.Errorf("update %s interrupted: %w", e.Name, err)
+				return fmt.Errorf("update %s interrupted: %w", label, err)
 			}
-			fmt.Fprintf(os.Stderr, "update %s: %v\n", e.Name, err)
-			failed = append(failed, e.Name)
+			fmt.Fprintf(os.Stderr, "update %s: %v\n", label, err)
+			failed = append(failed, label)
 		}
 	}
 	if len(failed) > 0 {
@@ -98,6 +110,12 @@ func updateOne(w io.Writer, source discovery.Source, cache *modulecache.Cache, n
 	if err != nil {
 		return fmt.Errorf("resolve: %w", err)
 	}
+	return updateAt(w, cache, name, name, moduleRoot, manifestPath, skipAttach)
+}
+
+// updateAt обновляет модуль в конкретном каталоге moduleRoot. name — имя для
+// хука attach, label — подпись в сообщениях (имя или имя с путём).
+func updateAt(w io.Writer, cache *modulecache.Cache, name, label, moduleRoot, manifestPath string, skipAttach bool) error {
 	if filepath.Base(manifestPath) != "config.yaml" {
 		return fmt.Errorf("not a package module (updates require config.yaml packages)")
 	}
@@ -147,7 +165,7 @@ func updateOne(w io.Writer, source discovery.Source, cache *modulecache.Cache, n
 		if err := metayaml.Write(metaPath, meta); err != nil {
 			return err
 		}
-		fmt.Fprintf(w, "%s: up to date\n", name)
+		fmt.Fprintf(w, "%s: up to date\n", label)
 		return nil
 	}
 
@@ -203,6 +221,6 @@ func updateOne(w io.Writer, source discovery.Source, cache *modulecache.Cache, n
 		return interruptErr
 	}
 
-	fmt.Fprintf(w, "%s: updated\n", name)
+	fmt.Fprintf(w, "%s: updated\n", label)
 	return nil
 }
