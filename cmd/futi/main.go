@@ -102,11 +102,11 @@ func parseArgs(args []string) (*parsedArgs, error) {
 	case "list":
 		return nil, parseListRequest(path[:len(path)-1], flags)
 	case "validate":
-		if len(path) < 2 {
-			return nil, errors.New("usage: futi <namespace...> validate")
-		}
 		if hasHelpFlag(flags) {
 			return nil, errHelp
+		}
+		if len(path) < 2 {
+			return nil, errors.New("usage: futi <namespace...> validate")
 		}
 		if len(flags) > 0 {
 			return nil, fmt.Errorf("validate: unknown flag %q", flags[0])
@@ -137,6 +137,17 @@ func parseArgs(args []string) (*parsedArgs, error) {
 // isFlagToken: токен — флаг, если начинается с "-" и длиннее одного символа.
 func isFlagToken(tok string) bool {
 	return len(tok) > 1 && tok[0] == '-'
+}
+
+// hasBareWord: среди сырых флагов есть слово без "-" (признак слова пути
+// после флага, например `futi k8s --follow logs`).
+func hasBareWord(flags []string) bool {
+	for _, f := range flags {
+		if !isFlagToken(f) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasHelpFlag(flags []string) bool {
@@ -1112,7 +1123,11 @@ func main() {
 			exitAfterHelp(source, cache, helpPath)
 			return
 		}
-		fmt.Fprintf(os.Stderr, "%s\n", formatRunError(err))
+		msg := formatRunError(err)
+		if hasBareWord(pa.flags) {
+			msg += " (the command path goes before flags)"
+		}
+		fmt.Fprintf(os.Stderr, "%s\n", msg)
 		exitAfterRunError(err)
 	}
 	params, help, err := bindFlags(cmd, pa.flags)

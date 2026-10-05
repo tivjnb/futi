@@ -9,16 +9,23 @@ import (
 
 // bindFlags привязывает сырые флаги (всё между путём и `--`) к параметрам
 // команды по её схеме. Слева направо:
-//   - --name=val — значение любого типа (неизвестные имена отвергает cmd.Validate);
-//   - -h / --help — help=true сразу (до разбора остальных флагов);
+//   - -h / --help вне позиции значения — help=true (выигрывает и у более
+//     ранних ошибок привязки: сканирование после ошибки продолжается);
+//   - --name=val — значение любого типа; имя должно быть в схеме;
 //   - --name без "=": bool — "true", следующий токен не трогается; string/int —
 //     следующий токен является значением, если он не начинается с "--"
 //     (так "-h", "-5", "-v" и слова — значения); иначе ошибка;
 //   - прочий токен с одним "-" и слово, не съеденное как значение, — ошибка.
 //
-// Повтор флага — последний выигрывает.
+// Без help возвращается первая ошибка. Повтор флага — последний выигрывает.
 func bindFlags(cmd *execmodule.Command, flags []string) (params map[string]string, help bool, err error) {
 	params = make(map[string]string)
+	var firstErr error
+	fail := func(e error) {
+		if firstErr == nil {
+			firstErr = e
+		}
+	}
 	for i := 0; i < len(flags); i++ {
 		tok := flags[i]
 
@@ -30,7 +37,12 @@ func bindFlags(cmd *execmodule.Command, flags []string) (params map[string]strin
 			name := strings.TrimPrefix(tok, "--")
 			if idx := strings.Index(name, "="); idx >= 0 {
 				if idx == 0 {
-					return nil, false, fmt.Errorf("invalid flag %q", tok)
+					fail(fmt.Errorf("invalid flag %q", tok))
+					continue
+				}
+				if findParam(cmd, name[:idx]) == nil {
+					fail(fmt.Errorf("unknown param %q", name[:idx]))
+					continue
 				}
 				params[name[:idx]] = name[idx+1:]
 				continue
@@ -38,7 +50,8 @@ func bindFlags(cmd *execmodule.Command, flags []string) (params map[string]strin
 
 			p := findParam(cmd, name)
 			if p == nil {
-				return nil, false, fmt.Errorf("unknown param %q", name)
+				fail(fmt.Errorf("unknown param %q", name))
+				continue
 			}
 			if p.Type == "bool" {
 				params[name] = "true"
@@ -49,14 +62,19 @@ func bindFlags(cmd *execmodule.Command, flags []string) (params map[string]strin
 				i++
 				continue
 			}
-			return nil, false, fmt.Errorf("flag --%s requires a value (use --%s=<value>)", name, name)
+			fail(fmt.Errorf("flag --%s requires a value (use --%s=<value>)", name, name))
+			continue
 		}
 
 		if strings.HasPrefix(tok, "-") && len(tok) > 1 {
-			return nil, false, fmt.Errorf("unknown flag %q: params are passed as --name value", tok)
+			fail(fmt.Errorf("unknown flag %q: params are passed as --name value", tok))
+			continue
 		}
 
-		return nil, false, fmt.Errorf("unexpected argument %q: the command path goes before flags, positional args after --", tok)
+		fail(fmt.Errorf("unexpected argument %q: the command path goes before flags, positional args after --", tok))
+	}
+	if firstErr != nil {
+		return nil, false, firstErr
 	}
 	return params, false, nil
 }

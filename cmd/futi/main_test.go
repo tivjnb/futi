@@ -2104,8 +2104,9 @@ func TestFutiBoolFlagDoesNotEatWord(t *testing.T) {
 	}
 	// Флаг до команды: "logs" больше не значение флага и не команда — путь [m].
 	out, errOut, code = runFutiBin(t, strictOrderManifest, "m", "--follow", "logs")
-	if code != 1 || out != "" {
-		t.Fatalf("code=%d out=%q stderr=%q, want failure without output", code, out, errOut)
+	if code != 1 || out != "" || !strings.Contains(errOut, `module "m" has no default command`) ||
+		!strings.Contains(errOut, "the command path goes before flags") {
+		t.Fatalf("code=%d out=%q stderr=%q, want no-default-command error with path hint", code, out, errOut)
 	}
 }
 
@@ -2155,5 +2156,33 @@ func TestFutiUnknownParamStillRejectedByValidate(t *testing.T) {
 	_, errOut, code := runFutiBin(t, strictOrderManifest, "m", "logs", "--zzz=1")
 	if code != 1 || !strings.Contains(errOut, `unknown param "zzz"`) {
 		t.Fatalf("code=%d stderr=%q, want 1 and unknown param", code, errOut)
+	}
+}
+
+func TestParseArgsValidateHelpWithoutNamespace(t *testing.T) {
+	for _, flag := range []string{"-h", "--help"} {
+		if _, err := parseArgs([]string{"validate", flag}); !errors.Is(err, errHelp) {
+			t.Fatalf("validate %s err = %v, want errHelp", flag, err)
+		}
+	}
+}
+
+// --zzz и --zzz=1 дают одну и ту же строку ошибки.
+func TestFutiUnknownParamSameMessageBothForms(t *testing.T) {
+	_, bare, code1 := runFutiBin(t, strictOrderManifest, "m", "logs", "--zzz")
+	_, eq, code2 := runFutiBin(t, strictOrderManifest, "m", "logs", "--zzz=1")
+	if code1 != 1 || code2 != 1 {
+		t.Fatalf("codes = %d, %d, want 1, 1", code1, code2)
+	}
+	if bare != eq || bare != "unknown param \"zzz\"\n" {
+		t.Fatalf("stderr bare=%q eq=%q, want both %q", bare, eq, "unknown param \"zzz\"\n")
+	}
+}
+
+func TestFutiValidateHelpFlag(t *testing.T) {
+	out, errOut, code := runFutiBin(t, strictOrderManifest, "validate", "-h")
+	// Общий usage печатается в stderr (как у `futi -h`).
+	if code != 0 || out != "" || !strings.Contains(errOut, "USAGE") {
+		t.Fatalf("code=%d out=%q stderr=%.80q, want 0 and usage in stderr", code, out, errOut)
 	}
 }
