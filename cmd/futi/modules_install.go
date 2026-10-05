@@ -161,6 +161,9 @@ func runModulesInstall(w io.Writer, cache *modulecache.Cache, args []string) err
 		return fmt.Errorf("modules install: %w", err)
 	}
 	if err := validateSegmentsNoDot(name); err != nil {
+		if mod.Name == "" {
+			return fmt.Errorf("modules install: %w; задайте name: в config.yaml источника", err)
+		}
 		return fmt.Errorf("modules install: %w", err)
 	}
 

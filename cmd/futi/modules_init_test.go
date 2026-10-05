@@ -619,3 +619,20 @@ func TestRunInitNestedPathStillWorks(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// F59: init x.yaml при существующем x/config.yaml — тот же конфликт.
+func TestRunInitYamlSuffixConflictsWithConfigDir(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.MkdirAll(".futi/x", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(".futi/x/config.yaml", []byte("commands:\n  a:\n    cmd: echo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runModulesInit(&bytes.Buffer{}, []string{"x.yaml"}); err == nil {
+		t.Fatal("expected error")
+	}
+	if _, err := os.Stat(".futi/x.yaml"); err == nil {
+		t.Fatal(".futi/x.yaml must not be created")
+	}
+}

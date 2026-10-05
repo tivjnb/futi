@@ -297,3 +297,22 @@ func TestRunModulesInstallConflictsWithYaml(t *testing.T) {
 		t.Fatal("root/x must not be created")
 	}
 }
+
+// F56: имя из fallbackName с точкой (foo-1.2) отвергается с подсказкой про name:.
+func TestRunModulesInstallDottedFallbackNameHint(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	dir := filepath.Join(t.TempDir(), "foo-1.2")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("commands:\n  run:\n    cmd: echo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{dir})
+	if err == nil || !strings.Contains(err.Error(), "name:") {
+		t.Fatalf("expected error with name: hint, got %v", err)
+	}
+}
