@@ -574,3 +574,48 @@ func TestRunInitReservedNames(t *testing.T) {
 		}
 	}
 }
+
+// F56: точка в сегменте пути — разделитель namespace, файл не резолвился бы.
+func TestRunInitDottedNameRejected(t *testing.T) {
+	for _, arg := range []string{"my.tool", "dev/my.tool", "my.tool.yaml", "a.b/tool"} {
+		t.Run(arg, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			err := runModulesInit(&bytes.Buffer{}, []string{arg})
+			if err == nil || !strings.Contains(err.Error(), "invalid module name") {
+				t.Fatalf("init %q: expected invalid module name error, got %v", arg, err)
+			}
+			if _, statErr := os.Stat(".futi"); statErr == nil {
+				t.Fatal(".futi must not be created")
+			}
+		})
+	}
+}
+
+// F59: x.yaml рядом с x/config.yaml — конфликт discovery.
+func TestRunInitConflictsWithConfigDir(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.MkdirAll(".futi/x", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(".futi/x/config.yaml", []byte("commands:\n  a:\n    cmd: echo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := runModulesInit(&bytes.Buffer{}, []string{"x"})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected already-exists error, got %v", err)
+	}
+	if _, err := os.Stat(".futi/x.yaml"); err == nil {
+		t.Fatal(".futi/x.yaml must not be created")
+	}
+}
+
+// Контроль: допустимые формы пути работают как раньше.
+func TestRunInitNestedPathStillWorks(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := runModulesInit(&bytes.Buffer{}, []string{"dev/tool"}); err != nil {
+		t.Fatalf("init dev/tool: %v", err)
+	}
+	if _, err := os.Stat(".futi/dev/tool.yaml"); err != nil {
+		t.Fatal(err)
+	}
+}

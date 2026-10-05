@@ -103,12 +103,14 @@ func detectSourceType(src string, fromLocal, fromGit, fromArchive bool) (sourceK
 }
 
 // fallbackName — имя модуля, если в config.yaml нет name: basename
-// источника без хвостового "/", суффикса ".git" и расширения архива.
+// источника без хвостового "/", суффикса ".git", расширения архива и
+// расширения одиночного манифеста (.yaml/.yml).
 func fallbackName(src string) string {
 	base := strings.TrimSuffix(strings.TrimSuffix(src, "/"), ".git")
 	if ext := archiveExt(base); ext != "" {
 		base = strings.TrimSuffix(base, ext)
 	}
+	base = strings.TrimSuffix(strings.TrimSuffix(base, ".yaml"), ".yml")
 	return filepath.Base(base)
 }
 

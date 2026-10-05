@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"futi/internal/discovery"
 	"futi/internal/metayaml"
 	"futi/internal/modulecache"
 )
@@ -237,5 +238,62 @@ func TestRunModulesInstallLocalFlagHookAbsRoot(t *testing.T) {
 	want := dest + " " + dest
 	if got := strings.TrimSpace(string(data)); got != want {
 		t.Fatalf("hook roots: got %q, want %q", got, want)
+	}
+}
+
+// F56: одиночный q.yaml без name: получает имя q (а не q.yaml).
+func TestRunModulesInstallYamlSourceName(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	yamlPath := filepath.Join(t.TempDir(), "q.yaml")
+	if err := os.WriteFile(yamlPath, []byte("commands:\n  hi:\n    cmd: echo hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{yamlPath}); err != nil {
+		t.Fatalf("runModulesInstall: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(global, "q", "config.yaml")); err != nil {
+		t.Fatalf("expected root/q/config.yaml: %v", err)
+	}
+	if _, _, err := discovery.NewGlobalSource(global).Resolve("q"); err != nil {
+		t.Fatalf("Resolve(q): %v", err)
+	}
+}
+
+// F56: точка в имени модуля — разделитель namespace, такой модуль не резолвится.
+func TestRunModulesInstallDottedNameRejected(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "my.tool", "")
+	err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src})
+	if err == nil || !strings.Contains(err.Error(), "invalid module name") {
+		t.Fatalf("expected invalid module name error, got %v", err)
+	}
+	entries, _ := os.ReadDir(global)
+	if len(entries) != 0 {
+		t.Fatalf("root must stay empty, got %v", entries)
+	}
+}
+
+// F59: установка рядом с одноимённым x.yaml создала бы конфликт discovery.
+func TestRunModulesInstallConflictsWithYaml(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	if err := os.WriteFile(filepath.Join(global, "x.yaml"), []byte("commands:\n  a:\n    cmd: echo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := makeSourceModule(t, t.TempDir(), "x", "")
+	err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected already-exists error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(global, "x")); err == nil {
+		t.Fatal("root/x must not be created")
 	}
 }

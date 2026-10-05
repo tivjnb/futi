@@ -160,6 +160,9 @@ func runModulesInstall(w io.Writer, cache *modulecache.Cache, args []string) err
 	if err := validateModuleName(name); err != nil {
 		return fmt.Errorf("modules install: %w", err)
 	}
+	if err := validateSegmentsNoDot(name); err != nil {
+		return fmt.Errorf("modules install: %w", err)
+	}
 
 	// Namespace в dot-форме ("images.lib") переводим в path-форму —
 	// discovery резолвит "images.lib.qr" в images/lib/qr/.
@@ -167,6 +170,10 @@ func runModulesInstall(w io.Writer, cache *modulecache.Cache, args []string) err
 	dest := filepath.Join(root, nsPath, name)
 	if _, err := os.Stat(dest); err == nil {
 		return fmt.Errorf("module already exists at %s; use `futi modules update`", dest)
+	}
+	// discovery видит и x.yaml, и x/config.yaml: оба сразу дали бы конфликт.
+	if _, err := os.Stat(dest + ".yaml"); err == nil {
+		return fmt.Errorf("module %q already exists at %s", name, dest+".yaml")
 	}
 	// Страховка от namespace-инъекций (validateModuleName уже отверг ..).
 	rel, err := filepath.Rel(root, dest)
