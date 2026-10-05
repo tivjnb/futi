@@ -177,7 +177,7 @@ func TestLoadExpandsTilde(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
-	writeFile(t, cfgPath, "sources:\n  - path: ~/mods\n  - path: \"~\"\n")
+	writeFile(t, cfgPath, "sources:\n  - path: ~/mods\n  - path: \"~\"\n  - path: ~/\n")
 
 	cfg, err := Load(cfgPath)
 	if err != nil {
@@ -188,6 +188,9 @@ func TestLoadExpandsTilde(t *testing.T) {
 	}
 	if got, want := cfg.Sources[1].Path, filepath.Clean(home); got != want {
 		t.Fatalf("source[1].Path = %q, want %q", got, want)
+	}
+	if got, want := cfg.Sources[2].Path, filepath.Clean(home); got != want {
+		t.Fatalf("source[2].Path = %q, want %q", got, want)
 	}
 }
 
