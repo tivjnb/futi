@@ -75,10 +75,10 @@ func runModulesUpdate(w io.Writer, source discovery.Source, cache *modulecache.C
 	if err != nil {
 		return fmt.Errorf("modules update: %w", err)
 	}
-	for _, b := range scanBackups(roots) {
+	entries, backups := scanRoots(roots)
+	for _, b := range backups {
 		fmt.Fprintf(os.Stderr, "Warning: found %s left by an interrupted update; inspect it and remove or restore it manually\n", b)
 	}
-	entries := scanInstalled(roots)
 	if len(entries) == 0 {
 		fmt.Fprintln(w, "No installed modules found.")
 		return nil
