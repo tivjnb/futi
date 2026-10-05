@@ -174,9 +174,10 @@ func updateAt(w io.Writer, cache *modulecache.Cache, name, label, moduleRoot, ma
 
 	// Замена дерева: dest → backup, new → dest; при провале — восстановление.
 	backup := moduleRoot + ".futi-backup"
-	// Остаток backup от прошлого сбоя (moduleRoot существует) не должен мешать.
-	if err := os.RemoveAll(backup); err != nil {
-		return fmt.Errorf("remove stale backup %s: %w", backup, err)
+	// Backup от прерванного update или неудавшегося отката может быть
+	// единственной рабочей копией — не удаляем, пока пользователь не разберётся.
+	if _, err := os.Lstat(backup); err == nil {
+		return fmt.Errorf("previous update left a backup at %s; inspect it and remove or restore it manually", backup)
 	}
 	if err := os.Rename(moduleRoot, backup); err != nil {
 		return fmt.Errorf("backup old tree: %w", err)

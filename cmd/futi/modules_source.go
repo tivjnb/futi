@@ -168,11 +168,19 @@ var renameDir = os.Rename
 // при ошибке (разные файловые системы, например /tmp → $HOME) —
 // копирование copyTreeFiltered + удаление src.
 func moveTree(src, dst string) error {
+	// Существующий dst не трогаем: иначе откат после сбоя копирования мог бы
+	// удалить чужие данные.
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("move tree: destination %s already exists", dst)
+	}
 	if err := renameDir(src, dst); err == nil {
 		return nil
 	}
 	if err := copyTreeFiltered(src, dst); err != nil {
-		os.RemoveAll(dst) // частичное дерево не оставляем
+		// Частичное дерево не оставляем (dst создали мы).
+		if rmErr := os.RemoveAll(dst); rmErr != nil {
+			return fmt.Errorf("move tree: %w (remove partial %s: %v)", err, dst, rmErr)
+		}
 		return fmt.Errorf("move tree: %w", err)
 	}
 	return os.RemoveAll(src)

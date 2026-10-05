@@ -96,11 +96,9 @@ func failingCopyRename(t *testing.T) (fix func()) {
 	if os.Geteuid() == 0 {
 		t.Skip("root читает файлы с правами 000")
 	}
-	broken := ""
 	orig := renameDir
 	renameDir = func(src, dst string) error {
-		broken = filepath.Join(src, "z.txt")
-		if err := os.Chmod(broken, 0o000); err != nil {
+		if err := os.Chmod(filepath.Join(src, "z.txt"), 0o000); err != nil {
 			t.Fatal(err)
 		}
 		return syscall.EXDEV
@@ -178,5 +176,51 @@ func TestRunModulesUpdateCopyFailureRestoresOld(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(dest, "config.yaml"))
 	if !strings.Contains(string(data), "echo v2") {
 		t.Fatalf("new tree must be installed:\n%s", data)
+	}
+}
+
+func TestMoveTreeExistingDstUntouched(t *testing.T) {
+	src := t.TempDir()
+	writeFile(t, filepath.Join(src, "a.txt"), "new\n")
+	dst := t.TempDir()
+	writeFile(t, filepath.Join(dst, "keep.txt"), "keep\n")
+
+	if err := moveTree(src, dst); err == nil {
+		t.Fatal("moveTree must refuse an existing dst")
+	}
+	data, err := os.ReadFile(filepath.Join(dst, "keep.txt"))
+	if err != nil || string(data) != "keep\n" {
+		t.Fatalf("existing dst must be untouched: err=%v data=%q", err, data)
+	}
+}
+
+// Сбой самого отката: ошибка называет путь backup, где осталась рабочая копия.
+func TestRunModulesUpdateRollbackFailureNamesBackup(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	cache := newTestCache()
+	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	dest := filepath.Join(global, "qr")
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo v2\n")
+	writeFile(t, filepath.Join(src, "a.txt"), "a\n")
+	writeFile(t, filepath.Join(src, "z.txt"), "z\n")
+	failingCopyRename(t)
+	// Копирование падает, а backup к моменту отката исчезает — Rename назад упадёт.
+	base := renameDir
+	renameDir = func(src, dst string) error {
+		if err := os.RemoveAll(dest + ".futi-backup"); err != nil {
+			t.Fatal(err)
+		}
+		return base(src, dst)
+	}
+
+	err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, []string{"qr"})
+	if err == nil || !strings.Contains(err.Error(), "rollback failed") || !strings.Contains(err.Error(), dest+".futi-backup") {
+		t.Fatalf("want rollback failure naming backup path, got %v", err)
 	}
 }

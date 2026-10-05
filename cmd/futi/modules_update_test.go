@@ -417,8 +417,9 @@ func TestRunModulesUpdateAllSameNameErrorLabelled(t *testing.T) {
 	}
 }
 
-// Остаток backup от прошлого сбоя не мешает update.
-func TestRunModulesUpdateRemovesStaleBackup(t *testing.T) {
+// Backup от прошлого сбоя может быть единственной рабочей копией: update
+// отказывается и ничего не трогает; после ручного удаления проходит.
+func TestRunModulesUpdateRefusesStaleBackup(t *testing.T) {
 	global := t.TempDir()
 	t.Setenv("FUTI_MODULES_DIR", global)
 	t.Chdir(t.TempDir())
@@ -431,16 +432,30 @@ func TestRunModulesUpdateRemovesStaleBackup(t *testing.T) {
 	stale := filepath.Join(global, "qr.futi-backup")
 	writeFile(t, filepath.Join(stale, "junk.txt"), "junk\n")
 	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo v2\n")
+	oldConfig, _ := os.ReadFile(filepath.Join(global, "qr", "config.yaml"))
 
-	if err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, []string{"qr"}); err != nil {
-		t.Fatalf("update with stale backup: %v", err)
+	source := discovery.NewGlobalSource(global)
+	err := runModulesUpdate(&bytes.Buffer{}, source, cache, []string{"qr"})
+	if err == nil || !strings.Contains(err.Error(), stale) {
+		t.Fatalf("want error naming %s, got %v", stale, err)
+	}
+	if _, err := os.Stat(filepath.Join(stale, "junk.txt")); err != nil {
+		t.Fatalf("backup must be untouched: %v", err)
+	}
+	gotConfig, _ := os.ReadFile(filepath.Join(global, "qr", "config.yaml"))
+	if string(gotConfig) != string(oldConfig) {
+		t.Fatalf("moduleRoot must be untouched, got:\n%s", gotConfig)
+	}
+
+	if err := os.RemoveAll(stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := runModulesUpdate(&bytes.Buffer{}, source, cache, []string{"qr"}); err != nil {
+		t.Fatalf("update after manual removal: %v", err)
 	}
 	data, _ := os.ReadFile(filepath.Join(global, "qr", "config.yaml"))
 	if !strings.Contains(string(data), "echo v2") {
 		t.Fatalf("new tree must be installed:\n%s", data)
-	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Fatalf("stale backup must be removed, stat err = %v", err)
 	}
 }
 
