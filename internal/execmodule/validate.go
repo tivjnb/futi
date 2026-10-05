@@ -2,6 +2,7 @@ package execmodule
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -13,12 +14,28 @@ var validParamTypes = map[string]bool{
 	"int":    true,
 }
 
+// Служебные ключи данных шаблона (см. Render): параметр с таким именем
+// перекрывался бы ими, поэтому Validate отвергает такие имена.
+var reservedParamNames = map[string]bool{
+	"args":        true,
+	"args_list":   true,
+	"env":         true,
+	"module_name": true,
+	"module_root": true,
+}
+
+// paramNameRe — допустимое имя параметра: буквы, цифры, _ и -, не начинается
+// с цифры или дефиса.
+var paramNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
+
 // Validate проверяет схему модуля и возвращает все найденные ошибки и предупреждения.
 //
 // Errors (блокируют загрузку модуля в LoadModule):
 //   - команда без cmd и без commands (бесполезная команда)
 //   - дубликаты имён params в команде
 //   - type параметра ∉ {"", "string", "bool", "int"}
+//   - имя параметра зарезервировано (args, args_list, env, module_name, module_root)
+//   - имя параметра не соответствует ^[A-Za-z_][A-Za-z0-9_-]*$ (в т.ч. пустое)
 //
 // Warnings (не блокируют, показываются в futi validate):
 //   - команда с commands, но без cmd (вызов без subcommand падает в runtime)
@@ -69,6 +86,13 @@ func validateCommand(path string, cmd *Command, errors *[]error, warnings *[]str
 			*errors = append(*errors, fmt.Errorf("command %q: duplicate param %q", path, p.Name))
 		}
 		seen[p.Name] = true
+
+		// Зарезервированные имена перекрылись бы служебными ключами шаблона.
+		if reservedParamNames[p.Name] {
+			*errors = append(*errors, fmt.Errorf("command %q: param %q is reserved (args, args_list, env, module_name, module_root)", path, p.Name))
+		} else if !paramNameRe.MatchString(p.Name) {
+			*errors = append(*errors, fmt.Errorf("command %q: invalid param name %q (allowed: letters, digits, _ and -, not starting with a digit or -)", path, p.Name))
+		}
 
 		if !validParamTypes[p.Type] {
 			*errors = append(*errors, fmt.Errorf("command %q: param %q has invalid type %q (valid: string, bool, int)", path, p.Name, p.Type))

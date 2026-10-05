@@ -161,7 +161,7 @@ commands:
 | `commands.<name>.params` | list | Параметры команды (опционально) |
 | `commands.<name>.positional` | block | Требования к позиционным аргументам (опционально) |
 | `commands.<name>.commands` | map | Вложенные команды (опционально) |
-| `params[].name` | string | Имя параметра (обязательно) |
+| `params[].name` | string | Имя параметра (обязательно): буквы, цифры, `_` и `-`, не начинается с цифры или `-`. Имена `args`, `args_list`, `env`, `module_name`, `module_root` зарезервированы — ошибка схемы |
 | `params[].type` | string | Тип: `string` (по умолчанию), `bool` или `int` |
 | `params[].required` | bool | Обязательный параметр (по умолчанию `false`) |
 | `params[].default` | string | Значение по умолчанию |
@@ -421,15 +421,15 @@ futi mod --msg 'x" --force "y'
 commands:
   deploy:
     params:
-      - name: env
+      - name: target
         type: string
         required: true
-    cmd: "deploy --token {{.env.DEPLOY_TOKEN}} --env {{.env}}"
+    cmd: "deploy --token {{.env.DEPLOY_TOKEN}} --env {{quote .target}}"
 ```
 
 ```bash
 export DEPLOY_TOKEN=secret123
-futi deploy --env staging
+futi deploy --target staging
 # → deploy --token secret123 --env staging
 ```
 
@@ -460,14 +460,14 @@ name: mytool
 commands:
   deploy:
     params:
-      - name: env
+      - name: target
         type: string
         required: true
-    cmd: "{{quote .module_root}}/scripts/deploy.sh {{quote .env}}"
+    cmd: "{{quote .module_root}}/scripts/deploy.sh {{quote .target}}"
 ```
 
 ```bash
-futi mytool deploy --env staging
+futi mytool deploy --target staging
 # выполнит ~/.config/futi/modules/mytool/scripts/deploy.sh staging
 ```
 
@@ -763,6 +763,8 @@ $ echo $?
 - команда без `cmd` и без `commands` (бесполезная команда)
 - дубликаты имён `params` в команде
 - `type` параметра не из `{string, bool, int}` (пустой = `string`)
+- имя параметра зарезервировано (`args`, `args_list`, `env`, `module_name`, `module_root`) — иначе оно перекрылось бы служебной переменной шаблона
+- имя параметра не соответствует `^[A-Za-z_][A-Za-z0-9_-]*$` (в т.ч. пустое)
 
 **Предупреждения** (не блокируют, показываются только в `validate`):
 
@@ -1222,16 +1224,16 @@ commands:
 
   rollback:
     params:
-      - name: env
+      - name: target
         type: string
         required: true
-    cmd: "./scripts/rollback.sh {{.env}}"
+    cmd: "./scripts/rollback.sh {{quote .target}}"
 ```
 
 ```bash
 futi deploy staging --version v1.2.3
 futi deploy production --version v1.2.3
-futi deploy rollback --env production
+futi deploy rollback --target production
 ```
 
 ---
