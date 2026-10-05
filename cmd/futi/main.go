@@ -95,7 +95,11 @@ func parseArgs(args []string) (*parsedArgs, error) {
 		if hasHelpFlag(flags) {
 			return nil, errHelp
 		}
-		return nil, errors.New("usage: futi <namespace...> <command> [--param value] [-- args] (the command path goes before flags)")
+		usage := "usage: futi <namespace...> <command> [--param value] [-- args]"
+		if len(flags) > 0 {
+			usage += " (" + pathBeforeFlagsHint + ")"
+		}
+		return nil, errors.New(usage)
 	}
 
 	switch path[len(path)-1] {
@@ -141,6 +145,18 @@ func isFlagToken(tok string) bool {
 
 // hasBareWord: среди сырых флагов есть слово без "-" (признак слова пути
 // после флага, например `futi k8s --follow logs`).
+// pathBeforeFlagsHint — подсказка про порядок: путь команды до флагов.
+const pathBeforeFlagsHint = "the command path goes before flags"
+
+// withPathHint дописывает подсказку о порядке пути и флагов, если среди флагов
+// есть «голое» слово (путь после флага); повторно не добавляет.
+func withPathHint(msg string, flags []string) string {
+	if hasBareWord(flags) && !strings.Contains(msg, pathBeforeFlagsHint) {
+		return msg + " (" + pathBeforeFlagsHint + ")"
+	}
+	return msg
+}
+
 func hasBareWord(flags []string) bool {
 	for _, f := range flags {
 		if !isFlagToken(f) {
@@ -1123,16 +1139,12 @@ func main() {
 			exitAfterHelp(source, cache, helpPath)
 			return
 		}
-		msg := formatRunError(err)
-		if hasBareWord(pa.flags) {
-			msg += " (the command path goes before flags)"
-		}
-		fmt.Fprintf(os.Stderr, "%s\n", msg)
+		fmt.Fprintf(os.Stderr, "%s\n", withPathHint(formatRunError(err), pa.flags))
 		exitAfterRunError(err)
 	}
 	params, help, err := bindFlags(cmd, pa.flags)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		fmt.Fprintf(os.Stderr, "%s\n", withPathHint(err.Error(), pa.flags))
 		os.Exit(1)
 	}
 	if help {

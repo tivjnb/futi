@@ -186,7 +186,7 @@ positional:
 ```
 
 ```bash
-futi meta -- photo.jpg --json
+futi meta --json -- photo.jpg
 ```
 
 ---

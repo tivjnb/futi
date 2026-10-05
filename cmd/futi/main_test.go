@@ -2186,3 +2186,74 @@ func TestFutiValidateHelpFlag(t *testing.T) {
 		t.Fatalf("code=%d out=%q stderr=%.80q, want 0 and usage in stderr", code, out, errOut)
 	}
 }
+
+// runFutiBinary запускает собранный futi в изолированном окружении
+// (модули — mods, HOME и кэш — во временном каталоге) и возвращает stdout, stderr, код выхода.
+func runFutiBinary(t *testing.T, mods string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	tmp := t.TempDir()
+	cmd := exec.Command(builtFutiBinary(t), args...)
+	cmd.Env = append(os.Environ(),
+		"FUTI_MODULES_DIR="+mods,
+		"HOME="+tmp, "XDG_CACHE_HOME="+filepath.Join(tmp, "cache"))
+	var out, errb strings.Builder
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	err := cmd.Run()
+	if err != nil {
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) {
+			t.Fatalf("запуск futi: %v", err)
+		}
+		code = ee.ExitCode()
+	}
+	return out.String(), errb.String(), code
+}
+
+// TestSystemHelpForNamespaceDirectory: futi <ns> -h и futi <ns> help для
+// каталога-namespace (не модуля) печатают дочерние элементы, код 0 (audit F70).
+func TestSystemHelpForNamespaceDirectory(t *testing.T) {
+	mods := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(mods, "docker"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(mods, "docker", "build.yaml"), "name: build\ncmd: \"echo built\"\n")
+
+	for _, args := range [][]string{{"docker", "-h"}, {"docker", "help"}} {
+		stdout, stderr, code := runFutiBinary(t, mods, args...)
+		if code != 0 || !strings.Contains(stdout, "build") {
+			t.Fatalf("futi %v: code=%d stdout=%q stderr=%q, want code 0 and stdout with %q", args, code, stdout, stderr, "build")
+		}
+	}
+
+	_, _, code := runFutiBinary(t, mods, "nope", "-h")
+	if code == 0 {
+		t.Fatal("futi nope -h: code 0, want error for nonexistent path")
+	}
+}
+
+// TestBindFlagsErrorKeepsPathHint: futi k8s --follow logs — ошибка привязки флага
+// не должна скрывать подсказку о порядке пути и флагов (audit F70).
+func TestBindFlagsErrorKeepsPathHint(t *testing.T) {
+	mods := t.TempDir()
+	writeFile(t, filepath.Join(mods, "k8s.yaml"), "name: k8s\ncmd: \"echo k8s\"\n")
+
+	_, stderr, code := runFutiBinary(t, mods, "k8s", "--follow", "logs")
+	if code == 0 {
+		t.Fatal("code 0, want error")
+	}
+	if !strings.Contains(stderr, `unknown param "follow"`) || strings.Count(stderr, "the command path goes before flags") != 1 {
+		t.Fatalf("stderr = %q, want unknown param error with a single path hint", stderr)
+	}
+}
+
+// TestParseArgsEmptyPathHintOnlyWithFlags: подсказка про порядок пути — только
+// когда флаги действительно есть (futi -- a её не заслуживает).
+func TestParseArgsEmptyPathHintOnlyWithFlags(t *testing.T) {
+	_, err := parseArgs([]string{"--", "a"})
+	if err == nil || !strings.HasPrefix(err.Error(), "usage: ") {
+		t.Fatalf("err = %v, want usage error", err)
+	}
+	if strings.Contains(err.Error(), "path goes before flags") {
+		t.Fatalf("err = %q, must not mention flags when none given", err)
+	}
+}
