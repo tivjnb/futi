@@ -235,13 +235,38 @@ func TestCompleteParamEqualsNoSuggest(t *testing.T) {
 	}
 }
 
-func TestCompleteBoolValue(t *testing.T) {
+func TestCompleteAfterBoolFlagNoTrueFalse(t *testing.T) {
+	// Парсер не принимает "--force true": после bool-флага подсказываем
+	// оставшиеся флаги (как после завершённого флага), без true/false и help.
 	src := newTestSource(t)
-	matches, _ := Complete(src, nil, []string{"docker", "build", "--force"}, "")
+	matches, directive := Complete(src, nil, []string{"docker", "build", "--force"}, "")
 	got := text(matches)
-	want := []string{"false", "true"}
+	want := []string{"--tag"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected matches: %v, want %v", got, want)
+	}
+	if directive != ShellCompDirectiveNoFileComp {
+		t.Fatalf("unexpected directive: %v", directive)
+	}
+}
+
+func TestCompleteAfterFlagWithEqualsNoValueHint(t *testing.T) {
+	src := newTestSource(t)
+	matches, _ := Complete(src, nil, []string{"docker", "build", "--force=false"}, "")
+	got := text(matches)
+	want := []string{"--tag"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected matches: %v, want %v", got, want)
+	}
+}
+
+func TestCompleteNoPathWordsAfterFlag(t *testing.T) {
+	// futi docker --tag x <TAB>: путь после флага невозможен, команды docker
+	// (build/ps/migrate) предлагать нельзя.
+	src := newTestSource(t)
+	matches, _ := Complete(src, nil, []string{"docker", "--tag", "x"}, "")
+	if len(matches) != 0 {
+		t.Fatalf("expected no matches, got %v", text(matches))
 	}
 }
 
@@ -510,12 +535,11 @@ func TestCompleteModuleDefaultCmdParams(t *testing.T) {
 		t.Fatalf("unexpected directive: %v", directive)
 	}
 
-	// bool-значение: после --json подсказываем true/false.
+	// После bool-флага --json — оставшиеся флаги, без true/false.
 	matches, _ = Complete(src, nil, []string{"meta", "--json"}, "")
 	got = text(matches)
-	want = []string{"false", "true"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("bool value matches: %v, want %v", got, want)
+	if len(got) != 0 {
+		t.Fatalf("after bool flag matches: %v, want none", got)
 	}
 }
 
@@ -525,7 +549,7 @@ func TestCompleteAfterFlagValue(t *testing.T) {
 	src := newTestSource(t)
 	matches, directive := Complete(src, nil, []string{"docker", "build", "--tag", "v1.0"}, "")
 	got := text(matches)
-	want := []string{"--force", "--tag", "help"}
+	want := []string{"--force"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("empty toComplete: %v, want %v", got, want)
 	}
@@ -536,7 +560,7 @@ func TestCompleteAfterFlagValue(t *testing.T) {
 	// То же в ветке "--": после значения флага остаются другие флаги.
 	matches, _ = Complete(src, nil, []string{"docker", "build", "--tag", "v1.0"}, "--")
 	got = text(matches)
-	want = []string{"--force", "--tag"}
+	want = []string{"--force"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("-- toComplete: %v, want %v", got, want)
 	}
@@ -564,5 +588,65 @@ func TestCompleteFlagValueAllowsFiles(t *testing.T) {
 	}
 	if directive != ShellCompDirectiveDefault {
 		t.Fatalf("expected Default directive, got %v", directive)
+	}
+}
+
+func TestCompleteStringFlagValuePathStaysResolved(t *testing.T) {
+	// futi docker build --tag myapp <TAB>: myapp — значение флага, путь
+	// остаётся docker build; подсказываем оставшиеся флаги.
+	src := newTestSource(t)
+	matches, _ := Complete(src, nil, []string{"docker", "build", "--tag", "myapp"}, "")
+	got := text(matches)
+	want := []string{"--force"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected matches: %v, want %v", got, want)
+	}
+}
+
+func TestCompleteBuiltinFlagsKeepBehavior(t *testing.T) {
+	// Builtins с флагами (модуль не зарезолвен): поведение то же, что до F70.
+	src := newTestSource(t)
+	cases := []struct {
+		args []string
+		want Directive
+	}{
+		// после флага без "=" — значение user-supplied: файлы
+		{[]string{"modules", "update", "--all"}, ShellCompDirectiveDefault},
+		{[]string{"modules", "install", "x", "--local"}, ShellCompDirectiveDefault},
+		// после завершённого значения/короткого флага — подсказок нет
+		{[]string{"modules", "update", "--skip-attach", "foo"}, ShellCompDirectiveNoFileComp},
+		{[]string{"cache", "refresh", "-v"}, ShellCompDirectiveNoFileComp},
+	}
+	for _, c := range cases {
+		matches, directive := Complete(src, nil, c.args, "")
+		if len(matches) != 0 || directive != c.want {
+			t.Errorf("args=%v: matches=%v directive=%v, want none/%v", c.args, text(matches), directive, c.want)
+		}
+	}
+}
+
+func TestCompleteAfterShortHelpFlag(t *testing.T) {
+	// -h — флаговый токен: после него путь не растёт, подсказываем флаги команды.
+	src := newTestSource(t)
+	matches, directive := Complete(src, nil, []string{"docker", "build", "-h"}, "")
+	got := text(matches)
+	want := []string{"--force", "--tag"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected matches: %v, want %v", got, want)
+	}
+	if directive != ShellCompDirectiveNoFileComp {
+		t.Fatalf("unexpected directive: %v", directive)
+	}
+}
+
+func TestCompleteExcludesUsedFlags(t *testing.T) {
+	src := newTestSource(t)
+	matches, _ := Complete(src, nil, []string{"docker", "build", "--tag=x", "--force"}, "")
+	if len(matches) != 0 {
+		t.Fatalf("expected no matches, got %v", text(matches))
+	}
+	matches, _ = Complete(src, nil, []string{"docker", "build", "--tag=x"}, "--")
+	if got := text(matches); !reflect.DeepEqual(got, []string{"--force"}) {
+		t.Fatalf("-- toComplete: %v, want [--force]", got)
 	}
 }

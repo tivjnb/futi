@@ -126,6 +126,7 @@ func (c *Command) Render(params map[string]string, args string, argsList []strin
 	for k, v := range params {
 		data[k] = v
 	}
+	// Служебные ключи пишутся после params; коллизию имён исключает Validate.
 	data["args"] = args
 	if argsList == nil {
 		argsList = []string{}

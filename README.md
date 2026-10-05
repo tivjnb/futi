@@ -161,12 +161,14 @@ commands:
 | `commands.<name>.params` | list | Параметры команды (опционально) |
 | `commands.<name>.positional` | block | Требования к позиционным аргументам (опционально) |
 | `commands.<name>.commands` | map | Вложенные команды (опционально) |
-| `params[].name` | string | Имя параметра (обязательно) |
+| `params[].name` | string | Имя параметра (обязательно): буквы, цифры, `_` и `-`, не начинается с цифры или `-`. Имена `args`, `args_list`, `env`, `module_name`, `module_root` зарезервированы — ошибка схемы |
 | `params[].type` | string | Тип: `string` (по умолчанию), `bool` или `int` |
 | `params[].required` | bool | Обязательный параметр (по умолчанию `false`) |
 | `params[].default` | string | Значение по умолчанию |
 | `params[].description` | string | Описание параметра (опционально, показывается в help) |
 | `positional.min` | int | Обязательный минимум позиционных аргументов после `--` (по умолчанию `0`) |
+
+Имя с дефисом, например `dry-run`: в CLI — `--dry-run`, в шаблоне — `{{index . "dry-run"}}` (точка-нотация `{{.dry-run}}` не работает).
 
 Верхнеуровневые `params` и `positional` описывают команду по умолчанию (`cmd`):
 валидация, defaults и help работают так же, как у обычных команд.
@@ -184,7 +186,7 @@ positional:
 ```
 
 ```bash
-futi meta -- photo.jpg --json
+futi meta --json -- photo.jpg
 ```
 
 ---
@@ -321,21 +323,31 @@ sources:
 
 ```bash
 futi docker build --tag myapp --file Dockerfile.dev
-futi docker logs mycontainer --follow
-futi docker logs mycontainer --follow=false
+futi docker logs --follow
+futi docker logs --follow=false
+futi docker logs --follow -- mycontainer
 ```
 
 Форматы:
-- `--param value` — пробел
-- `--param=value` — через `=`
+- `--param value` — пробел (для string/int-параметров)
+- `--param=value` — через `=` (обязательно для значений, начинающихся с `--`)
 - `--bool-flag` — без значения (=`true`)
 - `--bool-flag=false` — явный false
 
-> **Важно:** bare-флаг и следующий позиционный аргумент неоднозначны —
-> `futi mod cmd --force positional` трактует `positional` как значение
-> `--force`. При смешении булевых флагов с позиционными аргументами
-> используйте явные формы: `--force=true`, `--force positional` (флаг со
-> значением) или передавайте позиционные до флага.
+> **Важно:** порядок строгий — `futi <путь…> [флаги] [-- args]`. Путь
+> (namespace и команда) заканчивается на первом токене, начинающемся с `-`
+> (одиночный `-` — обычное слово). После этого слово допустимо только как
+> значение предыдущего string/int-флага; bool-флаг слово никогда не съедает
+> (`--force false` — ошибка, пишите `--force=false`), а лишнее слово —
+> ошибка `unexpected argument`. Позиционные аргументы команды передаются
+> после `--`. Флаги до пути (`futi --tag x docker build`) не поддерживаются.
+>
+> Значение `string`/`int` может начинаться с одного `-` (`--n -5`,
+> `--msg -h`); значение, начинающееся с `--`, — только через `=`
+> (`--msg=--x`). Короткие флаги (`-v`, `-f` и т. п.) у обычных команд не
+> принимаются — параметры передаются как `--name`. `-v`/`-r` — только флаги
+> `list`; `--verbose`/`--recurse` у обычной команды — обычные параметры.
+> `-h`/`--help` после пути показывает справку по этому пути.
 
 ### Шаблонизация
 
@@ -421,15 +433,15 @@ futi mod --msg 'x" --force "y'
 commands:
   deploy:
     params:
-      - name: env
+      - name: target
         type: string
         required: true
-    cmd: "deploy --token {{.env.DEPLOY_TOKEN}} --env {{.env}}"
+    cmd: "deploy --token {{.env.DEPLOY_TOKEN}} --env {{quote .target}}"
 ```
 
 ```bash
 export DEPLOY_TOKEN=secret123
-futi deploy --env staging
+futi deploy --target staging
 # → deploy --token secret123 --env staging
 ```
 
@@ -460,14 +472,14 @@ name: mytool
 commands:
   deploy:
     params:
-      - name: env
+      - name: target
         type: string
         required: true
-    cmd: "{{quote .module_root}}/scripts/deploy.sh {{quote .env}}"
+    cmd: "{{quote .module_root}}/scripts/deploy.sh {{quote .target}}"
 ```
 
 ```bash
-futi mytool deploy --env staging
+futi mytool deploy --target staging
 # выполнит ~/.config/futi/modules/mytool/scripts/deploy.sh staging
 ```
 
@@ -540,6 +552,7 @@ out = os.path.join(os.getcwd(), "result.png")
 
 ```bash
 futi <namespace...> <command> [--param val] [-- args]   # вызов команды модуля
+futi <namespace...> [<command>] -h          # справка по пути (модуль, ветка или команда)
 futi <namespace>                            # команда по умолчанию (если есть cmd на уровне модуля)
 futi list                                   # модули и namespaces в корне
 futi <namespace...> list                    # содержимое namespace или команды модуля
@@ -564,7 +577,7 @@ futi __complete <args...>                   # hidden: подсказки для 
 futi -h | --help                            # справка
 ```
 
-Парсинг: последний позиционный аргумент (до `--`) — команда, всё до него — namespace (сегменты через `.`). Аргументы после `--` передаются в шаблон команды как `{{.args}}` (строка) и `{{.args_list}}` (массив).
+Парсинг: путь — слова до первого флага (токена с `-`); последнее слово пути — команда, всё до него — namespace (сегменты через `.`); затем флаги, затем `--`. Аргументы после `--` передаются в шаблон команды как `{{.args}}` (строка) и `{{.args_list}}` (массив).
 
 **Зарезервированные имена** — нельзя использовать как имена модулей и команд:
 `list`, `validate`, `cache`, `modules`, `completion`, `__complete` (перехватываются
@@ -574,7 +587,7 @@ CLI до резолва модулей). `help` — исключение: есл
 ```bash
 futi docker build --tag myapp        # namespace=docker, command=build
 futi dev deploy staging              # namespace=dev.deploy, command=staging
-futi k8s logs mypod --follow         # namespace=k8s, command=logs, follow=true
+futi k8s logs --follow -- mypod      # namespace=k8s, command=logs, follow=true, args="mypod"
 futi echo_mod echo -- hello world    # namespace=echo_mod, command=echo, args="hello world"
 futi echo_mod -- hello world         # default cmd модуля echo_mod, args="hello world"
 ```
@@ -763,6 +776,8 @@ $ echo $?
 - команда без `cmd` и без `commands` (бесполезная команда)
 - дубликаты имён `params` в команде
 - `type` параметра не из `{string, bool, int}` (пустой = `string`)
+- имя параметра зарезервировано (`args`, `args_list`, `env`, `module_name`, `module_root`) — иначе оно перекрылось бы служебной переменной шаблона
+- имя параметра не соответствует `^[A-Za-z_][A-Za-z0-9_-]*$` (в т.ч. пустое)
 
 **Предупреждения** (не блокируют, показываются только в `validate`):
 
@@ -1025,10 +1040,10 @@ futi completion fish > ~/.config/fish/completions/futi.fish
 - **Команды и subcommands** — `futi docker <TAB>`, `futi docker migrate <TAB>`
 - **Имена параметров** — `futi docker build --<TAB>` → `--tag`, `--force`
 - **Все параметры на команде** — `futi docker build <TAB>` сразу показывает все флаги с пометками: `--tag (required)`, `--force (default: false)` (метки видны в zsh, bash/fish отрезают)
-- **После значения флага** — `futi images qr make --out qr.png <TAB>` подсказывает оставшиеся флаги (`--text`, `--scale`); значение флага не ломает подсказки
+- **После значения флага** — `futi images qr make --out qr.png <TAB>` подсказывает оставшиеся флаги (`--text`, `--scale`); значение флага не ломает подсказки. Путь (namespace и команда) всегда идёт до первого флага, поэтому после флагов слова пути и `help` не предлагаются
 - **Пути в значениях флагов** — при вводе значения не-bool флага (`--out ~/<TAB>`, `--out=~/<TAB>`) shell предлагает файлы/директории; в будущем — только для параметров типа `path` (ROADMAP)
 - **Параметры default-команды** — модуль-однокоманда (`cmd` + `params`, без `commands`) подсказывает свои флаги: `futi meta <TAB>` → `--json`
-- **Bool-значения** — `futi docker build --force <TAB>` → `true`/`false`
+- **После bool-флага** — `futi docker build --force <TAB>` подсказывает оставшиеся (ещё не введённые) флаги (`--tag`); значения `true`/`false` не предлагаются: bool-флаг значения не берёт, `false` задаётся как `--force=false`
 - **Builtins** — `futi cache <TAB>` → `refresh`/`status`/`clear`; `futi completion <TAB>` → `bash`/`zsh`/`fish`
 - **Подсказка `help`** — `help` предлагается на каждом уровне (модуль/команда/subcommand): `futi demo <TAB>`, `futi demo db <TAB>`, `futi demo greet <TAB>`. Если в модуле уже определена команда `help` (user-defined), она и предлагается — системная не дублируется.
 
@@ -1222,16 +1237,16 @@ commands:
 
   rollback:
     params:
-      - name: env
+      - name: target
         type: string
         required: true
-    cmd: "./scripts/rollback.sh {{.env}}"
+    cmd: "./scripts/rollback.sh {{quote .target}}"
 ```
 
 ```bash
 futi deploy staging --version v1.2.3
 futi deploy production --version v1.2.3
-futi deploy rollback --env production
+futi deploy rollback --target production
 ```
 
 ---

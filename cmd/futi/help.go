@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -84,6 +85,15 @@ func runSystemHelp(w io.Writer, source discovery.Source, loader modulerunner.Mod
 
 	manifest, root, cmdPath, ok := resolvePositional(source, positional)
 	if !ok {
+		// Не модуль — возможно, каталог-namespace: справка = его дочерние элементы
+		// (как `futi <ns> list`).
+		children, err := source.ListChildren(strings.Join(positional, "."))
+		if err != nil && !errors.Is(err, discovery.ErrNotFound) {
+			return fmt.Errorf("help: %w", err)
+		}
+		if err == nil && len(children) > 0 {
+			return printChildren(w, children, false, loader)
+		}
 		return fmt.Errorf("help: module not found for %q", strings.Join(positional, " "))
 	}
 

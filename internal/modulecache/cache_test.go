@@ -1596,3 +1596,38 @@ func TestDiskStorageClearMissingFile(t *testing.T) {
 		t.Fatalf("Clear on missing file must not fail: %v", err)
 	}
 }
+
+// TestCacheFileOfPreviousVersionDoesNotBypassValidate (audit F75): персистентный
+// кэш версии 1 хранил готовые модули без повторной Validate; после ужесточения
+// правил (зарезервированные имена параметров) такой кэш должен отбрасываться,
+// иначе LoadModuleVerified отдаёт невалидный модуль при совпавшем хэше.
+func TestCacheFileOfPreviousVersionDoesNotBypassValidate(t *testing.T) {
+	dir := t.TempDir()
+	manifest := filepath.Join(dir, "m.yaml")
+	writeFile(t, manifest, "name: m\ncmd: \"echo env={{.env}}\"\nparams:\n  - name: env\n")
+	h, err := hashFile(manifest)
+	if err != nil {
+		t.Fatalf("hashFile: %v", err)
+	}
+
+	path := filepath.Join(dir, "cache.gob")
+	storage := NewDiskStorage(path)
+	if err := storage.Save(cacheFile{
+		Version: 1, // версия до ужесточения Validate (F75)
+		Entries: map[string]entry{manifest: {
+			Module: &execmodule.Module{Name: "m", Cmd: "echo env={{.env}}"},
+			Hash:   h,
+		}},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	cache := New(storage, ForceOnlyPolicy{})
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	cache.Load()
+
+	if _, err := cache.LoadModuleVerified(manifest, dir); err == nil {
+		t.Fatal("LoadModuleVerified: module with reserved param name loaded from old-version cache without error")
+	}
+}

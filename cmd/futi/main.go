@@ -35,7 +35,7 @@ var (
 type parsedArgs struct {
 	namespace string
 	command   string
-	params    map[string]string
+	flags     []string // сырые флаги между путём и `--` (привязка — bindFlags)
 	args      string   // строка после -- (как есть, joined)
 	argsList  []string // args после shlex-разбора
 }
@@ -68,126 +68,131 @@ type helpRequest struct {
 
 func (e *helpRequest) Error() string { return "help requested" }
 
-// parseArgs разбирает позиционные аргументы и флаги.
-// Правило: позиционные аргументы (без --) = namespace... + command
-// (последний = команда, остальное = namespace через ".").
-// Флаги: --param val, --param=val, --bool-flag.
-// `--` — разделитель: всё после него = args команды (через shlex).
-// "list" как последний аргумент — запрос листинга.
+// parseArgs разбирает аргументы CLI в строгом порядке: путь → флаги → `-- args`.
+// Путь — подряд идущие слова от начала до первого флагового токена (начинается
+// с "-" и длиннее 1 символа; одиночный "-" — обычное слово). Последнее слово
+// пути = команда, остальные = namespace через ".". Токены после пути до `--` —
+// сырые флаги: привязка к параметрам по схеме команды — в bindFlags.
+// Всё после первого `--` = args команды.
+// "list" / "validate" / "help" как последнее слово пути — системные запросы;
+// у list и validate допустимы только свои флаги.
 func parseArgs(args []string) (*parsedArgs, error) {
-	params := make(map[string]string)
-	var positional []string
-	var argsList []string
-	var verbose, recurse bool
+	var path, flags, argsList []string
 
 	i := 0
-	doubleDashSeen := false
-	for i < len(args) {
-		arg := args[i]
-
-		if doubleDashSeen {
-			argsList = append(argsList, arg)
-			i++
-			continue
+	for ; i < len(args) && !isFlagToken(args[i]) && args[i] != "--"; i++ {
+		path = append(path, args[i])
+	}
+	for ; i < len(args); i++ {
+		if args[i] == "--" {
+			argsList = append(argsList, args[i+1:]...)
+			break
 		}
+		flags = append(flags, args[i])
+	}
 
-		if arg == "--" {
-			doubleDashSeen = true
-			i++
-			continue
-		}
-
-		if arg == "-h" || arg == "--help" {
+	if len(path) == 0 {
+		if hasHelpFlag(flags) {
 			return nil, errHelp
 		}
-
-		if arg == "-v" || arg == "--verbose" {
-			verbose = true
-			i++
-			continue
+		usage := "usage: futi <namespace...> <command> [--param value] [-- args]"
+		if len(flags) > 0 {
+			usage += " (" + pathBeforeFlagsHint + ")"
 		}
+		return nil, errors.New(usage)
+	}
 
-		if arg == "-r" || arg == "--recurse" {
-			recurse = true
-			i++
-			continue
+	switch path[len(path)-1] {
+	case "list":
+		return nil, parseListRequest(path[:len(path)-1], flags)
+	case "validate":
+		if hasHelpFlag(flags) {
+			return nil, errHelp
 		}
-
-		if strings.HasPrefix(arg, "--") {
-			name := strings.TrimPrefix(arg, "--")
-			if idx := strings.Index(name, "="); idx >= 0 {
-				params[name[:idx]] = name[idx+1:]
-			} else if i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") && args[i+1] != "--" {
-				params[name] = args[i+1]
-				i++
-			} else {
-				params[name] = "true"
-			}
-		} else {
-			positional = append(positional, arg)
+		if len(path) < 2 {
+			return nil, errors.New("usage: futi <namespace...> validate")
 		}
-		i++
+		if len(flags) > 0 {
+			return nil, fmt.Errorf("validate: unknown flag %q", flags[0])
+		}
+		return nil, &validateRequest{namespace: strings.Join(path[:len(path)-1], ".")}
+	case "help":
+		// В отличие от list/validate, help НЕ зарезервирован: диспетчер проверяет,
+		// нет ли user-defined команды "help" (см. runHelp). Флаги игнорируются.
+		return nil, &helpRequest{positional: path[:len(path)-1]}
 	}
 
 	// args строка: join через пробел (сохраняет разделение для шаблона)
-	argsStr := strings.Join(argsList, " ")
+	pa := &parsedArgs{
+		flags:    flags,
+		args:     strings.Join(argsList, " "),
+		argsList: argsList,
+	}
+	if len(path) == 1 {
+		// Один позиционный — namespace без команды (default cmd модуля).
+		pa.namespace = path[0]
+		return pa, nil
+	}
+	pa.namespace = strings.Join(path[:len(path)-1], ".")
+	pa.command = path[len(path)-1]
+	return pa, nil
+}
 
-	if len(positional) == 0 {
-		// Только args, без namespace/command — нужен default cmd модуля.
-		// Но без namespace мы не знаем, какой модуль. Это ошибка, если
-		// только не вызывается как `futi -- args` (без модуля).
-		if argsStr == "" {
-			return nil, errors.New("usage: futi <namespace...> <command> [--param val] [-- args]")
+// isFlagToken: токен — флаг, если начинается с "-" и длиннее одного символа.
+func isFlagToken(tok string) bool {
+	return len(tok) > 1 && tok[0] == '-'
+}
+
+// hasBareWord: среди сырых флагов есть слово без "-" (признак слова пути
+// после флага, например `futi k8s --follow logs`).
+// pathBeforeFlagsHint — подсказка про порядок: путь команды до флагов.
+const pathBeforeFlagsHint = "the command path goes before flags"
+
+// withPathHint дописывает подсказку о порядке пути и флагов, если среди флагов
+// есть «голое» слово (путь после флага); повторно не добавляет.
+func withPathHint(msg string, flags []string) string {
+	if hasBareWord(flags) && !strings.Contains(msg, pathBeforeFlagsHint) {
+		return msg + " (" + pathBeforeFlagsHint + ")"
+	}
+	return msg
+}
+
+func hasBareWord(flags []string) bool {
+	for _, f := range flags {
+		if !isFlagToken(f) {
+			return true
 		}
-		return nil, errors.New("usage: futi <namespace...> <command> [--param val] [-- args]")
 	}
+	return false
+}
 
-	if positional[len(positional)-1] == "list" {
-		ns := strings.Join(positional[:len(positional)-1], ".")
-		return nil, &listRequest{
-			namespace: ns,
-			verbose:   verbose,
-			recurse:   recurse,
+func hasHelpFlag(flags []string) bool {
+	for _, f := range flags {
+		if f == "-h" || f == "--help" {
+			return true
 		}
 	}
+	return false
+}
 
-	if positional[len(positional)-1] == "validate" {
-		if len(positional) < 2 {
-			return nil, errors.New("usage: futi <namespace...> validate")
+// parseListRequest разбирает флаги запроса list: -v/--verbose, -r/--recurse,
+// -h/--help (справка). Любой другой флаг — ошибка.
+func parseListRequest(namespace, flags []string) error {
+	if hasHelpFlag(flags) {
+		return errHelp
+	}
+	req := &listRequest{namespace: strings.Join(namespace, ".")}
+	for _, f := range flags {
+		switch f {
+		case "-v", "--verbose":
+			req.verbose = true
+		case "-r", "--recurse":
+			req.recurse = true
+		default:
+			return fmt.Errorf("list: unknown flag %q (supported: -v, --verbose, -r, --recurse)", f)
 		}
-		ns := strings.Join(positional[:len(positional)-1], ".")
-		return nil, &validateRequest{namespace: ns}
 	}
-
-	// "help" как последний позиционный аргумент — запрос справки.
-	// В отличие от list/validate, help НЕ зарезервирован: диспетчер проверяет,
-	// нет ли user-defined команды "help" (см. runHelp).
-	if positional[len(positional)-1] == "help" {
-		return nil, &helpRequest{positional: positional[:len(positional)-1]}
-	}
-
-	if len(positional) < 2 {
-		// Один позиционный — это namespace без команды (default cmd).
-		// Допустимо, если у модуля есть cmd.
-		return &parsedArgs{
-			namespace: positional[0],
-			command:   "",
-			params:    params,
-			args:      argsStr,
-			argsList:  argsList,
-		}, nil
-	}
-
-	command := positional[len(positional)-1]
-	namespace := strings.Join(positional[:len(positional)-1], ".")
-
-	return &parsedArgs{
-		namespace: namespace,
-		command:   command,
-		params:    params,
-		args:      argsStr,
-		argsList:  argsList,
-	}, nil
+	return req
 }
 
 // createSource создаёт источник модулей: локальный source (./.futi/ или ./futi.yaml)
@@ -594,7 +599,7 @@ Turns scattered commands, scripts and tools into YAML modules with a single
 CLI interface. Install a module once — use it everywhere.
 
 USAGE
-  futi <namespace...> <command> [--param val] [--param=val] [--bool-flag] [-- args]
+  futi <namespace...> <command> [--param value] [--bool-flag] [-- args]
   futi <namespace>                    Invoke module's default command (if defined)
   futi <namespace...> list [flags]
   futi list [flags]
@@ -608,6 +613,11 @@ USAGE
 The last positional argument (without --) is the command; everything before
 it is the namespace, joined with dots. Example: "futi dev deploy staging"
 resolves to namespace "dev.deploy", command "staging".
+
+The order is strict: path, then flags, then "-- args". The path ends at the
+first token starting with "-"; a word after a flag is only accepted as the
+value of the preceding string/int flag. "-h" / "--help" after the path shows
+help for that path.
 
 "list" and "validate" are reserved words — they cannot be used as command
 names in a module.
@@ -740,9 +750,11 @@ MODULES
   --strict-detach                  Abort (do not delete) if detach: fails
 
 PARAMETERS
-  --param value                    Pass a string parameter
-  --param=value                    Alternative syntax
-  --bool-flag                      Boolean flag (true when bare)
+  --param value                    Pass a string/int parameter
+  --param=value                    Alternative syntax (required for values
+                                   starting with "--")
+  --bool-flag                      Boolean flag (true when bare; never takes
+                                   the next word as its value)
   --bool-flag=false                Explicit false
 
   Boolean values are normalized: "false", "0", "no", "" are falsy;
@@ -801,14 +813,19 @@ TEMPLATING
     cmd: "echo \"{{.msg}}\""        --msg "hello world" works correctly
 
 FLAGS
-  -h, --help                        Show this help
-  -v, --verbose                     Show module paths in list output
+  -h, --help                        Show this help (after a path: help for
+                                    that path)
+  -v, --verbose                     Show module paths (flag of "list" only)
   -r, --recurse                     Recursively list namespace subtree
+                                    (flag of "list" only)
+
+  Other short flags (-x) are not accepted: pass parameters as --name value.
 
 EXAMPLES
+  futi docker build -h             Show help for "docker build"
   futi docker build --tag myapp    Run "build" command in "docker" module
   futi dev deploy staging           Namespace "dev.deploy", command "staging"
-  futi k8s logs mypod --follow      Bool flag --follow
+  futi k8s logs --follow            Bool flag --follow
   futi db migrate up                Nested command: "migrate up" in "db" module
   futi db migrate list              List subcommands of "migrate"
   futi echo_mod echo -- hello world Pass args to command (via {{.args}})
@@ -913,6 +930,24 @@ func formatRunError(err error) string {
 		)
 	}
 	return fmt.Sprintf("run: %v", err)
+}
+
+// commandPath восстанавливает позиционный путь (сегменты namespace + команда)
+// разобранной команды — тот же, что Run получает как positional.
+func commandPath(pa *parsedArgs) []string {
+	path := strings.Split(pa.namespace, ".")
+	if pa.command != "" {
+		path = append(path, pa.command)
+	}
+	return path
+}
+
+// exitAfterHelp печатает справку по пути в stdout (код 0); ошибка — в stderr, код 1.
+func exitAfterHelp(source discovery.Source, loader modulerunner.ModuleLoader, path []string) {
+	if err := runSystemHelp(os.Stdout, source, loader, path); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
 }
 
 func main() {
@@ -1085,7 +1120,8 @@ func main() {
 			printUsage()
 			return
 		default:
-			log.Fatalf("parse: %v", err)
+			fmt.Fprintf(os.Stderr, "parse: %v\n", err)
+			os.Exit(1)
 		}
 	}
 
@@ -1094,7 +1130,28 @@ func main() {
 		fmt.Fprintf(os.Stderr, "source: %v\n", err)
 		os.Exit(1)
 	}
-	if err := modulerunner.Run(context.Background(), source, pa.namespace, pa.command, pa.params, pa.args, pa.argsList, nil, nil, cache); err != nil {
+	// Схема команды нужна для привязки флагов (bool/string/int). -h/--help —
+	// справка по пути, в том числе для веток без своей команды (futi docker -h).
+	helpPath := commandPath(pa)
+	cmd, err := modulerunner.ResolveCommand(source, cache, pa.namespace, pa.command)
+	if err != nil {
+		if hasHelpFlag(pa.flags) {
+			exitAfterHelp(source, cache, helpPath)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "%s\n", withPathHint(formatRunError(err), pa.flags))
+		exitAfterRunError(err)
+	}
+	params, help, err := bindFlags(cmd, pa.flags)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s\n", withPathHint(err.Error(), pa.flags))
+		os.Exit(1)
+	}
+	if help {
+		exitAfterHelp(source, cache, helpPath)
+		return
+	}
+	if err := modulerunner.Run(context.Background(), source, pa.namespace, pa.command, params, pa.args, pa.argsList, nil, nil, cache); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", formatRunError(err))
 		exitAfterRunError(err)
 	}

@@ -1028,3 +1028,119 @@ func TestRunStatErrorDoesNotFallBack(t *testing.T) {
 		t.Fatal("command a.yaml:b was executed despite stat error")
 	}
 }
+
+// writeResolveFixture создаёт модуль с вложенной командой, листовой командой
+// и default cmd (m) и модуль без default cmd (nodef).
+func writeResolveFixture(t *testing.T) discovery.Source {
+	t.Helper()
+	dir := t.TempDir()
+	m := `
+name: m
+cmd: "echo default"
+params:
+  - name: flag1
+    type: bool
+commands:
+  leaf:
+    params:
+      - name: msg
+        type: string
+    cmd: "echo leaf"
+  grp:
+    commands:
+      inner:
+        cmd: "echo inner"
+`
+	nodef := `
+name: nodef
+commands:
+  a:
+    cmd: "echo a"
+`
+	for name, body := range map[string]string{"m.yaml": m, "nodef.yaml": nodef} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return discovery.NewGlobalSource(dir)
+}
+
+func TestResolveCommand(t *testing.T) {
+	source := writeResolveFixture(t)
+
+	tests := []struct {
+		name      string
+		namespace string
+		command   string
+		wantCmd   string
+		wantParam string
+	}{
+		{"leaf", "m", "leaf", "echo leaf", "msg"},
+		{"nested", "m.grp", "inner", "echo inner", ""},
+		{"default cmd", "m", "", "echo default", "flag1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, err := ResolveCommand(source, nil, tt.namespace, tt.command)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cmd.Cmd != tt.wantCmd {
+				t.Fatalf("Cmd = %q, want %q", cmd.Cmd, tt.wantCmd)
+			}
+			if tt.wantParam != "" && (len(cmd.Params) != 1 || cmd.Params[0].Name != tt.wantParam) {
+				t.Fatalf("Params = %+v, want single %q", cmd.Params, tt.wantParam)
+			}
+		})
+	}
+}
+
+func TestResolveCommandNoDefaultCmdSameErrorAsRun(t *testing.T) {
+	source := writeResolveFixture(t)
+
+	_, err := ResolveCommand(source, nil, "nodef", "")
+	if err == nil || !strings.Contains(err.Error(), `module "nodef" has no default command`) {
+		t.Fatalf("err = %v, want 'module \"nodef\" has no default command'", err)
+	}
+	runErr := Run(context.Background(), source, "nodef", "", nil, "", nil, nil, nil, nil)
+	if runErr == nil || runErr.Error() != err.Error() {
+		t.Fatalf("Run err = %v, want identical to %v", runErr, err)
+	}
+}
+
+func TestResolveCommandModuleNotFound(t *testing.T) {
+	source := writeResolveFixture(t)
+	_, err := ResolveCommand(source, nil, "nonexistent", "cmd")
+	if err == nil || !strings.Contains(err.Error(), "module not found") {
+		t.Fatalf("err = %v, want module not found", err)
+	}
+}
+
+// ResolveCommand даёт схему для исполнения: после правки манифеста на диске
+// кэш с политикой force_only не должен отдавать устаревший список параметров.
+func TestResolveCommandUsesVerifiedLoad(t *testing.T) {
+	dir := t.TempDir()
+	manifest := filepath.Join(dir, "m.yaml")
+	v1 := "name: m\ncommands:\n  c:\n    cmd: \"echo c\"\n"
+	v2 := "name: m\ncommands:\n  c:\n    params:\n      - name: dry\n        type: bool\n    cmd: \"echo c\"\n"
+	if err := os.WriteFile(manifest, []byte(v1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source := discovery.NewGlobalSource(dir)
+	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.ForceOnlyPolicy{})
+	// Прогреваем кэш быстрой загрузкой (как list/help).
+	if _, err := cache.LoadModule(manifest, dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, []byte(v2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd, err := ResolveCommand(source, cache, "m", "c")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cmd.Params) != 1 || cmd.Params[0].Name != "dry" {
+		t.Fatalf("Params = %+v, want fresh schema with param dry", cmd.Params)
+	}
+}

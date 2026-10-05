@@ -2,6 +2,7 @@ package execmodule
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -289,5 +290,67 @@ func TestValidateDefaultCmdParams(t *testing.T) {
 	errors, _ := mod.Validate()
 	if len(errors) != 3 {
 		t.Fatalf("expected 3 errors (duplicate param, invalid type, negative min), got %d: %v", len(errors), errors)
+	}
+}
+
+// TestValidateReservedParamNames: зарезервированные имена params — ошибка
+// схемы в команде, вложенной команде и default-команде модуля.
+func TestValidateReservedParamNames(t *testing.T) {
+	for _, name := range []string{"args", "args_list", "env", "module_name", "module_root"} {
+		p := []Param{{Name: name}}
+		cases := map[string]*Module{
+			"command": {Commands: map[string]*Command{"run": {Cmd: "x", Params: p}}},
+			"nested": {Commands: map[string]*Command{"grp": {Commands: map[string]*Command{
+				"run": {Cmd: "x", Params: p},
+			}}}},
+			"default": {Cmd: "x", Params: p},
+		}
+		for kind, mod := range cases {
+			errs, _ := mod.Validate()
+			if len(errs) != 1 || !strings.Contains(errs[0].Error(), "is reserved") {
+				t.Errorf("%s/%s: errors = %v, want one 'is reserved'", kind, name, errs)
+			}
+		}
+	}
+}
+
+// TestValidateParamNameFormat: имя param должно соответствовать
+// ^[A-Za-z_][A-Za-z0-9_-]*$.
+func TestValidateParamNameFormat(t *testing.T) {
+	cases := []struct {
+		name    string
+		wantErr bool
+	}{
+		{"", true}, {"1x", true}, {"-x", true}, {"a b", true}, {"a.b", true}, {"a=b", true},
+		{"dry-run", false}, {"_x", false}, {"X1", false},
+	}
+	for _, c := range cases {
+		mod := &Module{Commands: map[string]*Command{"run": {Cmd: "x", Params: []Param{{Name: c.name}}}}}
+		errs, _ := mod.Validate()
+		if c.wantErr {
+			if len(errs) != 1 || !strings.Contains(errs[0].Error(), "invalid param name") {
+				t.Errorf("%q: errors = %v, want one 'invalid param name'", c.name, errs)
+			}
+		} else if len(errs) != 0 {
+			t.Errorf("%q: unexpected errors %v", c.name, errs)
+		}
+	}
+}
+
+// TestLoadModuleRejectsReservedParam: модуль с param env не загружается.
+func TestLoadModuleRejectsReservedParam(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "bad.yaml")
+	writeFile(t, manifestPath, `
+name: bad
+commands:
+  deploy:
+    params:
+      - name: env
+    cmd: "deploy {{.env}}"
+`)
+	_, err := LoadModule(manifestPath, dir)
+	if err == nil || !strings.Contains(err.Error(), "is reserved") {
+		t.Fatalf("err = %v, want 'is reserved'", err)
 	}
 }
