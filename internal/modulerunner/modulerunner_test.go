@@ -1115,3 +1115,32 @@ func TestResolveCommandModuleNotFound(t *testing.T) {
 		t.Fatalf("err = %v, want module not found", err)
 	}
 }
+
+// ResolveCommand даёт схему для исполнения: после правки манифеста на диске
+// кэш с политикой force_only не должен отдавать устаревший список параметров.
+func TestResolveCommandUsesVerifiedLoad(t *testing.T) {
+	dir := t.TempDir()
+	manifest := filepath.Join(dir, "m.yaml")
+	v1 := "name: m\ncommands:\n  c:\n    cmd: \"echo c\"\n"
+	v2 := "name: m\ncommands:\n  c:\n    params:\n      - name: dry\n        type: bool\n    cmd: \"echo c\"\n"
+	if err := os.WriteFile(manifest, []byte(v1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source := discovery.NewGlobalSource(dir)
+	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.ForceOnlyPolicy{})
+	// Прогреваем кэш быстрой загрузкой (как list/help).
+	if _, err := cache.LoadModule(manifest, dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, []byte(v2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd, err := ResolveCommand(source, cache, "m", "c")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cmd.Params) != 1 || cmd.Params[0].Name != "dry" {
+		t.Fatalf("Params = %+v, want fresh schema with param dry", cmd.Params)
+	}
+}

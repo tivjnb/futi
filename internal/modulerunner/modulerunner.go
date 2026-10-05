@@ -137,11 +137,13 @@ type resolvedCommand struct {
 
 // ResolveCommand находит модуль и команду (progressive resolution, как в Run)
 // и возвращает схему команды: params/positional. command="" — default cmd
-// модуля. Модуль загружается обычным LoadModule (loader nil = без кэша).
+// модуля. Схема нужна для исполнения, поэтому модуль грузится так же, как в Run —
+// через LoadModuleVerified (свежесть относительно манифеста на диске); иначе
+// привязка флагов могла бы разойтись со схемой, по которой Run валидирует.
 // Ошибки те же, что у Run до валидации параметров.
 func ResolveCommand(source discovery.Source, loader ModuleLoader, namespace, command string) (*execmodule.Command, error) {
 	r, err := resolveCommand(source, namespace, command, func(manifestPath, moduleRoot string) (*execmodule.Module, error) {
-		return LoadModule(loader, manifestPath, moduleRoot)
+		return LoadModuleVerified(loader, manifestPath, moduleRoot)
 	})
 	if err != nil {
 		return nil, err

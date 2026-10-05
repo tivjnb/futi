@@ -587,7 +587,7 @@ CLI до резолва модулей). `help` — исключение: есл
 ```bash
 futi docker build --tag myapp        # namespace=docker, command=build
 futi dev deploy staging              # namespace=dev.deploy, command=staging
-futi k8s logs mypod --follow         # namespace=k8s, command=logs, follow=true
+futi k8s logs --follow -- mypod      # namespace=k8s, command=logs, follow=true, args="mypod"
 futi echo_mod echo -- hello world    # namespace=echo_mod, command=echo, args="hello world"
 futi echo_mod -- hello world         # default cmd модуля echo_mod, args="hello world"
 ```
