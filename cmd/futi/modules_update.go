@@ -16,6 +16,9 @@ import (
 	"futi/internal/modulerunner"
 )
 
+// writeMeta записывает lockfile при обновлении; переменная — шов для тестов.
+var writeMeta = metayaml.Write
+
 // updateArgs — аргументы `futi modules update`.
 type updateArgs struct {
 	name       string
@@ -171,14 +174,16 @@ func updateAt(w io.Writer, cache *modulecache.Cache, name, label, moduleRoot, ma
 
 	// Замена дерева: dest → backup, new → dest; при провале — восстановление.
 	backup := moduleRoot + ".futi-backup"
+	// Остаток backup от прошлого сбоя (moduleRoot существует) не должен мешать.
+	if err := os.RemoveAll(backup); err != nil {
+		return fmt.Errorf("remove stale backup %s: %w", backup, err)
+	}
 	if err := os.Rename(moduleRoot, backup); err != nil {
 		return fmt.Errorf("backup old tree: %w", err)
 	}
 	if err := moveTree(moduleDir, moduleRoot); err != nil {
-		os.Rename(backup, moduleRoot) // восстановление старого дерева
-		return fmt.Errorf("install new tree: %w", err)
+		return restoreBackup(backup, moduleRoot, fmt.Errorf("install new tree: %w", err))
 	}
-	defer os.RemoveAll(backup)
 
 	// Lockfile: новый hash/commit/last_check; InstalledAt сохраняем.
 	// About: из источника (если есть), иначе старый (§4.1).
@@ -197,9 +202,12 @@ func updateAt(w io.Writer, cache *modulecache.Cache, name, label, moduleRoot, ma
 	if newMeta.About == nil {
 		newMeta.About = meta.About // старый about, если в источнике нет
 	}
-	if err := metayaml.Write(metaPath, newMeta); err != nil {
-		return err
+	if err := writeMeta(metaPath, newMeta); err != nil {
+		return restoreBackup(backup, moduleRoot, fmt.Errorf("write %s: %w", metayaml.FileName, err))
 	}
+	// Lockfile записан — backup больше не нужен (при ошибке удаления его уберёт
+	// следующий update).
+	os.RemoveAll(backup)
 
 	// attach: провал → warn, НЕ rollback (§3.1, §5.3 шаг 7).
 	// Прерывание сигналом возвращаем после Invalidate: дерево уже заменено.
@@ -223,4 +231,17 @@ func updateAt(w io.Writer, cache *modulecache.Cache, name, label, moduleRoot, ma
 
 	fmt.Fprintf(w, "%s: updated\n", label)
 	return nil
+}
+
+// restoreBackup возвращает старое дерево из backup на место moduleRoot,
+// предварительно удалив новое (возможно, частичное). cause — исходная ошибка;
+// сбой отката дописывается к ней вместе с путём backup, где лежит рабочая копия.
+func restoreBackup(backup, moduleRoot string, cause error) error {
+	if err := os.RemoveAll(moduleRoot); err != nil {
+		return fmt.Errorf("%w (rollback failed: remove %s: %v; old tree is in %s)", cause, moduleRoot, err, backup)
+	}
+	if err := os.Rename(backup, moduleRoot); err != nil {
+		return fmt.Errorf("%w (rollback failed: %v; old tree is in %s)", cause, err, backup)
+	}
+	return cause
 }

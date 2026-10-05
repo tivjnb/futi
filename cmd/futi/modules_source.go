@@ -160,14 +160,19 @@ func copyTreeFiltered(src, dst string) error {
 	})
 }
 
+// renameDir — перенос каталога одной операцией; переменная — шов для тестов
+// (форсирует путь копирования, как при EXDEV).
+var renameDir = os.Rename
+
 // moveTree переносит каталог src в dst: сначала os.Rename (атомарно);
 // при ошибке (разные файловые системы, например /tmp → $HOME) —
 // копирование copyTreeFiltered + удаление src.
 func moveTree(src, dst string) error {
-	if err := os.Rename(src, dst); err == nil {
+	if err := renameDir(src, dst); err == nil {
 		return nil
 	}
 	if err := copyTreeFiltered(src, dst); err != nil {
+		os.RemoveAll(dst) // частичное дерево не оставляем
 		return fmt.Errorf("move tree: %w", err)
 	}
 	return os.RemoveAll(src)

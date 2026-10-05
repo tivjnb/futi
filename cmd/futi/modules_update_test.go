@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -203,11 +204,17 @@ func TestRunModulesUpdateInterruptPrintsErrorOnce(t *testing.T) {
 	}
 	origStderr := os.Stderr
 	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = origStderr })
 	updErr := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, nil)
 	os.Stderr = origStderr
-	w.Close()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 	var captured bytes.Buffer
-	captured.ReadFrom(r)
+	if _, err := captured.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
 
 	if updErr == nil {
 		t.Fatal("ожидалась ошибка прерывания")
@@ -385,11 +392,17 @@ func TestRunModulesUpdateAllSameNameErrorLabelled(t *testing.T) {
 	}
 	origStderr := os.Stderr
 	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = origStderr })
 	updErr := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, nil)
 	os.Stderr = origStderr
-	w.Close()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 	var captured bytes.Buffer
-	captured.ReadFrom(r)
+	if _, err := captured.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
 
 	globalLabel := "tool (" + filepath.Join(global, "tool") + ")"
 	if updErr == nil || !strings.Contains(updErr.Error(), "failed to update: "+globalLabel) {
@@ -401,5 +414,72 @@ func TestRunModulesUpdateAllSameNameErrorLabelled(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(project, ".futi", "tool", "config.yaml"))
 	if !strings.Contains(string(data), "echo local-v2") {
 		t.Errorf("local must be updated:\n%s", data)
+	}
+}
+
+// Остаток backup от прошлого сбоя не мешает update.
+func TestRunModulesUpdateRemovesStaleBackup(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	cache := newTestCache()
+	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	stale := filepath.Join(global, "qr.futi-backup")
+	writeFile(t, filepath.Join(stale, "junk.txt"), "junk\n")
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo v2\n")
+
+	if err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, []string{"qr"}); err != nil {
+		t.Fatalf("update with stale backup: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(global, "qr", "config.yaml"))
+	if !strings.Contains(string(data), "echo v2") {
+		t.Fatalf("new tree must be installed:\n%s", data)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale backup must be removed, stat err = %v", err)
+	}
+}
+
+// Ошибка записи lockfile после переноса откатывает дерево: старое на месте.
+func TestRunModulesUpdateMetaWriteFailureRollsBack(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	cache := newTestCache()
+	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	dest := filepath.Join(global, "qr")
+	oldConfig, _ := os.ReadFile(filepath.Join(dest, "config.yaml"))
+	oldMeta, err := metayaml.Read(filepath.Join(dest, metayaml.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo v2\n")
+
+	orig := writeMeta
+	writeMeta = func(string, *metayaml.Meta) error { return errors.New("disk full") }
+	t.Cleanup(func() { writeMeta = orig })
+
+	err = runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, []string{"qr"})
+	if err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("want disk full error, got %v", err)
+	}
+	gotConfig, _ := os.ReadFile(filepath.Join(dest, "config.yaml"))
+	if string(gotConfig) != string(oldConfig) {
+		t.Fatalf("old tree must be restored, got:\n%s", gotConfig)
+	}
+	gotMeta, err := metayaml.Read(filepath.Join(dest, metayaml.FileName))
+	if err != nil || gotMeta.Lockfile.Hash != oldMeta.Lockfile.Hash {
+		t.Fatalf("old lockfile must stay: err=%v meta=%+v", err, gotMeta)
+	}
+	if _, err := os.Stat(dest + ".futi-backup"); !os.IsNotExist(err) {
+		t.Fatalf("backup must not remain, stat err = %v", err)
 	}
 }

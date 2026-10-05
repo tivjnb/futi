@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"futi/internal/discovery"
+	"futi/internal/metayaml"
 	"futi/internal/testutil"
 )
 
@@ -84,5 +85,98 @@ func TestFutiModulesInstallFailedAttachExitsWithOne(t *testing.T) {
 	}
 	if code := cmd.ProcessState.ExitCode(); code != 1 {
 		t.Fatalf("код выхода = %d, want 1", code)
+	}
+}
+
+// failingCopyRename подменяет renameDir: перенос идёт через копирование, а
+// файл z.txt в источнике становится нечитаемым — копирование падает посреди
+// (a.txt к этому моменту уже скопирован). Возвращает функцию-«починку».
+func failingCopyRename(t *testing.T) (fix func()) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root читает файлы с правами 000")
+	}
+	broken := ""
+	orig := renameDir
+	renameDir = func(src, dst string) error {
+		broken = filepath.Join(src, "z.txt")
+		if err := os.Chmod(broken, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		return syscall.EXDEV
+	}
+	t.Cleanup(func() { renameDir = orig })
+	return func() { renameDir = orig }
+}
+
+func TestMoveTreeCopyFailureRemovesDst(t *testing.T) {
+	src := t.TempDir()
+	writeFile(t, filepath.Join(src, "a.txt"), "a\n")
+	writeFile(t, filepath.Join(src, "z.txt"), "z\n")
+	failingCopyRename(t)
+
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := moveTree(src, dst); err == nil {
+		t.Fatal("moveTree must fail when a file is unreadable")
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatalf("partial dst must be removed, stat err = %v", err)
+	}
+}
+
+func TestRunModulesUpdateCopyFailureRestoresOld(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	cache := newTestCache()
+	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	dest := filepath.Join(global, "qr")
+	oldMeta, err := metayaml.Read(filepath.Join(dest, metayaml.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldConfig, err := os.ReadFile(filepath.Join(dest, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo v2\n")
+	writeFile(t, filepath.Join(src, "a.txt"), "a\n")
+	writeFile(t, filepath.Join(src, "z.txt"), "z\n")
+	fix := failingCopyRename(t)
+
+	source := discovery.NewGlobalSource(global)
+	if err := runModulesUpdate(&bytes.Buffer{}, source, cache, []string{"qr"}); err == nil {
+		t.Fatal("update must fail when the copy fails")
+	}
+
+	gotConfig, err := os.ReadFile(filepath.Join(dest, "config.yaml"))
+	if err != nil || string(gotConfig) != string(oldConfig) {
+		t.Fatalf("old tree must be restored: err=%v config=%q", err, gotConfig)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "a.txt")); !os.IsNotExist(err) {
+		t.Fatalf("partial new tree must not remain, stat err = %v", err)
+	}
+	gotMeta, err := metayaml.Read(filepath.Join(dest, metayaml.FileName))
+	if err != nil || gotMeta.Lockfile.Hash != oldMeta.Lockfile.Hash {
+		t.Fatalf("old meta must be restored: err=%v meta=%+v", err, gotMeta)
+	}
+	if _, err := os.Stat(dest + ".futi-backup"); !os.IsNotExist(err) {
+		t.Fatalf("backup must not remain, stat err = %v", err)
+	}
+
+	// Повторный update после «исправления» (перенос работает) проходит.
+	fix()
+	var b bytes.Buffer
+	if err := runModulesUpdate(&b, source, cache, []string{"qr"}); err != nil {
+		t.Fatalf("repeated update: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dest, "config.yaml"))
+	if !strings.Contains(string(data), "echo v2") {
+		t.Fatalf("new tree must be installed:\n%s", data)
 	}
 }
