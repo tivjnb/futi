@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -85,8 +86,8 @@ func TestParseArgsNamespaceAndCommand(t *testing.T) {
 	if pa.command != "build" {
 		t.Fatalf("unexpected command: %q", pa.command)
 	}
-	if pa.params["tag"] != "myapp" {
-		t.Fatalf("unexpected params: %+v", pa.params)
+	if !reflect.DeepEqual(pa.flags, []string{"--tag", "myapp"}) {
+		t.Fatalf("unexpected flags: %+v", pa.flags)
 	}
 }
 
@@ -102,8 +103,8 @@ func TestParseArgsNestedNamespace(t *testing.T) {
 	if pa.command != "staging" {
 		t.Fatalf("unexpected command: %q", pa.command)
 	}
-	if len(pa.params) != 0 {
-		t.Fatalf("unexpected params: %+v", pa.params)
+	if len(pa.flags) != 0 {
+		t.Fatalf("unexpected flags: %+v", pa.flags)
 	}
 }
 
@@ -119,8 +120,8 @@ func TestParseArgsEqualSyntax(t *testing.T) {
 	if pa.command != "build" {
 		t.Fatalf("unexpected command: %q", pa.command)
 	}
-	if pa.params["tag"] != "myapp" {
-		t.Fatalf("unexpected params: %+v", pa.params)
+	if !reflect.DeepEqual(pa.flags, []string{"--tag=myapp"}) {
+		t.Fatalf("unexpected flags: %+v", pa.flags)
 	}
 }
 
@@ -136,8 +137,8 @@ func TestParseArgsBoolFlag(t *testing.T) {
 	if pa.command != "logs" {
 		t.Fatalf("unexpected command: %q", pa.command)
 	}
-	if pa.params["follow"] != "true" {
-		t.Fatalf("unexpected follow value: %q", pa.params["follow"])
+	if !reflect.DeepEqual(pa.flags, []string{"--follow"}) {
+		t.Fatalf("unexpected flags: %+v", pa.flags)
 	}
 }
 
@@ -358,8 +359,8 @@ func TestParseArgsDoubleDashWithFlags(t *testing.T) {
 	if pa.command != "build" {
 		t.Fatalf("unexpected command: %q", pa.command)
 	}
-	if pa.params["tag"] != "myapp" {
-		t.Fatalf("unexpected params: %+v", pa.params)
+	if !reflect.DeepEqual(pa.flags, []string{"--tag", "myapp"}) {
+		t.Fatalf("unexpected flags: %+v", pa.flags)
 	}
 	if pa.args != "extra arg" {
 		t.Fatalf("unexpected args: %q", pa.args)
@@ -1216,30 +1217,18 @@ func TestRunValidateModuleNotFound(t *testing.T) {
 
 // --- #39: -v/-r flags don't pollute params for regular commands ---
 
-// TestParseArgsVerboseFlagNotInParams проверяет, что -v/--verbose не попадает
-// в params для обычных команд (фикс #39 — "unknown param verbose").
-func TestParseArgsVerboseFlagNotInParams(t *testing.T) {
-	pa, err := parseArgs([]string{"docker", "build", "-v"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if _, ok := pa.params["verbose"]; ok {
-		t.Fatalf("verbose should not be in params for regular commands, got: %+v", pa.params)
-	}
-	if _, ok := pa.params["recurse"]; ok {
-		t.Fatalf("recurse should not be in params, got: %+v", pa.params)
-	}
-}
-
-// TestParseArgsRecurseFlagNotInParams проверяет, что -r/--recurse не попадает
-// в params для обычных команд.
-func TestParseArgsRecurseFlagNotInParams(t *testing.T) {
-	pa, err := parseArgs([]string{"docker", "build", "-r"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if _, ok := pa.params["recurse"]; ok {
-		t.Fatalf("recurse should not be in params for regular commands, got: %+v", pa.params)
+// TestParseArgsShortFlagsStayRawForRegularCommands проверяет, что -v/-r у
+// обычной команды не системные: разбор оставляет их сырыми флагами (отвергнет
+// bindFlags), а --verbose/--recurse — обычные параметры.
+func TestParseArgsShortFlagsStayRawForRegularCommands(t *testing.T) {
+	for _, flag := range []string{"-v", "-r", "--verbose", "--recurse"} {
+		pa, err := parseArgs([]string{"docker", "build", flag})
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", flag, err)
+		}
+		if !reflect.DeepEqual(pa.flags, []string{flag}) {
+			t.Fatalf("%s: flags = %+v, want [%s]", flag, pa.flags, flag)
+		}
 	}
 }
 
@@ -1956,5 +1945,215 @@ func TestFutiDiesFromSignalWhenChildInterrupted(t *testing.T) {
 	ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
 	if !ok || !ws.Signaled() || ws.Signal() != syscall.SIGINT {
 		t.Fatalf("futi завершился %v, want гибель от SIGINT", cmd.ProcessState)
+	}
+}
+
+// --- F70/F71: строгий порядок путь → флаги → `-- args` ---
+
+func TestParseArgsStrictOrder(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantNS    string
+		wantCmd   string
+		wantFlags []string
+	}{
+		{"слово после флага остаётся во флагах", []string{"k8s", "--follow", "logs"}, "k8s", "", []string{"--follow", "logs"}},
+		{"короткий флаг", []string{"docker", "build", "-v"}, "docker", "build", []string{"-v"}},
+		{"одиночный дефис — слово пути", []string{"a", "-", "b"}, "a.-", "b", nil},
+		{"-- сразу после пути", []string{"docker", "build", "--", "--x"}, "docker", "build", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pa, err := parseArgs(tt.args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if pa.namespace != tt.wantNS || pa.command != tt.wantCmd {
+				t.Fatalf("path = (%q, %q), want (%q, %q)", pa.namespace, pa.command, tt.wantNS, tt.wantCmd)
+			}
+			if len(pa.flags) != len(tt.wantFlags) || (len(tt.wantFlags) > 0 && !reflect.DeepEqual(pa.flags, tt.wantFlags)) {
+				t.Fatalf("flags = %+v, want %+v", pa.flags, tt.wantFlags)
+			}
+		})
+	}
+}
+
+func TestParseArgsFlagsBeforePathIsUsageError(t *testing.T) {
+	_, err := parseArgs([]string{"--tag", "x", "docker", "build"})
+	if err == nil || !strings.HasPrefix(err.Error(), "usage: ") || !strings.Contains(err.Error(), "path goes before flags") {
+		t.Fatalf("err = %v, want usage error with path hint", err)
+	}
+	if errors.Is(err, errHelp) {
+		t.Fatal("must not be errHelp")
+	}
+}
+
+func TestParseArgsHelpFlag(t *testing.T) {
+	for _, args := range [][]string{{"-h"}, {"--help"}, {"--tag", "x", "-h"}} {
+		if _, err := parseArgs(args); !errors.Is(err, errHelp) {
+			t.Fatalf("parseArgs(%v) err = %v, want errHelp", args, err)
+		}
+	}
+}
+
+func TestParseArgsListFlags(t *testing.T) {
+	_, err := parseArgs([]string{"list", "-r", "-v"})
+	var req *listRequest
+	if !errors.As(err, &req) || !req.recurse || !req.verbose {
+		t.Fatalf("err = %v, req = %+v, want listRequest recurse+verbose", err, req)
+	}
+
+	_, err = parseArgs([]string{"list", "--foo"})
+	want := `list: unknown flag "--foo" (supported: -v, --verbose, -r, --recurse)`
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+	var lr *listRequest
+	if errors.As(err, &lr) {
+		t.Fatal("unknown flag must not yield listRequest")
+	}
+
+	if _, err = parseArgs([]string{"docker", "list", "-h"}); !errors.Is(err, errHelp) {
+		t.Fatalf("list -h err = %v, want errHelp", err)
+	}
+}
+
+func TestParseArgsValidateFlags(t *testing.T) {
+	_, err := parseArgs([]string{"docker", "validate", "-v"})
+	if err == nil || err.Error() != `validate: unknown flag "-v"` {
+		t.Fatalf("err = %v, want validate: unknown flag", err)
+	}
+	if _, err = parseArgs([]string{"docker", "validate", "--help"}); !errors.Is(err, errHelp) {
+		t.Fatalf("validate --help err = %v, want errHelp", err)
+	}
+}
+
+func TestParseArgsHelpRequestIgnoresFlags(t *testing.T) {
+	_, err := parseArgs([]string{"docker", "help", "--x"})
+	var req *helpRequest
+	if !errors.As(err, &req) || !reflect.DeepEqual(req.positional, []string{"docker"}) {
+		t.Fatalf("err = %v, want helpRequest{docker}", err)
+	}
+}
+
+// runFutiBin запускает собранный futi в изолированном окружении с модулем m
+// (config.yaml = manifest) и возвращает stdout, stderr и код выхода.
+func runFutiBin(t *testing.T, manifest string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	tmp := t.TempDir()
+	mods := filepath.Join(tmp, "mods", "m")
+	if err := os.MkdirAll(mods, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mods, "config.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(builtFutiBinary(t), args...)
+	cmd.Dir = tmp
+	cmd.Env = append(os.Environ(),
+		"FUTI_MODULES_DIR="+filepath.Join(tmp, "mods"),
+		"HOME="+tmp, "XDG_CACHE_HOME="+filepath.Join(tmp, "cache"))
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	err := cmd.Run()
+	if err != nil {
+		ee, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatalf("запуск futi: %v", err)
+		}
+		code = ee.ExitCode()
+	}
+	return out.String(), errb.String(), code
+}
+
+const strictOrderManifest = `
+name: m
+commands:
+  logs:
+    description: Show logs
+    params:
+      - name: follow
+        type: bool
+        default: "false"
+    cmd: "echo follow={{.follow}}"
+  say:
+    description: Say a message
+    params:
+      - name: msg
+        type: string
+    cmd: "echo msg={{quote .msg}}"
+  grp:
+    commands:
+      leaf:
+        description: Leaf command
+        cmd: "echo leaf"
+`
+
+func TestFutiBoolFlagBareIsTrue(t *testing.T) {
+	out, errOut, code := runFutiBin(t, strictOrderManifest, "m", "logs", "--follow")
+	if code != 0 || out != "follow=true\n" {
+		t.Fatalf("code=%d out=%q stderr=%q, want 0 and follow=true", code, out, errOut)
+	}
+}
+
+func TestFutiBoolFlagDoesNotEatWord(t *testing.T) {
+	out, errOut, code := runFutiBin(t, strictOrderManifest, "m", "logs", "--follow", "extra")
+	if code != 1 || out != "" || !strings.Contains(errOut, `unexpected argument "extra"`) {
+		t.Fatalf("code=%d out=%q stderr=%q, want 1 and unexpected argument", code, out, errOut)
+	}
+	// Флаг до команды: "logs" больше не значение флага и не команда — путь [m].
+	out, errOut, code = runFutiBin(t, strictOrderManifest, "m", "--follow", "logs")
+	if code != 1 || out != "" {
+		t.Fatalf("code=%d out=%q stderr=%q, want failure without output", code, out, errOut)
+	}
+}
+
+func TestFutiCommandHelpFlagPrintsCommandHelp(t *testing.T) {
+	out, errOut, code := runFutiBin(t, strictOrderManifest, "m", "say", "-h")
+	if code != 0 || !strings.Contains(out, "Say a message") || !strings.Contains(out, "msg") {
+		t.Fatalf("code=%d out=%q stderr=%q, want 0 and command help", code, out, errOut)
+	}
+}
+
+func TestFutiStringFlagTakesDashHAsValue(t *testing.T) {
+	out, errOut, code := runFutiBin(t, strictOrderManifest, "m", "say", "--msg", "-h")
+	if code != 0 || out != "msg=-h\n" {
+		t.Fatalf("code=%d out=%q stderr=%q, want 0 and msg=-h", code, out, errOut)
+	}
+}
+
+func TestFutiBranchHelpFlagListsChildren(t *testing.T) {
+	out, errOut, code := runFutiBin(t, strictOrderManifest, "m", "grp", "-h")
+	if code != 0 || !strings.Contains(out, "leaf") {
+		t.Fatalf("code=%d out=%q stderr=%q, want 0 and children list", code, out, errOut)
+	}
+}
+
+func TestFutiUnknownShortFlagIsError(t *testing.T) {
+	_, errOut, code := runFutiBin(t, strictOrderManifest, "m", "logs", "-f")
+	if code != 1 || !strings.Contains(errOut, `unknown flag "-f"`) {
+		t.Fatalf("code=%d stderr=%q, want 1 and unknown flag", code, errOut)
+	}
+}
+
+func TestFutiListUnknownFlagIsError(t *testing.T) {
+	_, errOut, code := runFutiBin(t, strictOrderManifest, "list", "--foo")
+	if code != 1 || !strings.Contains(errOut, `list: unknown flag "--foo"`) {
+		t.Fatalf("code=%d stderr=%q, want 1 and list unknown flag", code, errOut)
+	}
+}
+
+func TestFutiFlagsBeforePathIsUsageError(t *testing.T) {
+	_, errOut, code := runFutiBin(t, strictOrderManifest, "--msg", "x", "m", "say")
+	if code != 1 || !strings.Contains(errOut, "usage:") {
+		t.Fatalf("code=%d stderr=%q, want 1 and usage", code, errOut)
+	}
+}
+
+func TestFutiUnknownParamStillRejectedByValidate(t *testing.T) {
+	_, errOut, code := runFutiBin(t, strictOrderManifest, "m", "logs", "--zzz=1")
+	if code != 1 || !strings.Contains(errOut, `unknown param "zzz"`) {
+		t.Fatalf("code=%d stderr=%q, want 1 and unknown param", code, errOut)
 	}
 }
