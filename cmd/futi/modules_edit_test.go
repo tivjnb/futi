@@ -161,6 +161,8 @@ func TestAddCommandEmptyManifest(t *testing.T) {
 	for _, tc := range []struct{ name, body string }{
 		{"empty", ""},
 		{"only comment", "# c\n"},
+		{"null document", "---\n"},
+		{"tilde", "~\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeRawManifest(t, tc.body)
@@ -179,7 +181,7 @@ func TestAddCommandEmptyManifest(t *testing.T) {
 }
 
 func TestRemoveCommandEmptyManifest(t *testing.T) {
-	for _, body := range []string{"", "# c\n"} {
+	for _, body := range []string{"", "# c\n", "---\n", "~\n"} {
 		path := writeRawManifest(t, body)
 		err := removeCommandFromManifest(path, "x")
 		if err == nil || !strings.Contains(err.Error(), "not found") {

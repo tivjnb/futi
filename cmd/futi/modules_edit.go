@@ -43,12 +43,12 @@ func scalarStr(s string) *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s}
 }
 
-// manifestRoot возвращает корневой mapping документа. Пустой документ (нет нод
-// или только комментарии): при create создаётся корневой mapping, иначе
+// manifestRoot возвращает корневой mapping документа. Пустой документ (нет нод,
+// только комментарии или явный null: `---`, `~`, `null`): при create создаётся корневой mapping, иначе
 // возвращается nil (findMappingValue корректно работает с nil). Корень не
 // mapping — ошибка.
 func manifestRoot(doc *yaml.Node, path string, create bool) (*yaml.Node, error) {
-	if len(doc.Content) == 0 {
+	if len(doc.Content) == 0 || isNullNode(doc.Content[0]) {
 		if !create {
 			return nil, nil
 		}
@@ -62,6 +62,11 @@ func manifestRoot(doc *yaml.Node, path string, create bool) (*yaml.Node, error) 
 		return nil, fmt.Errorf("manifest root is not a mapping in %s", path)
 	}
 	return root, nil
+}
+
+// isNullNode сообщает, что нода — скаляр null.
+func isNullNode(n *yaml.Node) bool {
+	return n.Kind == yaml.ScalarNode && n.Tag == "!!null"
 }
 
 // addCommandToManifest добавляет команду cmdName в commands: манифеста path.
