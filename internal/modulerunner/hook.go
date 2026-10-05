@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 
@@ -27,6 +28,12 @@ import (
 // (executor.Config.IsolateWithoutTTY): сигналы futi получают и процессы,
 // порождённые составной командой.
 func RunHook(ctx context.Context, hookCmd, moduleRoot, moduleName string, stdout, stderr io.Writer) error {
+	// Абсолютный корень: cwd (WithDir), FUTI_MODULE_ROOT и {{.module_root}}
+	// должны указывать на один и тот же каталог.
+	moduleRoot, err := filepath.Abs(moduleRoot)
+	if err != nil {
+		return fmt.Errorf("modulerunner: %w", err)
+	}
 	rendered, err := renderHook(hookCmd, moduleName, moduleRoot)
 	if err != nil {
 		return fmt.Errorf("modulerunner: %w", err)

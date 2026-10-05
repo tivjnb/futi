@@ -48,11 +48,15 @@ func dotName(rel string) string {
 	return strings.ReplaceAll(filepath.ToSlash(rel), "/", ".")
 }
 
-// scanInstalled обходит корни и собирает пакеты с config.yaml +
-// __futi_meta.yaml. Внутрь найденного модуля не спускаемся (SkipDir).
-// Ошибки чтения отдельного модуля не фатальны — модуль пропускается.
-func scanInstalled(roots []string) []installedEntry {
-	var found []installedEntry
+// backupSuffix — суффикс каталога с копией старого дерева на время update.
+const backupSuffix = ".futi-backup"
+
+// scanRoots обходит корни и собирает пакеты с config.yaml +
+// __futi_meta.yaml, а также каталоги *.futi-backup, оставшиеся после
+// прерванного update (backup — не модуль, внутрь не спускаемся). Внутрь
+// найденного модуля не спускаемся (SkipDir). Ошибки чтения отдельного
+// модуля не фатальны — модуль пропускается.
+func scanRoots(roots []string) (entries []installedEntry, backups []string) {
 	for _, root := range roots {
 		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil || !d.IsDir() {
@@ -65,16 +69,26 @@ func scanInstalled(roots []string) []installedEntry {
 			if metayaml.IsExcluded(rel) {
 				return filepath.SkipDir
 			}
+			if strings.HasSuffix(rel, backupSuffix) {
+				backups = append(backups, path)
+				return filepath.SkipDir
+			}
 			if _, statErr := os.Stat(filepath.Join(path, "config.yaml")); statErr == nil {
 				if meta, metaErr := metayaml.Read(filepath.Join(path, metayaml.FileName)); metaErr == nil {
-					found = append(found, installedEntry{Name: dotName(rel), Dir: path, Meta: meta})
+					entries = append(entries, installedEntry{Name: dotName(rel), Dir: path, Meta: meta})
 				}
 				return filepath.SkipDir // внутрь модуля не спускаемся
 			}
 			return nil
 		})
 	}
-	return found
+	return entries, backups
+}
+
+// scanInstalled — установленные модули из корней (без backup-каталогов).
+func scanInstalled(roots []string) []installedEntry {
+	entries, _ := scanRoots(roots)
+	return entries
 }
 
 // runModulesList выводит установленные модули (с __futi_meta.yaml).

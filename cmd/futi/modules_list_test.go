@@ -64,3 +64,16 @@ func TestRunModulesListEmpty(t *testing.T) {
 		t.Fatalf("unexpected output:\n%s", b.String())
 	}
 }
+
+// Каталог *.futi-backup — не установленный модуль.
+func TestScanInstalledSkipsBackupDirs(t *testing.T) {
+	root := t.TempDir()
+	meta := &metayaml.Meta{Lockfile: metayaml.Lockfile{Source: "/src/qr"}}
+	installFixtureModule(t, root, "qr.futi-backup", meta)
+	installFixtureModule(t, root, "other", meta)
+
+	got := scanInstalled([]string{root})
+	if len(got) != 1 || got[0].Name != "other" {
+		t.Fatalf("want only other, got %+v", got)
+	}
+}

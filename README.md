@@ -776,7 +776,7 @@ $ echo $?
 
 ## Создание модулей
 
-`futi modules init` создаёт YAML-модуль с шаблоном — не нужно копировать из README вручную. Модуль сразу доступен через auto-discovery.
+`futi modules init` создаёт YAML-модуль с шаблоном — не нужно копировать из README вручную. Модуль сразу доступен через auto-discovery. Сегменты пути не содержат точку (она — разделитель namespace); если уже есть `<path>/config.yaml`, init отказывает (иначе `.yaml` и `/config.yaml` дали бы конфликт).
 
 ```bash
 futi modules init mytool                          # ./.futi/mytool.yaml
@@ -860,7 +860,7 @@ futi modules install ~/dev/qr --namespace images
 futi modules install ~/dev/qr --local
 ```
 
-Одиночный `.yaml` при установке оборачивается в пакет: создаётся каталог `<module>/config.yaml`. Флаги install: `--namespace <ns>`, `--ref <git-ref>`, `--local` (в `./.futi/` вместо глобального каталога), `--skip-attach`, `--from-local` / `--from-git` / `--from-archive` (переопределить эвристику определения типа источника).
+Одиночный `.yaml` при установке оборачивается в пакет: создаётся каталог `<module>/config.yaml`; имя без `.yaml`/`.yml` берётся из `name:` манифеста или из имени источника, оно не должно содержать точку, а рядом не должно лежать одноимённого `<module>.yaml`. Флаги install: `--namespace <ns>`, `--ref <git-ref>`, `--local` (в `./.futi/` вместо глобального каталога), `--skip-attach`, `--from-local` / `--from-git` / `--from-archive` (переопределить эвристику определения типа источника).
 
 Модуль может объявлять setup/teardown-хуки — `futi` выполнит их при install/update и uninstall:
 
@@ -882,7 +882,7 @@ futi modules uninstall qr      # detach + удаление (с подтверж�
 futi modules path qr           # каталог модуля (для скриптов)
 ```
 
-`update` сравнивает hash дерева источника с lockfile: без изменений — no-op (обновляется только `last_check`), иначе — атомарная замена дерева с сохранением `installed_at` и `about`.
+`update` сравнивает hash дерева источника с lockfile: без изменений — no-op (обновляется только `last_check`), иначе — атомарная замена дерева с сохранением `installed_at` и `about`. При сбое переноса или записи lockfile update восстанавливает старое дерево. Если от прерванного update остался `<module>.futi-backup`, update отказывает и просит разобрать backup вручную; `list` и `update` такой каталог модулем не считают (update без имени лишь предупреждает о нём в stderr).
 
 Удаление требует подтверждения (размер и число файлов); без sidecar (модуль создан вручную или через `modules init`) — только с `--force`. Флаги uninstall: `--yes`, `--force`, `--skip-detach`, `--strict-detach`.
 

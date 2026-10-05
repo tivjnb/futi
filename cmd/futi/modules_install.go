@@ -104,7 +104,8 @@ func parseInstallArgs(args []string) (*installArgs, error) {
 // глобальный каталог (FUTI_MODULES_DIR или default).
 func installRoot(local bool) (string, error) {
 	if local {
-		return ".futi", nil
+		// Абсолютный путь: dest попадает в cwd и module_root хука.
+		return filepath.Abs(".futi")
 	}
 	dir := os.Getenv("FUTI_MODULES_DIR")
 	if dir == "" {
@@ -127,6 +128,16 @@ func runModulesInstall(w io.Writer, cache *modulecache.Cache, args []string) err
 	kind, err := detectSourceType(cfg.source, cfg.fromLocal, cfg.fromGit, cfg.fromArchive)
 	if err != nil {
 		return err
+	}
+
+	// Относительный local-источник привязываем к cwd установки: update
+	// может запускаться из другого каталога. Считаем до переноса, чтобы ошибка
+	// не оставила модуль без meta.
+	lockSource := cfg.source
+	if kind == kindLocal {
+		if lockSource, err = filepath.Abs(cfg.source); err != nil {
+			return fmt.Errorf("modules install: %w", err)
+		}
 	}
 
 	root, err := installRoot(cfg.local)
@@ -159,6 +170,12 @@ func runModulesInstall(w io.Writer, cache *modulecache.Cache, args []string) err
 	if err := validateModuleName(name); err != nil {
 		return fmt.Errorf("modules install: %w", err)
 	}
+	if err := validateSegmentsNoDot(name); err != nil {
+		if mod.Name == "" {
+			return fmt.Errorf("modules install: %w; задайте name: в config.yaml источника", err)
+		}
+		return fmt.Errorf("modules install: %w", err)
+	}
 
 	// Namespace в dot-форме ("images.lib") переводим в path-форму —
 	// discovery резолвит "images.lib.qr" в images/lib/qr/.
@@ -166,6 +183,10 @@ func runModulesInstall(w io.Writer, cache *modulecache.Cache, args []string) err
 	dest := filepath.Join(root, nsPath, name)
 	if _, err := os.Stat(dest); err == nil {
 		return fmt.Errorf("module already exists at %s; use `futi modules update`", dest)
+	}
+	// discovery видит и x.yaml, и x/config.yaml: оба сразу дали бы конфликт.
+	if _, err := os.Stat(dest + ".yaml"); err == nil {
+		return fmt.Errorf("module %q already exists at %s", name, dest+".yaml")
 	}
 	// Страховка от namespace-инъекций (validateModuleName уже отверг ..).
 	rel, err := filepath.Rel(root, dest)
@@ -188,7 +209,7 @@ func runModulesInstall(w io.Writer, cache *modulecache.Cache, args []string) err
 	now := time.Now()
 	meta := metayaml.MergeAbout(&metayaml.Meta{
 		Lockfile: metayaml.Lockfile{
-			Source:      cfg.source,
+			Source:      lockSource,
 			Type:        kind.String(),
 			Ref:         cfg.ref,
 			Commit:      commit,

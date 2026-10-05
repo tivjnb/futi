@@ -53,6 +53,9 @@ func TestFallbackName(t *testing.T) {
 		{"https://example.com/mod.tar.gz", "mod"},
 		{"https://example.com/mod.zip", "mod"},
 		{"/path/to/dir/", "dir"},
+		{"q.yaml", "q"},
+		{"/p/q.yml", "q"},
+		{"/p/q.yaml/", "q"},
 	}
 	for _, tt := range tests {
 		if got := fallbackName(tt.src); got != tt.want {

@@ -103,12 +103,14 @@ func detectSourceType(src string, fromLocal, fromGit, fromArchive bool) (sourceK
 }
 
 // fallbackName — имя модуля, если в config.yaml нет name: basename
-// источника без хвостового "/", суффикса ".git" и расширения архива.
+// источника без хвостового "/", суффикса ".git", расширения архива и
+// расширения одиночного манифеста (.yaml/.yml).
 func fallbackName(src string) string {
 	base := strings.TrimSuffix(strings.TrimSuffix(src, "/"), ".git")
 	if ext := archiveExt(base); ext != "" {
 		base = strings.TrimSuffix(base, ext)
 	}
+	base = strings.TrimSuffix(strings.TrimSuffix(base, ".yaml"), ".yml")
 	return filepath.Base(base)
 }
 
@@ -158,14 +160,27 @@ func copyTreeFiltered(src, dst string) error {
 	})
 }
 
+// renameDir — перенос каталога одной операцией; переменная — шов для тестов
+// (форсирует путь копирования, как при EXDEV).
+var renameDir = os.Rename
+
 // moveTree переносит каталог src в dst: сначала os.Rename (атомарно);
 // при ошибке (разные файловые системы, например /tmp → $HOME) —
 // копирование copyTreeFiltered + удаление src.
 func moveTree(src, dst string) error {
-	if err := os.Rename(src, dst); err == nil {
+	// Существующий dst не трогаем: иначе откат после сбоя копирования мог бы
+	// удалить чужие данные.
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("move tree: destination %s already exists", dst)
+	}
+	if err := renameDir(src, dst); err == nil {
 		return nil
 	}
 	if err := copyTreeFiltered(src, dst); err != nil {
+		// Частичное дерево не оставляем (dst создали мы).
+		if rmErr := os.RemoveAll(dst); rmErr != nil {
+			return fmt.Errorf("move tree: %w (remove partial %s: %v)", err, dst, rmErr)
+		}
 		return fmt.Errorf("move tree: %w", err)
 	}
 	return os.RemoveAll(src)

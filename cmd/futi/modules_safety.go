@@ -30,6 +30,16 @@ func validateModuleName(name string) error {
 	return nil
 }
 
+// validateSegmentsNoDot отвергает точку в сегментах пути размещения модуля
+// (имя при install, путь при init): точка — разделитель namespace, модуль
+// в каталоге/файле с точкой в имени discovery не резолвит.
+func validateSegmentsNoDot(name string) error {
+	if strings.Contains(name, ".") {
+		return fmt.Errorf("invalid module name %q: точка зарезервирована как разделитель namespace", name)
+	}
+	return nil
+}
+
 // validateResolveName проверяет имя, которое пойдёт в Source.Resolve
 // (uninstall, info, path, update, add_command, remove_command): namespace
 // только в точечной форме (a.b). Слэш запрещён: Resolve режет имя по ".",

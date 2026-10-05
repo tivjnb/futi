@@ -146,3 +146,63 @@ func TestRunModulesAddCommandDefaultCmd(t *testing.T) {
 		t.Fatalf("default cmd must be \"echo scan\", got %q", got)
 	}
 }
+
+// writeRawManifest пишет manifest с произвольным содержимым.
+func writeRawManifest(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestAddCommandEmptyManifest(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"empty", ""},
+		{"only comment", "# c\n"},
+		{"null document", "---\n"},
+		{"tilde", "~\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeRawManifest(t, tc.body)
+			if err := addCommandToManifest(path, "x", "echo x", ""); err != nil {
+				t.Fatalf("addCommandToManifest(%q): %v", tc.body, err)
+			}
+			mod, err := execmodule.LoadModule(path, filepath.Dir(path))
+			if err != nil {
+				t.Fatalf("LoadModule after add: %v", err)
+			}
+			if _, ok := mod.Commands["x"]; !ok {
+				t.Fatalf("command x not found after add to %q", tc.body)
+			}
+		})
+	}
+}
+
+func TestRemoveCommandEmptyManifest(t *testing.T) {
+	for _, body := range []string{"", "# c\n", "---\n", "~\n"} {
+		path := writeRawManifest(t, body)
+		err := removeCommandFromManifest(path, "x")
+		if err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("remove on %q: expected not-found error, got %v", body, err)
+		}
+	}
+}
+
+func TestAddCommandNonMappingRoot(t *testing.T) {
+	for _, body := range []string{"- a\n", "scalar\n"} {
+		path := writeRawManifest(t, body)
+		err := addCommandToManifest(path, "x", "echo x", "")
+		if err == nil || !strings.Contains(err.Error(), "not a mapping") {
+			t.Fatalf("add on %q: expected not-a-mapping error, got %v", body, err)
+		}
+		if err := removeCommandFromManifest(path, "x"); err == nil || !strings.Contains(err.Error(), "not a mapping") {
+			t.Fatalf("remove on %q: expected not-a-mapping error, got %v", body, err)
+		}
+		data, _ := os.ReadFile(path)
+		if string(data) != body {
+			t.Fatalf("file changed: %q, want %q", data, body)
+		}
+	}
+}

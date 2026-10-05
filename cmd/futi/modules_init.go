@@ -169,6 +169,23 @@ func targetFilePath(cfg *initConfig) (string, error) {
 	if strings.HasPrefix(rel, "..") {
 		return "", fmt.Errorf("path %q is outside the modules directory", cfg.path)
 	}
+	if err := validateSegmentsNoDot(strings.TrimSuffix(strings.TrimSuffix(rel, ".yaml"), ".yml")); err != nil {
+		return "", err
+	}
+	// discovery видит и x.yaml, и x/config.yaml: оба сразу дали бы конфликт.
+	if strings.HasSuffix(fullPath, ".yaml") {
+		dirConfig := filepath.Join(strings.TrimSuffix(fullPath, ".yaml"), "config.yaml")
+		if _, err := os.Stat(dirConfig); err == nil {
+			return "", fmt.Errorf("module %q already exists at %s", cfg.path, dirConfig)
+		}
+	}
+	// Симметрично: x/config.yaml при существующем x.yaml.
+	if filepath.Base(fullPath) == "config.yaml" && filepath.Dir(fullPath) != base {
+		siblingYAML := filepath.Dir(fullPath) + ".yaml"
+		if _, err := os.Stat(siblingYAML); err == nil {
+			return "", fmt.Errorf("module %q already exists at %s", cfg.path, siblingYAML)
+		}
+	}
 
 	return fullPath, nil
 }

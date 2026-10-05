@@ -16,6 +16,12 @@ import (
 	"futi/internal/modulerunner"
 )
 
+// writeMeta записывает lockfile при обновлении; переменная — шов для тестов.
+var writeMeta = metayaml.Write
+
+// removeBackup удаляет backup после успешного update; шов для тестов.
+var removeBackup = os.RemoveAll
+
 // updateArgs — аргументы `futi modules update`.
 type updateArgs struct {
 	name       string
@@ -69,21 +75,36 @@ func runModulesUpdate(w io.Writer, source discovery.Source, cache *modulecache.C
 	if err != nil {
 		return fmt.Errorf("modules update: %w", err)
 	}
-	entries := scanInstalled(roots)
+	entries, backups := scanRoots(roots)
+	for _, b := range backups {
+		fmt.Fprintf(os.Stderr, "Warning: found %s left by an interrupted update; inspect it and remove or restore it manually\n", b)
+	}
 	if len(entries) == 0 {
 		fmt.Fprintln(w, "No installed modules found.")
 		return nil
 	}
 
+	// Одноимённые модули из разных корней различаем в выводе путём каталога.
+	counts := make(map[string]int)
+	for _, e := range entries {
+		counts[e.Name]++
+	}
+
 	var failed []string
 	for _, e := range entries {
-		if err := updateOne(w, source, cache, e.Name, cfg.skipAttach); err != nil {
+		label := e.Name
+		if counts[e.Name] > 1 {
+			label = fmt.Sprintf("%s (%s)", e.Name, e.Dir)
+		}
+		// Обновляем именно найденный каталог, а не то, что отдаст Resolve по имени.
+		manifestPath := filepath.Join(e.Dir, "config.yaml")
+		if err := updateAt(w, cache, e.Name, label, e.Dir, manifestPath, cfg.skipAttach); err != nil {
 			// Прерывание печатает main возвращённой ошибкой — здесь не дублируем.
 			if _, interrupted := interruptSignal(err); interrupted {
-				return fmt.Errorf("update %s interrupted: %w", e.Name, err)
+				return fmt.Errorf("update %s interrupted: %w", label, err)
 			}
-			fmt.Fprintf(os.Stderr, "update %s: %v\n", e.Name, err)
-			failed = append(failed, e.Name)
+			fmt.Fprintf(os.Stderr, "update %s: %v\n", label, err)
+			failed = append(failed, label)
 		}
 	}
 	if len(failed) > 0 {
@@ -96,10 +117,40 @@ func runModulesUpdate(w io.Writer, source discovery.Source, cache *modulecache.C
 func updateOne(w io.Writer, source discovery.Source, cache *modulecache.Cache, name string, skipAttach bool) error {
 	manifestPath, moduleRoot, err := source.Resolve(name)
 	if err != nil {
-		return fmt.Errorf("resolve: %w", err)
+		return fmt.Errorf("resolve: %w%s", err, backupHint(name))
 	}
+	return updateAt(w, cache, name, name, moduleRoot, manifestPath, skipAttach)
+}
+
+// backupHint возвращает подсказку про оставшийся backup модуля name в одном из
+// корней или пустую строку.
+func backupHint(name string) string {
+	roots, err := moduleRoots()
+	if err != nil {
+		return ""
+	}
+	rel := filepath.FromSlash(strings.ReplaceAll(name, ".", "/"))
+	for _, root := range roots {
+		backup := filepath.Join(root, rel) + backupSuffix
+		if _, err := os.Lstat(backup); err == nil {
+			return fmt.Sprintf(" (found %s left by an interrupted update; inspect it and remove or restore it manually)", backup)
+		}
+	}
+	return ""
+}
+
+// updateAt обновляет модуль в конкретном каталоге moduleRoot. name — имя для
+// хука attach, label — подпись в сообщениях (имя или имя с путём).
+func updateAt(w io.Writer, cache *modulecache.Cache, name, label, moduleRoot, manifestPath string, skipAttach bool) error {
 	if filepath.Base(manifestPath) != "config.yaml" {
 		return fmt.Errorf("not a package module (updates require config.yaml packages)")
+	}
+
+	// Backup от прерванного update или неудавшегося отката может быть
+	// единственной рабочей копией — не удаляем, пока пользователь не разберётся.
+	backup := moduleRoot + backupSuffix
+	if _, err := os.Lstat(backup); err == nil {
+		return fmt.Errorf("previous update left a backup at %s; inspect it and remove or restore it manually", backup)
 	}
 
 	metaPath := filepath.Join(moduleRoot, metayaml.FileName)
@@ -147,20 +198,17 @@ func updateOne(w io.Writer, source discovery.Source, cache *modulecache.Cache, n
 		if err := metayaml.Write(metaPath, meta); err != nil {
 			return err
 		}
-		fmt.Fprintf(w, "%s: up to date\n", name)
+		fmt.Fprintf(w, "%s: up to date\n", label)
 		return nil
 	}
 
 	// Замена дерева: dest → backup, new → dest; при провале — восстановление.
-	backup := moduleRoot + ".futi-backup"
 	if err := os.Rename(moduleRoot, backup); err != nil {
 		return fmt.Errorf("backup old tree: %w", err)
 	}
 	if err := moveTree(moduleDir, moduleRoot); err != nil {
-		os.Rename(backup, moduleRoot) // восстановление старого дерева
-		return fmt.Errorf("install new tree: %w", err)
+		return restoreBackup(backup, moduleRoot, fmt.Errorf("install new tree: %w", err))
 	}
-	defer os.RemoveAll(backup)
 
 	// Lockfile: новый hash/commit/last_check; InstalledAt сохраняем.
 	// About: из источника (если есть), иначе старый (§4.1).
@@ -179,8 +227,13 @@ func updateOne(w io.Writer, source discovery.Source, cache *modulecache.Cache, n
 	if newMeta.About == nil {
 		newMeta.About = meta.About // старый about, если в источнике нет
 	}
-	if err := metayaml.Write(metaPath, newMeta); err != nil {
-		return err
+	if err := writeMeta(metaPath, newMeta); err != nil {
+		return restoreBackup(backup, moduleRoot, fmt.Errorf("write %s: %w", metayaml.FileName, err))
+	}
+	// Lockfile записан — backup больше не нужен. Ошибка удаления не фатальна, но
+	// оставшийся backup заблокирует следующий update — предупреждаем.
+	if err := removeBackup(backup); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: remove backup %s: %v\n", backup, err)
 	}
 
 	// attach: провал → warn, НЕ rollback (§3.1, §5.3 шаг 7).
@@ -203,6 +256,19 @@ func updateOne(w io.Writer, source discovery.Source, cache *modulecache.Cache, n
 		return interruptErr
 	}
 
-	fmt.Fprintf(w, "%s: updated\n", name)
+	fmt.Fprintf(w, "%s: updated\n", label)
 	return nil
+}
+
+// restoreBackup возвращает старое дерево из backup на место moduleRoot,
+// предварительно удалив новое (возможно, частичное). cause — исходная ошибка;
+// сбой отката дописывается к ней вместе с путём backup, где лежит рабочая копия.
+func restoreBackup(backup, moduleRoot string, cause error) error {
+	if err := os.RemoveAll(moduleRoot); err != nil {
+		return fmt.Errorf("%w (rollback failed: remove %s: %v; old tree is in %s)", cause, moduleRoot, err, backup)
+	}
+	if err := os.Rename(backup, moduleRoot); err != nil {
+		return fmt.Errorf("%w (rollback failed: %v; old tree is in %s)", cause, err, backup)
+	}
+	return cause
 }
