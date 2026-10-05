@@ -25,13 +25,15 @@ type entry struct {
 
 // cacheFile — формат на диске (gob-сериализуемый).
 type cacheFile struct {
-	Version         int              // версионирование схемы; текущая = 1
+	Version         int              // версионирование схемы; текущая = 2
 	LastRefreshTime time.Time        // для every_t_min политики
 	Entries         map[string]entry // только persistent (глобальные) модули
 }
 
 // Текущая версия схемы cacheFile. При несовпадении — rebuild с пустого состояния.
-const cacheFileVersion = 1
+// 2: ужесточены правила Validate (F75) — кэш версии 1 хранит модули, не
+// прошедшие новую валидацию, поэтому отбрасывается и модули перечитываются.
+const cacheFileVersion = 2
 
 // MemoryStorage — no-op хранилище: Load возвращает пустую cacheFile, Save ничего не делает.
 // Используется как fallback когда persistent кэш недоступен (нет home dir для cache path),
