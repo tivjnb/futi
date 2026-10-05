@@ -130,6 +130,16 @@ func runModulesInstall(w io.Writer, cache *modulecache.Cache, args []string) err
 		return err
 	}
 
+	// Относительный local-источник привязываем к cwd установки: update
+	// может запускаться из другого каталога. Считаем до переноса, чтобы ошибка
+	// не оставила модуль без meta.
+	lockSource := cfg.source
+	if kind == kindLocal {
+		if lockSource, err = filepath.Abs(cfg.source); err != nil {
+			return fmt.Errorf("modules install: %w", err)
+		}
+	}
+
 	root, err := installRoot(cfg.local)
 	if err != nil {
 		return fmt.Errorf("modules install: %w", err)
@@ -196,14 +206,6 @@ func runModulesInstall(w io.Writer, cache *modulecache.Cache, args []string) err
 		return fmt.Errorf("modules install: %w", err)
 	}
 	sourceMeta, _ := metayaml.Read(filepath.Join(dest, metayaml.FileName))
-	// Относительный local-источник привязываем к cwd установки: update
-	// может запускаться из другого каталога.
-	lockSource := cfg.source
-	if kind == kindLocal {
-		if lockSource, err = filepath.Abs(cfg.source); err != nil {
-			return fmt.Errorf("modules install: %w", err)
-		}
-	}
 	now := time.Now()
 	meta := metayaml.MergeAbout(&metayaml.Meta{
 		Lockfile: metayaml.Lockfile{
