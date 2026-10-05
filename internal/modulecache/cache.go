@@ -164,8 +164,10 @@ func hashFile(path string) ([]byte, error) {
 // для introspection (политика, версия). Используется когда Refresh будет вызван
 // явно (`futi cache refresh`) — устраняет двойной Refresh (Start + runCacheRefresh).
 //
-// Ошибка Load (повреждённый/несовместимый файл) — не фатальна: возвращается
-// пустая cacheFile, entries остаются пустыми. Ошибка логируется через log.Printf
+// Ошибка Load (повреждённый файл) — не фатальна: возвращается
+// пустая cacheFile, entries остаются пустыми. Несовместимая версия схемы и
+// чужая идентичность бинаря ошибкой не являются: storage тихо отдаёт пустую
+// cacheFile (без лога). Ошибка логируется через log.Printf
 // (консистентно с Save, который тоже логируется). При последующем Refresh кэш
 // заполнится заново.
 func (c *Cache) Load() cacheFile {
@@ -189,8 +191,8 @@ func (c *Cache) Load() cacheFile {
 // 2. Если policy.ShouldRefresh(state) → Refresh(globalSource).
 // 3. saveToStorage — сохраняет только persistentPaths.
 //
-// Ошибка Load (повреждённый/несовместимый файл) — не фатальна: rebuild с пустого
-// состояния. Если политика требует Refresh — кэш заполнится заново.
+// Ошибка Load (повреждённый файл) — не фатальна: rebuild с пустого состояния
+// (несовместимая версия и чужой бинарь — тихая перестройка без ошибки и лога). Если политика требует Refresh — кэш заполнится заново.
 // Ошибка Save — не фатальна: in-memory кэш актуален.
 func (c *Cache) Start(globalSource discovery.Source) error {
 	cf := c.Load()
