@@ -328,7 +328,11 @@ func TestFileIdentityResolvesSymlink(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlink: %v", err)
 	}
-	if a, b := fileIdentity(link, filepath.EvalSymlinks), fileIdentity(target, filepath.EvalSymlinks); a != b {
+	a, b := fileIdentity(link, filepath.EvalSymlinks), fileIdentity(target, filepath.EvalSymlinks)
+	if a == "" {
+		t.Fatal("identity via symlink is empty")
+	}
+	if a != b {
 		t.Fatalf("identity via symlink %q != identity of target %q", a, b)
 	}
 }

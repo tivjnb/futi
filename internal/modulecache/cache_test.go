@@ -1149,7 +1149,7 @@ func TestCacheLoadPopulatesEntries(t *testing.T) {
 }
 
 // TestCacheLoadOnCorruptedStorageReturnsEmpty проверяет, что при ошибке Load
-// (повреждённый/несовместимый файл) Load возвращает пустую cacheFile и не падает.
+// (повреждённый файл) Load возвращает пустую cacheFile и не падает.
 func TestCacheLoadOnCorruptedStorageReturnsEmpty(t *testing.T) {
 	storage := &fakeStorage{loadErr: errCorruptedForTest}
 	cache := New(storage, ForceOnlyPolicy{})
