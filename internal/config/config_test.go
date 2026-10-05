@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -167,6 +168,103 @@ sources:
 	}
 	if cfg.Cache.Time != "" {
 		t.Fatalf("expected empty time, got %q", cfg.Cache.Time)
+	}
+}
+
+func TestLoadExpandsTilde(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, "sources:\n  - path: ~/mods\n  - path: \"~\"\n")
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, want := cfg.Sources[0].Path, filepath.Join(home, "mods"); got != want {
+		t.Fatalf("source[0].Path = %q, want %q", got, want)
+	}
+	if got, want := cfg.Sources[1].Path, filepath.Clean(home); got != want {
+		t.Fatalf("source[1].Path = %q, want %q", got, want)
+	}
+}
+
+func TestLoadRelativeSourcePathFromConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(t.TempDir())
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, "sources:\n  - path: mods\n  - path: ./mods\n  - path: ../shared\n  - path: a/../b\n")
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{
+		filepath.Join(dir, "mods"),
+		filepath.Join(dir, "mods"),
+		filepath.Join(filepath.Dir(dir), "shared"),
+		filepath.Join(dir, "b"),
+	}
+	for i, w := range want {
+		if cfg.Sources[i].Path != w {
+			t.Errorf("source[%d].Path = %q, want %q", i, cfg.Sources[i].Path, w)
+		}
+	}
+}
+
+func TestLoadRelativeConfigPathArgument(t *testing.T) {
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "rel"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(base, "rel", "config.yaml"), "sources:\n  - path: mods\n")
+	t.Chdir(base)
+
+	cfg, err := Load(filepath.Join("rel", "config.yaml"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := cfg.Sources[0].Path
+	if !filepath.IsAbs(got) {
+		t.Fatalf("source[0].Path = %q, want absolute", got)
+	}
+	// cwd после Chdir может отличаться символическими ссылками от base.
+	if !strings.HasSuffix(got, filepath.Join("rel", "mods")) {
+		t.Fatalf("source[0].Path = %q, want suffix rel/mods", got)
+	}
+}
+
+func TestLoadAbsoluteSourcePathUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	abs := filepath.Join(t.TempDir(), "abs")
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, "sources:\n  - path: "+abs+"\n  - path: "+abs+"/x/../y\n")
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Sources[0].Path != abs {
+		t.Errorf("source[0].Path = %q, want %q", cfg.Sources[0].Path, abs)
+	}
+	if want := filepath.Join(abs, "y"); cfg.Sources[1].Path != want {
+		t.Errorf("source[1].Path = %q, want %q", cfg.Sources[1].Path, want)
+	}
+}
+
+func TestLoadTildeUserRejected(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, "sources:\n  - path: ~bob/x\n")
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for ~user path")
+	}
+	if !strings.Contains(err.Error(), "source[0]") {
+		t.Fatalf("error %q does not mention source[0]", err)
 	}
 }
 

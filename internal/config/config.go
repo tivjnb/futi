@@ -85,10 +85,21 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: parse %q: %w", path, err)
 	}
 
+	absCfgPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("config: abs path %q: %w", path, err)
+	}
+	cfgDir := filepath.Dir(absCfgPath)
+
 	for i, sc := range cfg.Sources {
 		if sc.Path == "" {
 			return nil, fmt.Errorf("config: source[%d]: path is required", i)
 		}
+		resolved, err := resolveSourcePath(sc.Path, cfgDir)
+		if err != nil {
+			return nil, fmt.Errorf("config: source[%d]: %w", i, err)
+		}
+		cfg.Sources[i].Path = resolved
 		if sc.Mountpoint != "" {
 			sc.Mountpoint = strings.Trim(sc.Mountpoint, ".")
 			cfg.Sources[i].Mountpoint = sc.Mountpoint
@@ -100,4 +111,26 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// resolveSourcePath приводит path источника к очищенному абсолютному виду:
+// "~" и "~/…" — от домашнего каталога, относительный путь — от каталога
+// config.yaml (а не от cwd), абсолютный — без изменений. "~имя/…" — ошибка:
+// иначе опечатка молча превратилась бы в пустой источник внутри каталога конфига.
+func resolveSourcePath(p, cfgDir string) (string, error) {
+	if strings.HasPrefix(p, "~") {
+		rest := p[1:]
+		if rest != "" && rest[0] != '/' && rest[0] != filepath.Separator {
+			return "", fmt.Errorf("path %q: ~user is not supported, use ~/… or an absolute path", p)
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("path %q: get home dir: %w", p, err)
+		}
+		return filepath.Join(home, rest), nil
+	}
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p), nil
+	}
+	return filepath.Join(cfgDir, p), nil
 }

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -1545,6 +1546,43 @@ cache:
 	}
 	if src == nil {
 		t.Fatal("expected non-nil source")
+	}
+}
+
+// TestCreateGlobalSourceExpandsTildeAndRelativePaths: `~/…` и относительный
+// path в config.yaml не зависят от cwd (audit F64).
+func TestCreateGlobalSourceExpandsTildeAndRelativePaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("FUTI_MODULES_DIR", "")
+
+	cfgDir := filepath.Join(home, ".config", "futi")
+	for _, d := range []string{"modules", "extra"} {
+		if err := os.MkdirAll(filepath.Join(cfgDir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeMainTestFile(t, filepath.Join(cfgDir, "modules", "a.yaml"), "name: a\ncommands:\n  run:\n    cmd: echo a\n")
+	writeMainTestFile(t, filepath.Join(cfgDir, "extra", "b.yaml"), "name: b\ncommands:\n  run:\n    cmd: echo b\n")
+	writeMainTestFile(t, filepath.Join(cfgDir, "config.yaml"), "sources:\n  - path: ~/.config/futi/modules\n  - path: extra\n")
+	t.Chdir(t.TempDir())
+
+	_, src, err := createGlobalSource()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	mods, err := src.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var names []string
+	for _, m := range mods {
+		names = append(names, m.Name)
+	}
+	sort.Strings(names)
+	if got := strings.Join(names, ","); got != "a,b" {
+		t.Fatalf("modules = %q, want %q", got, "a,b")
 	}
 }
 
