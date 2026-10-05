@@ -198,3 +198,44 @@ func TestRunModulesInstallInvalidatesCache(t *testing.T) {
 		t.Fatalf("cache must be invalidated after install, got %d entries", got)
 	}
 }
+
+func TestRunModulesInstallLocalSourceAbsInLockfile(t *testing.T) {
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	cwd := t.TempDir()
+	makeSourceModule(t, cwd, "mod", "")
+	t.Chdir(cwd)
+
+	if err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{"./mod"}); err != nil {
+		t.Fatalf("runModulesInstall: %v", err)
+	}
+	meta, err := metayaml.Read(filepath.Join(os.Getenv("FUTI_MODULES_DIR"), "mod", metayaml.FileName))
+	if err != nil {
+		t.Fatalf("meta not written: %v", err)
+	}
+	want := filepath.Join(cwd, "mod")
+	if meta.Lockfile.Source != want {
+		t.Fatalf("lockfile source: got %q, want %q", meta.Lockfile.Source, want)
+	}
+}
+
+func TestRunModulesInstallLocalFlagHookAbsRoot(t *testing.T) {
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	attach := "attach: \"test -d {{.module_root}} && echo {{.module_root}} $FUTI_MODULE_ROOT > $FUTI_MODULE_ROOT/roots\"\n"
+	src := makeSourceModule(t, t.TempDir(), "qr", attach)
+
+	if err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src, "--local"}); err != nil {
+		t.Fatalf("runModulesInstall: %v", err)
+	}
+	dest := filepath.Join(cwd, ".futi", "qr")
+	data, err := os.ReadFile(filepath.Join(dest, "roots"))
+	if err != nil {
+		t.Fatalf("hook did not write roots: %v", err)
+	}
+	want := dest + " " + dest
+	if got := strings.TrimSpace(string(data)); got != want {
+		t.Fatalf("hook roots: got %q, want %q", got, want)
+	}
+}

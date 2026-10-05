@@ -96,3 +96,22 @@ func TestRunHookInheritsStdin(t *testing.T) {
 		t.Fatalf("out = %q, want %q", got, "data")
 	}
 }
+
+func TestRunHookRelativeModuleRootIsAbsolute(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	if err := os.MkdirAll(filepath.Join("rel", "mod"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err := RunHook(context.Background(),
+		`echo $FUTI_MODULE_ROOT {{.module_root}}`, filepath.Join("rel", "mod"), "m", &out, &out)
+	if err != nil {
+		t.Fatalf("RunHook: %v", err)
+	}
+	abs := filepath.Join(cwd, "rel", "mod")
+	want := abs + " " + abs
+	if got := strings.TrimSpace(out.String()); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

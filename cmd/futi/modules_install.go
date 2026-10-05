@@ -104,7 +104,8 @@ func parseInstallArgs(args []string) (*installArgs, error) {
 // глобальный каталог (FUTI_MODULES_DIR или default).
 func installRoot(local bool) (string, error) {
 	if local {
-		return ".futi", nil
+		// Абсолютный путь: dest попадает в cwd и module_root хука.
+		return filepath.Abs(".futi")
 	}
 	dir := os.Getenv("FUTI_MODULES_DIR")
 	if dir == "" {
@@ -185,10 +186,18 @@ func runModulesInstall(w io.Writer, cache *modulecache.Cache, args []string) err
 		return fmt.Errorf("modules install: %w", err)
 	}
 	sourceMeta, _ := metayaml.Read(filepath.Join(dest, metayaml.FileName))
+	// Относительный local-источник привязываем к cwd установки: update
+	// может запускаться из другого каталога.
+	lockSource := cfg.source
+	if kind == kindLocal {
+		if lockSource, err = filepath.Abs(cfg.source); err != nil {
+			return fmt.Errorf("modules install: %w", err)
+		}
+	}
 	now := time.Now()
 	meta := metayaml.MergeAbout(&metayaml.Meta{
 		Lockfile: metayaml.Lockfile{
-			Source:      cfg.source,
+			Source:      lockSource,
 			Type:        kind.String(),
 			Ref:         cfg.ref,
 			Commit:      commit,
