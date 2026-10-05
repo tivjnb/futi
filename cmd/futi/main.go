@@ -653,8 +653,9 @@ CONFIGURATION
         mountpoint: dev
         mount_as_namespace: tools
 
-  path              Module directory; ~ is the home dir, a relative path is
-                    resolved from the directory of config.yaml
+  path              Module directory; ~/... is relative to the home dir (the bare
+                    home dir needs quotes: "~", a bare ~ is YAML null), a
+                    relative path is resolved from the directory of config.yaml
   mountpoint       Mount source contents under this namespace (default: root)
   mount_as_namespace  Wrap source contents under an extra namespace level
 
