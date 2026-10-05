@@ -1631,3 +1631,62 @@ func TestCacheFileOfPreviousVersionDoesNotBypassValidate(t *testing.T) {
 		t.Fatal("LoadModuleVerified: module with reserved param name loaded from old-version cache without error")
 	}
 }
+
+// TestStartStaleBinaryReloadsModuleFromDisk (audit F39): кэш, сохранённый другой
+// сборкой futi, не должен обходить перечитывание, даже если mtime, size и hash
+// манифеста совпадают: Module в нём мог быть разобран и проверен старой версией.
+func TestStartStaleBinaryReloadsModuleFromDisk(t *testing.T) {
+	policies := map[string]RefreshPolicy{
+		"every_time": AlwaysPolicy{},
+		"force_only": ForceOnlyPolicy{},
+	}
+	for name, policy := range policies {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			manifest := filepath.Join(dir, "m.yaml")
+			writeFile(t, manifest, "name: m\ncmd: echo disk\n")
+			info, err := os.Stat(manifest)
+			if err != nil {
+				t.Fatalf("stat: %v", err)
+			}
+			h, err := hashFile(manifest)
+			if err != nil {
+				t.Fatalf("hashFile: %v", err)
+			}
+
+			path := filepath.Join(t.TempDir(), "cache.gob")
+			stale := cacheFile{
+				Version: cacheFileVersion,
+				Entries: map[string]entry{manifest: {
+					Module:  &execmodule.Module{Name: "m", Cmd: "echo stale"},
+					ModTime: info.ModTime(),
+					Size:    info.Size(),
+					Hash:    h,
+				}},
+			}
+			if err := newDiskStorageWithID(path, "old").Save(stale); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+
+			cache := New(newDiskStorageWithID(path, "new"), policy)
+			if err := cache.Start(discovery.NewGlobalSource(dir)); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+
+			mod, err := cache.LoadModule(manifest, dir)
+			if err != nil {
+				t.Fatalf("LoadModule: %v", err)
+			}
+			if mod.Cmd != "echo disk" {
+				t.Fatalf("LoadModule: Cmd = %q, want %q (module from stale cache)", mod.Cmd, "echo disk")
+			}
+			mod, err = cache.LoadModuleVerified(manifest, dir)
+			if err != nil {
+				t.Fatalf("LoadModuleVerified: %v", err)
+			}
+			if mod.Cmd != "echo disk" {
+				t.Fatalf("LoadModuleVerified: Cmd = %q, want %q (module from stale cache)", mod.Cmd, "echo disk")
+			}
+		})
+	}
+}

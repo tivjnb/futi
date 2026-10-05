@@ -28,11 +28,14 @@ type cacheFile struct {
 	Version         int              // версионирование схемы; текущая = 2
 	LastRefreshTime time.Time        // для every_t_min политики
 	Entries         map[string]entry // только persistent (глобальные) модули
+	BinaryID        string           // идентичность бинаря futi, записавшего файл (см. DiskStorage)
 }
 
 // Текущая версия схемы cacheFile. При несовпадении — rebuild с пустого состояния.
-// 2: ужесточены правила Validate (F75) — кэш версии 1 хранит модули, не
-// прошедшие новую валидацию, поэтому отбрасывается и модули перечитываются.
+// Схема Module и правила Validate покрываются идентичностью бинаря
+// (cacheFile.BinaryID), поэтому поднимать версию ради них не нужно. Ручной
+// подъём нужен только при несовместимом изменении формата самого cacheFile,
+// которое gob не переварит.
 const cacheFileVersion = 2
 
 // MemoryStorage — no-op хранилище: Load возвращает пустую cacheFile, Save ничего не делает.

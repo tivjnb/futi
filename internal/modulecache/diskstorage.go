@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 )
 
 // DiskStorage — persistent хранилище кэша в gob-файле на диске.
@@ -12,14 +14,46 @@ import (
 // Путь: обычно ~/.cache/futi/modulecache.gob (через os.UserCacheDir()).
 // Save использует атомарную запись: temp file + rename — предотвращает
 // частичную запись при краше процесса.
+//
+// Файл привязан к идентичности бинаря futi, записавшего его: после
+// обновления или пересборки futi Module и правила Validate могли измениться,
+// поэтому чужой кэш не используется.
 type DiskStorage struct {
-	path string
+	path     string
+	binaryID string // идентичность текущего бинаря; "" = не определена
+}
+
+var (
+	executableIDOnce  sync.Once
+	executableIDValue string
+)
+
+// executableID возвращает идентичность исполняемого файла текущего процесса
+// (mtime в наносекундах и размер) или "" при любой ошибке. Вычисляется один
+// раз на процесс.
+func executableID() string {
+	executableIDOnce.Do(func() {
+		exe, err := os.Executable()
+		if err != nil {
+			return
+		}
+		exe, err = filepath.EvalSymlinks(exe)
+		if err != nil {
+			return
+		}
+		info, err := os.Stat(exe)
+		if err != nil {
+			return
+		}
+		executableIDValue = strconv.FormatInt(info.ModTime().UnixNano(), 10) + ":" + strconv.FormatInt(info.Size(), 10)
+	})
+	return executableIDValue
 }
 
 // NewDiskStorage создаёт DiskStorage для заданного пути.
 // Родительский каталог создаётся при Save (если отсутствует).
 func NewDiskStorage(path string) *DiskStorage {
-	return &DiskStorage{path: path}
+	return &DiskStorage{path: path, binaryID: executableID()}
 }
 
 // Load загружает cacheFile из gob-файла.
@@ -27,6 +61,9 @@ func NewDiskStorage(path string) *DiskStorage {
 // Если файл повреждён — возвращает error (вызывающий решает: rebuild).
 // Если версия схемы не совпадает с cacheFileVersion — возвращает error,
 // чтобы Start перестроил кэш с пустого состояния (спека, раздел 2, 10).
+// Если идентичность бинаря не определена или не совпадает с записанной (в том
+// числе у файла старого формата без неё) — возвращает пустую cacheFile без
+// ошибки и без лога: это штатно после каждого обновления futi.
 func (d *DiskStorage) Load() (cacheFile, error) {
 	f, err := os.Open(d.path)
 	if err != nil {
@@ -46,6 +83,9 @@ func (d *DiskStorage) Load() (cacheFile, error) {
 	if cf.Version != cacheFileVersion {
 		return cacheFile{}, fmt.Errorf("modulecache: cache file %q version mismatch: got %d, want %d (rebuilding)", d.path, cf.Version, cacheFileVersion)
 	}
+	if d.binaryID == "" || cf.BinaryID != d.binaryID {
+		return cacheFile{}, nil
+	}
 	return cf, nil
 }
 
@@ -54,6 +94,7 @@ func (d *DiskStorage) Load() (cacheFile, error) {
 // Атомарность: пишет во временный файл, затем rename — предотвращает
 // частичную запись при краше.
 func (d *DiskStorage) Save(cf cacheFile) error {
+	cf.BinaryID = d.binaryID
 	if err := os.MkdirAll(filepath.Dir(d.path), 0o755); err != nil {
 		return fmt.Errorf("modulecache: create cache dir %q: %w", filepath.Dir(d.path), err)
 	}

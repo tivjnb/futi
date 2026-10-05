@@ -194,3 +194,97 @@ func TestDiskStorageLoadAcceptsCurrentVersion(t *testing.T) {
 		t.Fatalf("expected 1 entry, got %d", len(loaded.Entries))
 	}
 }
+
+// newDiskStorageWithID — DiskStorage с заданной идентичностью бинаря (для тестов).
+func newDiskStorageWithID(path, id string) *DiskStorage {
+	s := NewDiskStorage(path)
+	s.binaryID = id
+	return s
+}
+
+func sampleCacheFile() cacheFile {
+	return cacheFile{
+		Version: cacheFileVersion,
+		Entries: map[string]entry{"/m.yaml": {Size: 7}},
+	}
+}
+
+// Файл, сохранённый другой сборкой futi, не используется: пустой cacheFile, без ошибки.
+func TestDiskStorageBinaryIDMismatchIgnoresCache(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache.gob")
+	if err := newDiskStorageWithID(path, "a").Save(sampleCacheFile()); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cf, err := newDiskStorageWithID(path, "b").Load()
+	if err != nil {
+		t.Fatalf("Load: unexpected error %v", err)
+	}
+	if len(cf.Entries) != 0 {
+		t.Fatalf("Load with id b after Save with id a: got %d entries, want 0", len(cf.Entries))
+	}
+}
+
+func TestDiskStorageBinaryIDMatchKeepsCache(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache.gob")
+	if err := newDiskStorageWithID(path, "a").Save(sampleCacheFile()); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cf, err := newDiskStorageWithID(path, "a").Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cf.Entries) != 1 || cf.Entries["/m.yaml"].Size != 7 {
+		t.Fatalf("Load with same id: got %+v, want 1 entry with Size 7", cf.Entries)
+	}
+}
+
+// Неопределённая идентичность (пустая) не совпадает даже с пустой записанной.
+func TestDiskStorageEmptyBinaryIDNeverMatches(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache.gob")
+	if err := newDiskStorageWithID(path, "").Save(sampleCacheFile()); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cf, err := newDiskStorageWithID(path, "").Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cf.Entries) != 0 {
+		t.Fatalf("Load with empty ids: got %d entries, want 0", len(cf.Entries))
+	}
+}
+
+// Файл старого формата v2 (без поля BinaryID) считается устаревшим, без ошибки.
+func TestDiskStorageLegacyFileWithoutBinaryID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache.gob")
+	legacy := struct {
+		Version         int
+		LastRefreshTime time.Time
+		Entries         map[string]entry
+	}{Version: cacheFileVersion, Entries: map[string]entry{"/m.yaml": {Size: 7}}}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := gob.NewEncoder(f).Encode(legacy); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	f.Close()
+
+	cf, err := newDiskStorageWithID(path, "a").Load()
+	if err != nil {
+		t.Fatalf("Load: unexpected error %v", err)
+	}
+	if len(cf.Entries) != 0 {
+		t.Fatalf("Load legacy file: got %d entries, want 0", len(cf.Entries))
+	}
+}
+
+func TestExecutableIDNonEmpty(t *testing.T) {
+	first := executableID()
+	if first == "" {
+		t.Fatal("executableID() is empty in test process")
+	}
+	if second := executableID(); second != first {
+		t.Fatalf("executableID() not stable: %q then %q", first, second)
+	}
+}
