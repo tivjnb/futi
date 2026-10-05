@@ -74,9 +74,7 @@ func Run(
 ) error {
 	// Исполняемый модуль загружаем со строгой проверкой свежести/аутентичности
 	// (SHA-256). list/completion/help используют обычный LoadModule (быстрый).
-	r, err := resolveCommand(source, namespace, command, func(manifestPath, moduleRoot string) (*execmodule.Module, error) {
-		return LoadModuleVerified(loader, manifestPath, moduleRoot)
-	})
+	r, err := resolveCommand(source, namespace, command, loader)
 	if err != nil {
 		return err
 	}
@@ -142,9 +140,7 @@ type resolvedCommand struct {
 // привязка флагов могла бы разойтись со схемой, по которой Run валидирует.
 // Ошибки те же, что у Run до валидации параметров.
 func ResolveCommand(source discovery.Source, loader ModuleLoader, namespace, command string) (*execmodule.Command, error) {
-	r, err := resolveCommand(source, namespace, command, func(manifestPath, moduleRoot string) (*execmodule.Module, error) {
-		return LoadModuleVerified(loader, manifestPath, moduleRoot)
-	})
+	r, err := resolveCommand(source, namespace, command, loader)
 	if err != nil {
 		return nil, err
 	}
@@ -153,11 +149,11 @@ func ResolveCommand(source discovery.Source, loader ModuleLoader, namespace, com
 
 // resolveCommand — общий progressive resolution для Run и ResolveCommand:
 // пробует резолвить модуль от длиннейшего namespace к коротчайшему, остаток =
-// command path. load определяет способ загрузки модуля.
+// command path. Модуль грузится через LoadModuleVerified.
 func resolveCommand(
 	source discovery.Source,
 	namespace, command string,
-	load func(manifestPath, moduleRoot string) (*execmodule.Module, error),
+	loader ModuleLoader,
 ) (*resolvedCommand, error) {
 	// Реконструкция positional args из namespace + command.
 	var positional []string
@@ -184,7 +180,7 @@ func resolveCommand(
 			return nil, fmt.Errorf("modulerunner: %w", err)
 		}
 
-		mod, err := load(manifestPath, moduleRoot)
+		mod, err := LoadModuleVerified(loader, manifestPath, moduleRoot)
 		if err != nil {
 			return nil, fmt.Errorf("modulerunner: %w", err)
 		}
