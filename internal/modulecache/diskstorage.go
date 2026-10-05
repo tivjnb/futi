@@ -29,25 +29,32 @@ var (
 )
 
 // executableID возвращает идентичность исполняемого файла текущего процесса
-// (mtime в наносекундах и размер) или "" при любой ошибке. Вычисляется один
-// раз на процесс.
+// (см. fileIdentity) или "" при любой ошибке. Вычисляется один раз на процесс.
 func executableID() string {
 	executableIDOnce.Do(func() {
 		exe, err := os.Executable()
 		if err != nil {
 			return
 		}
-		exe, err = filepath.EvalSymlinks(exe)
-		if err != nil {
-			return
-		}
-		info, err := os.Stat(exe)
-		if err != nil {
-			return
-		}
-		executableIDValue = strconv.FormatInt(info.ModTime().UnixNano(), 10) + ":" + strconv.FormatInt(info.Size(), 10)
+		executableIDValue = fileIdentity(exe, filepath.EvalSymlinks)
 	})
 	return executableIDValue
+}
+
+// fileIdentity строит идентичность файла: реальный путь (после evalSymlinks) +
+// mtime в наносекундах + размер. Путь нужен, потому что на Nix/Guix у всех
+// файлов mtime=1, а cp -p / install -p / rsync -t сохраняют mtime: новый бинарь
+// того же размера иначе выдавал бы старую идентичность. Если evalSymlinks
+// вернул ошибку — используется неразрешённый путь. "" — только если не удался Stat.
+func fileIdentity(exe string, evalSymlinks func(string) (string, error)) string {
+	if resolved, err := evalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	info, err := os.Stat(exe)
+	if err != nil {
+		return ""
+	}
+	return exe + ":" + strconv.FormatInt(info.ModTime().UnixNano(), 10) + ":" + strconv.FormatInt(info.Size(), 10)
 }
 
 // NewDiskStorage создаёт DiskStorage для заданного пути.
@@ -59,11 +66,11 @@ func NewDiskStorage(path string) *DiskStorage {
 // Load загружает cacheFile из gob-файла.
 // Если файл отсутствует — возвращает пустую cacheFile без ошибки.
 // Если файл повреждён — возвращает error (вызывающий решает: rebuild).
-// Если версия схемы не совпадает с cacheFileVersion — возвращает error,
-// чтобы Start перестроил кэш с пустого состояния (спека, раздел 2, 10).
-// Если идентичность бинаря не определена или не совпадает с записанной (в том
-// числе у файла старого формата без неё) — возвращает пустую cacheFile без
-// ошибки и без лога: это штатно после каждого обновления futi.
+// Если версия схемы не совпадает с cacheFileVersion, а также если идентичность
+// бинаря не определена или не совпадает с записанной (в том числе у файла
+// старого формата без неё) — возвращает пустую cacheFile без ошибки и без
+// лога: это штатно после каждого обновления futi (кэш перестраивается с
+// пустого состояния; строка в stderr попала бы в вывод futi __complete).
 func (d *DiskStorage) Load() (cacheFile, error) {
 	f, err := os.Open(d.path)
 	if err != nil {
@@ -78,12 +85,9 @@ func (d *DiskStorage) Load() (cacheFile, error) {
 	if err := gob.NewDecoder(f).Decode(&cf); err != nil {
 		return cacheFile{}, fmt.Errorf("modulecache: decode cache file %q: %w", d.path, err)
 	}
-	// Проверка версии схемы: при несовпадении (новая версия futi с другим
-	// форматом) — error, вызывающий (Cache.Start) rebuild-ит с пустого состояния.
-	if cf.Version != cacheFileVersion {
-		return cacheFile{}, fmt.Errorf("modulecache: cache file %q version mismatch: got %d, want %d (rebuilding)", d.path, cf.Version, cacheFileVersion)
-	}
-	if d.binaryID == "" || cf.BinaryID != d.binaryID {
+	// Другая версия схемы или чужая идентичность бинаря — ожидаемо после
+	// обновления/отката futi: тихая перестройка с пустого состояния.
+	if cf.Version != cacheFileVersion || d.binaryID == "" || cf.BinaryID != d.binaryID {
 		return cacheFile{}, nil
 	}
 	return cf, nil

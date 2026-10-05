@@ -25,18 +25,21 @@ type entry struct {
 
 // cacheFile — формат на диске (gob-сериализуемый).
 type cacheFile struct {
-	Version         int              // версионирование схемы; текущая = 2
+	Version         int              // версионирование схемы; текущая = 3
 	LastRefreshTime time.Time        // для every_t_min политики
 	Entries         map[string]entry // только persistent (глобальные) модули
 	BinaryID        string           // идентичность бинаря futi, записавшего файл (см. DiskStorage)
 }
 
-// Текущая версия схемы cacheFile. При несовпадении — rebuild с пустого состояния.
-// Схема Module и правила Validate покрываются идентичностью бинаря
-// (cacheFile.BinaryID), поэтому поднимать версию ради них не нужно. Ручной
-// подъём нужен только при несовместимом изменении формата самого cacheFile,
-// которое gob не переварит.
-const cacheFileVersion = 2
+// Текущая версия схемы cacheFile. При несовпадении — тихая перестройка с
+// пустого состояния (DiskStorage.Load возвращает пустой cacheFile без ошибки).
+// История: 3 — добавлено поле идентичности бинаря (BinaryID); gob молча
+// пропускает неизвестное поле, и без подъёма версии бинари версии 2 принимали
+// бы кэш, записанный новым бинарём (откат, две установки рядом).
+// Схема Module и правила Validate покрываются идентичностью бинаря, поэтому
+// ради них версию поднимать не нужно; ручной подъём — при несовместимом
+// изменении формата самого cacheFile.
+const cacheFileVersion = 3
 
 // MemoryStorage — no-op хранилище: Load возвращает пустую cacheFile, Save ничего не делает.
 // Используется как fallback когда persistent кэш недоступен (нет home dir для cache path),
@@ -59,8 +62,9 @@ func (MemoryStorage) Clear() error { return nil }
 //   - MemoryStorage — no-op для HTTP (будущее, не реализован).
 type Storage interface {
 	// Load загружает состояние. Возвращает пустую cacheFile (без ошибки), если
-	// storage пуст (файл отсутствует). Возвращает error при повреждении или
-	// несовместимой версии — вызывающий решает: rebuild.
+	// storage пуст (файл отсутствует) или устарел (другая версия схемы,
+	// другой бинарь futi) — это штатная тихая перестройка. Возвращает error
+	// при повреждении — вызывающий решает: rebuild.
 	Load() (cacheFile, error)
 
 	// Save сохраняет cacheFile целиком (Version, LastRefreshTime, Entries).
