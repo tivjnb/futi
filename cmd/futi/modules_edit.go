@@ -43,6 +43,27 @@ func scalarStr(s string) *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s}
 }
 
+// manifestRoot возвращает корневой mapping документа. Пустой документ (нет нод
+// или только комментарии): при create создаётся корневой mapping, иначе
+// возвращается nil (findMappingValue корректно работает с nil). Корень не
+// mapping — ошибка.
+func manifestRoot(doc *yaml.Node, path string, create bool) (*yaml.Node, error) {
+	if len(doc.Content) == 0 {
+		if !create {
+			return nil, nil
+		}
+		root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		doc.Kind = yaml.DocumentNode
+		doc.Content = []*yaml.Node{root}
+		return root, nil
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("manifest root is not a mapping in %s", path)
+	}
+	return root, nil
+}
+
 // addCommandToManifest добавляет команду cmdName в commands: манифеста path.
 // cmdStr — тело команды; desc — описание (опционально).
 // Ошибка, если команда уже существует. После записи манифест валидируется;
@@ -57,7 +78,10 @@ func addCommandToManifest(path, cmdName, cmdStr, desc string) error {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return fmt.Errorf("parse manifest: %w", err)
 	}
-	root := doc.Content[0]
+	root, err := manifestRoot(&doc, path, true)
+	if err != nil {
+		return err
+	}
 
 	commands := ensureMapping(root, "commands")
 	if findMappingValue(commands, cmdName) != nil {
@@ -86,7 +110,10 @@ func removeCommandFromManifest(path, cmdName string) error {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return fmt.Errorf("parse manifest: %w", err)
 	}
-	root := doc.Content[0]
+	root, err := manifestRoot(&doc, path, false)
+	if err != nil {
+		return err
+	}
 
 	commands := findMappingValue(root, "commands")
 	if commands == nil {
