@@ -69,8 +69,8 @@ func TestRunModulesUpdateSourceChanged(t *testing.T) {
 	if err := runModulesUpdate(&b, discovery.NewGlobalSource(global), cache, []string{"qr"}); err != nil {
 		t.Fatalf("runModulesUpdate: %v", err)
 	}
-	if !strings.Contains(b.String(), "updated") {
-		t.Fatalf("unexpected output: %s", b.String())
+	if b.String() != "qr: updated\n" {
+		t.Fatalf("unexpected output: %q", b.String())
 	}
 
 	data, _ := os.ReadFile(filepath.Join(global, "qr", "config.yaml"))
@@ -350,7 +350,56 @@ func TestRunModulesUpdateAllUpdatesEachDir(t *testing.T) {
 		}
 	}
 	// Одноимённые модули различаются в выводе путём каталога.
-	if !strings.Contains(b.String(), "tool ("+filepath.Join(global, "tool")+"): updated") {
-		t.Errorf("output must name global dir: %s", b.String())
+	for _, dir := range []string{filepath.Join(global, "tool"), filepath.Join(project, ".futi", "tool")} {
+		if !strings.Contains(b.String(), "tool ("+dir+"): updated") {
+			t.Errorf("output must name %s: %s", dir, b.String())
+		}
+	}
+}
+
+// Ошибка одного из одноимённых модулей несёт подпись с путём; второй
+// модуль всё равно обновляется.
+func TestRunModulesUpdateAllSameNameErrorLabelled(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	project := t.TempDir()
+	t.Chdir(project)
+
+	srcGlobal := makeSourceModule(t, t.TempDir(), "tool", "")
+	srcLocal := makeSourceModule(t, t.TempDir(), "tool", "")
+	cache := newTestCache()
+	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{srcGlobal}); err != nil {
+		t.Fatalf("install global: %v", err)
+	}
+	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{srcLocal, "--local"}); err != nil {
+		t.Fatalf("install local: %v", err)
+	}
+	if err := os.RemoveAll(srcGlobal); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(srcLocal, "config.yaml"), "name: tool\ncommands:\n  run:\n    cmd: echo local-v2\n")
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	origStderr := os.Stderr
+	os.Stderr = w
+	updErr := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, nil)
+	os.Stderr = origStderr
+	w.Close()
+	var captured bytes.Buffer
+	captured.ReadFrom(r)
+
+	globalLabel := "tool (" + filepath.Join(global, "tool") + ")"
+	if updErr == nil || !strings.Contains(updErr.Error(), "failed to update: "+globalLabel) {
+		t.Fatalf("want failed to update with %q, got %v", globalLabel, updErr)
+	}
+	if !strings.Contains(captured.String(), "update "+globalLabel+":") {
+		t.Errorf("stderr must contain labelled error: %s", captured.String())
+	}
+	data, _ := os.ReadFile(filepath.Join(project, ".futi", "tool", "config.yaml"))
+	if !strings.Contains(string(data), "echo local-v2") {
+		t.Errorf("local must be updated:\n%s", data)
 	}
 }
