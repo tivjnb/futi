@@ -234,8 +234,12 @@ func TestLoadRelativeConfigPathArgument(t *testing.T) {
 		t.Fatalf("source[0].Path = %q, want absolute", got)
 	}
 	// cwd после Chdir может отличаться символическими ссылками от base.
-	if !strings.HasSuffix(got, filepath.Join("rel", "mods")) {
-		t.Fatalf("source[0].Path = %q, want suffix rel/mods", got)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(cwd, "rel", "mods"); got != want {
+		t.Fatalf("source[0].Path = %q, want %q", got, want)
 	}
 }
 
