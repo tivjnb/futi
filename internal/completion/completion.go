@@ -72,35 +72,30 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 		}
 	}
 
-	// Разделяем позиционные слова (namespace + command) и флаги (--param).
-	var positionals []string
-	for _, a := range args {
-		if strings.HasPrefix(a, "--") {
-			continue
+	// Путь (namespace + command) — слова от начала до первого флагового токена,
+	// как в parseArgs (cmd/futi/main.go): флаг — токен с "-" и длиннее 1 символа.
+	// Всё после первого флага — флаги и их значения, не слова пути.
+	positionals := args
+	var flagArgs []string
+	for i, a := range args {
+		if len(a) > 1 && a[0] == '-' {
+			positionals, flagArgs = args[:i], args[i:]
+			break
 		}
-		positionals = append(positionals, a)
 	}
 
 	// Резолвим модуль progressive-ом. commandPath — остаток после namespace.
 	manifest, root, moduleFound, commandPath := resolveModule(source, positionals)
 
-	// Случай: предыдущее слово — bool-флаг, а текущее — его значение.
-	// Подсказываем true/false. Не срабатывает, если toComplete сам флаг.
-	if len(args) > 0 && strings.HasPrefix(args[len(args)-1], "--") && !strings.HasPrefix(toComplete, "--") {
-		if moduleFound {
-			flagName := flagName(args[len(args)-1])
-			if cmd, err := currentCommand(loader, manifest, root, commandPath); err == nil {
-				for _, p := range cmd.Params {
-					if p.Name == flagName && p.Type == "bool" {
-						return filterMatches([]Match{{Text: "true"}, {Text: "false"}}, toComplete), ShellCompDirectiveNoFileComp
-					}
-				}
-			}
+	// Случай: предыдущее слово — флаг без "=", а текущее — не флаг. Bool-флаг
+	// значения не берёт (парсер: "--force true" — ошибка), поэтому после него
+	// подсказываем оставшиеся флаги (ниже). Значение string/int-флага
+	// user-supplied: разрешаем шеллу файловое дополнение (пути в значениях).
+	// В будущем ограничим параметрами типа PATH (см. NEXT_STEPS).
+	if len(args) > 0 && strings.HasPrefix(args[len(args)-1], "--") && !strings.Contains(args[len(args)-1], "=") && !strings.HasPrefix(toComplete, "--") {
+		if !moduleFound || !isBoolFlag(loader, manifest, root, commandPath, flagName(args[len(args)-1])) {
+			return nil, ShellCompDirectiveDefault
 		}
-		// Значение флага (не bool) — user-supplied. Разрешаем шеллу
-		// дефолтное файловое дополнение (пути в значениях флагов).
-		// В будущем ограничим параметрами типа PATH (см. NEXT_STEPS).
-		return nil, ShellCompDirectiveDefault
 	}
 
 	// Случай: toComplete начинается с "--" — подсказываем имена параметров.
@@ -134,6 +129,17 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 		return nil, ShellCompDirectiveNoFileComp
 	}
 
+	// После первого флага слова пути невозможны: только оставшиеся флаги
+	// листовой команды (без help — после флагов это уже не команда).
+	if len(flagArgs) > 0 {
+		if moduleFound {
+			if cmd, err := currentCommand(loader, manifest, root, commandPath); err == nil && len(cmd.Commands) == 0 {
+				return filterMatches(paramMatches(cmd, ""), toComplete), ShellCompDirectiveNoFileComp
+			}
+		}
+		return nil, ShellCompDirectiveNoFileComp
+	}
+
 	// Случай: модуль зарезолвен — подсказываем команды/subcommands.
 	if moduleFound {
 		return moduleMatches(loader, manifest, root, commandPath, toComplete)
@@ -141,6 +147,20 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 
 	// Модуль не зарезолвен — подсказываем children namespace и/или builtins.
 	return namespaceMatches(source, loader, positionals, toComplete)
+}
+
+// isBoolFlag сообщает, что name — bool-параметр текущей команды.
+func isBoolFlag(loader modulerunner.ModuleLoader, manifest, root string, commandPath []string, name string) bool {
+	cmd, err := currentCommand(loader, manifest, root, commandPath)
+	if err != nil {
+		return false
+	}
+	for _, p := range cmd.Params {
+		if p.Name == name && p.Type == "bool" {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveModule ищет модуль progressive-ом от длиннейшего namespace к коротчайшему.
