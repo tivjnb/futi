@@ -498,3 +498,133 @@ func TestRunModulesUpdateMetaWriteFailureRollsBack(t *testing.T) {
 		t.Fatalf("backup must not remain, stat err = %v", err)
 	}
 }
+
+// captureStderr выполняет fn и возвращает всё, что она записала в os.Stderr.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = orig })
+	fn()
+	os.Stderr = orig
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	return buf.String()
+}
+
+// Каталог *.futi-backup не модуль: update без имени не перезаписывает его и
+// не запускает в нём attach, а предупреждает о нём в stderr.
+func TestRunModulesUpdateAllLeavesBackupUntouched(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	cache := newTestCache()
+	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	// Состояние после kill между Rename и moveTree: каталога qr нет, есть backup.
+	backup := filepath.Join(global, "qr.futi-backup")
+	if err := os.Rename(filepath.Join(global, "qr"), backup); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(backup, "marker.txt"), "precious\n")
+	oldConfig, _ := os.ReadFile(filepath.Join(backup, "config.yaml"))
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo v2\n")
+
+	var out bytes.Buffer
+	stderr := captureStderr(t, func() {
+		if err := runModulesUpdate(&out, discovery.NewGlobalSource(global), cache, nil); err != nil {
+			t.Errorf("runModulesUpdate: %v", err)
+		}
+	})
+
+	if data, err := os.ReadFile(filepath.Join(backup, "marker.txt")); err != nil || string(data) != "precious\n" {
+		t.Fatalf("marker must stay: err=%v data=%q", err, data)
+	}
+	gotConfig, _ := os.ReadFile(filepath.Join(backup, "config.yaml"))
+	if string(gotConfig) != string(oldConfig) {
+		t.Fatalf("backup config must not be overwritten, got:\n%s", gotConfig)
+	}
+	if !strings.Contains(stderr, backup) {
+		t.Errorf("stderr must warn about %s, got: %q", backup, stderr)
+	}
+}
+
+// update одного модуля, которого нет, но рядом лежит его backup: ошибка
+// подсказывает про backup.
+func TestRunModulesUpdateResolveFailureMentionsBackup(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	backup := filepath.Join(global, "qr.futi-backup")
+	writeFile(t, filepath.Join(backup, "config.yaml"), "name: qr\n")
+
+	err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), newTestCache(), []string{"qr"})
+	if err == nil || !strings.Contains(err.Error(), backup) {
+		t.Fatalf("want error mentioning %s, got %v", backup, err)
+	}
+}
+
+// Backup проверяется до fetch: даже «up to date» не маскирует его наличие.
+func TestRunModulesUpdateStaleBackupRefusedBeforeFetch(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	cache := newTestCache()
+	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	stale := filepath.Join(global, "qr.futi-backup")
+	writeFile(t, filepath.Join(stale, "junk.txt"), "junk\n")
+	if err := os.RemoveAll(src); err != nil { // fetch бы упал
+		t.Fatal(err)
+	}
+	err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, []string{"qr"})
+	if err == nil || !strings.Contains(err.Error(), "backup") || strings.Contains(err.Error(), "fetch") {
+		t.Fatalf("want backup refusal before fetch, got %v", err)
+	}
+}
+
+// Сбой удаления backup после успешного update не фатален, но о нём предупреждают.
+func TestRunModulesUpdateRemoveBackupFailureWarns(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	cache := newTestCache()
+	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo v2\n")
+
+	orig := removeBackup
+	removeBackup = func(string) error { return errors.New("busy") }
+	t.Cleanup(func() { removeBackup = orig })
+
+	var out bytes.Buffer
+	stderr := captureStderr(t, func() {
+		if err := runModulesUpdate(&out, discovery.NewGlobalSource(global), cache, []string{"qr"}); err != nil {
+			t.Errorf("update must succeed: %v", err)
+		}
+	})
+	want := "Warning: remove backup " + filepath.Join(global, "qr.futi-backup") + ": busy"
+	if !strings.Contains(stderr, want) {
+		t.Fatalf("stderr must contain %q, got %q", want, stderr)
+	}
+}

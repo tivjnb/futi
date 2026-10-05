@@ -19,6 +19,9 @@ import (
 // writeMeta записывает lockfile при обновлении; переменная — шов для тестов.
 var writeMeta = metayaml.Write
 
+// removeBackup удаляет backup после успешного update; шов для тестов.
+var removeBackup = os.RemoveAll
+
 // updateArgs — аргументы `futi modules update`.
 type updateArgs struct {
 	name       string
@@ -72,6 +75,9 @@ func runModulesUpdate(w io.Writer, source discovery.Source, cache *modulecache.C
 	if err != nil {
 		return fmt.Errorf("modules update: %w", err)
 	}
+	for _, b := range scanBackups(roots) {
+		fmt.Fprintf(os.Stderr, "Warning: found %s left by an interrupted update; inspect it and remove or restore it manually\n", b)
+	}
 	entries := scanInstalled(roots)
 	if len(entries) == 0 {
 		fmt.Fprintln(w, "No installed modules found.")
@@ -111,9 +117,26 @@ func runModulesUpdate(w io.Writer, source discovery.Source, cache *modulecache.C
 func updateOne(w io.Writer, source discovery.Source, cache *modulecache.Cache, name string, skipAttach bool) error {
 	manifestPath, moduleRoot, err := source.Resolve(name)
 	if err != nil {
-		return fmt.Errorf("resolve: %w", err)
+		return fmt.Errorf("resolve: %w%s", err, backupHint(name))
 	}
 	return updateAt(w, cache, name, name, moduleRoot, manifestPath, skipAttach)
+}
+
+// backupHint возвращает подсказку про оставшийся backup модуля name в одном из
+// корней или пустую строку.
+func backupHint(name string) string {
+	roots, err := moduleRoots()
+	if err != nil {
+		return ""
+	}
+	rel := filepath.FromSlash(strings.ReplaceAll(name, ".", "/"))
+	for _, root := range roots {
+		backup := filepath.Join(root, rel) + backupSuffix
+		if _, err := os.Lstat(backup); err == nil {
+			return fmt.Sprintf(" (found %s left by an interrupted update; inspect it and remove or restore it manually)", backup)
+		}
+	}
+	return ""
 }
 
 // updateAt обновляет модуль в конкретном каталоге moduleRoot. name — имя для
@@ -121,6 +144,13 @@ func updateOne(w io.Writer, source discovery.Source, cache *modulecache.Cache, n
 func updateAt(w io.Writer, cache *modulecache.Cache, name, label, moduleRoot, manifestPath string, skipAttach bool) error {
 	if filepath.Base(manifestPath) != "config.yaml" {
 		return fmt.Errorf("not a package module (updates require config.yaml packages)")
+	}
+
+	// Backup от прерванного update или неудавшегося отката может быть
+	// единственной рабочей копией — не удаляем, пока пользователь не разберётся.
+	backup := moduleRoot + backupSuffix
+	if _, err := os.Lstat(backup); err == nil {
+		return fmt.Errorf("previous update left a backup at %s; inspect it and remove or restore it manually", backup)
 	}
 
 	metaPath := filepath.Join(moduleRoot, metayaml.FileName)
@@ -173,12 +203,6 @@ func updateAt(w io.Writer, cache *modulecache.Cache, name, label, moduleRoot, ma
 	}
 
 	// Замена дерева: dest → backup, new → dest; при провале — восстановление.
-	backup := moduleRoot + ".futi-backup"
-	// Backup от прерванного update или неудавшегося отката может быть
-	// единственной рабочей копией — не удаляем, пока пользователь не разберётся.
-	if _, err := os.Lstat(backup); err == nil {
-		return fmt.Errorf("previous update left a backup at %s; inspect it and remove or restore it manually", backup)
-	}
 	if err := os.Rename(moduleRoot, backup); err != nil {
 		return fmt.Errorf("backup old tree: %w", err)
 	}
@@ -206,9 +230,11 @@ func updateAt(w io.Writer, cache *modulecache.Cache, name, label, moduleRoot, ma
 	if err := writeMeta(metaPath, newMeta); err != nil {
 		return restoreBackup(backup, moduleRoot, fmt.Errorf("write %s: %w", metayaml.FileName, err))
 	}
-	// Lockfile записан — backup больше не нужен (при ошибке удаления его уберёт
-	// следующий update).
-	os.RemoveAll(backup)
+	// Lockfile записан — backup больше не нужен. Ошибка удаления не фатальна, но
+	// оставшийся backup заблокирует следующий update — предупреждаем.
+	if err := removeBackup(backup); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: remove backup %s: %v\n", backup, err)
+	}
 
 	// attach: провал → warn, НЕ rollback (§3.1, §5.3 шаг 7).
 	// Прерывание сигналом возвращаем после Invalidate: дерево уже заменено.

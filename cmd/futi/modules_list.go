@@ -48,6 +48,35 @@ func dotName(rel string) string {
 	return strings.ReplaceAll(filepath.ToSlash(rel), "/", ".")
 }
 
+// backupSuffix — суффикс каталога с копией старого дерева на время update.
+const backupSuffix = ".futi-backup"
+
+// scanBackups возвращает каталоги *.futi-backup, оставшиеся в корнях после
+// прерванного update.
+func scanBackups(roots []string) []string {
+	var found []string
+	for _, root := range roots {
+		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || !d.IsDir() {
+				return nil
+			}
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil || rel == "." {
+				return nil
+			}
+			if metayaml.IsExcluded(rel) {
+				return filepath.SkipDir
+			}
+			if strings.HasSuffix(rel, backupSuffix) {
+				found = append(found, path)
+				return filepath.SkipDir
+			}
+			return nil
+		})
+	}
+	return found
+}
+
 // scanInstalled обходит корни и собирает пакеты с config.yaml +
 // __futi_meta.yaml. Внутрь найденного модуля не спускаемся (SkipDir).
 // Ошибки чтения отдельного модуля не фатальны — модуль пропускается.
@@ -62,8 +91,8 @@ func scanInstalled(roots []string) []installedEntry {
 			if relErr != nil || rel == "." {
 				return nil
 			}
-			if metayaml.IsExcluded(rel) {
-				return filepath.SkipDir
+			if metayaml.IsExcluded(rel) || strings.HasSuffix(rel, backupSuffix) {
+				return filepath.SkipDir // backup от update — не модуль
 			}
 			if _, statErr := os.Stat(filepath.Join(path, "config.yaml")); statErr == nil {
 				if meta, metaErr := metayaml.Read(filepath.Join(path, metayaml.FileName)); metaErr == nil {
