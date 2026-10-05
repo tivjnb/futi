@@ -882,7 +882,7 @@ futi modules uninstall qr      # detach + удаление (с подтверж�
 futi modules path qr           # каталог модуля (для скриптов)
 ```
 
-`update` сравнивает hash дерева источника с lockfile: без изменений — no-op (обновляется только `last_check`), иначе — атомарная замена дерева с сохранением `installed_at` и `about`.
+`update` сравнивает hash дерева источника с lockfile: без изменений — no-op (обновляется только `last_check`), иначе — атомарная замена дерева с сохранением `installed_at` и `about`. При сбое переноса или записи lockfile update восстанавливает старое дерево. Если от прерванного update остался `<module>.futi-backup`, update отказывает и просит разобрать backup вручную; `list` и `update` такой каталог модулем не считают (update без имени лишь предупреждает о нём в stderr).
 
 Удаление требует подтверждения (размер и число файлов); без sidecar (модуль создан вручную или через `modules init`) — только с `--force`. Флаги uninstall: `--yes`, `--force`, `--skip-detach`, `--strict-detach`.
 
