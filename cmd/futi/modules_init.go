@@ -179,6 +179,13 @@ func targetFilePath(cfg *initConfig) (string, error) {
 			return "", fmt.Errorf("module %q already exists at %s", cfg.path, dirConfig)
 		}
 	}
+	// Симметрично: x/config.yaml при существующем x.yaml.
+	if filepath.Base(fullPath) == "config.yaml" && filepath.Dir(fullPath) != base {
+		siblingYAML := filepath.Dir(fullPath) + ".yaml"
+		if _, err := os.Stat(siblingYAML); err == nil {
+			return "", fmt.Errorf("module %q already exists at %s", cfg.path, siblingYAML)
+		}
+	}
 
 	return fullPath, nil
 }

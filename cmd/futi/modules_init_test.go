@@ -636,3 +636,21 @@ func TestRunInitYamlSuffixConflictsWithConfigDir(t *testing.T) {
 		t.Fatal(".futi/x.yaml must not be created")
 	}
 }
+
+// F59 (симметрия): init x/config при существующем x.yaml — конфликт discovery.
+func TestRunInitConfigConflictsWithYamlFile(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.MkdirAll(".futi", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(".futi/x.yaml", []byte("commands:\n  a:\n    cmd: echo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := runModulesInit(&bytes.Buffer{}, []string{"x/config"})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected already-exists error, got %v", err)
+	}
+	if _, err := os.Stat(".futi/x/config.yaml"); err == nil {
+		t.Fatal(".futi/x/config.yaml must not be created")
+	}
+}
