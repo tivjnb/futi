@@ -106,7 +106,7 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 		}
 		if moduleFound {
 			if cmd, err := currentCommand(loader, manifest, root, commandPath); err == nil {
-				return filterMatches(paramMatches(cmd, toComplete), toComplete), ShellCompDirectiveNoFileComp
+				return filterMatches(withoutUsed(paramMatches(cmd, toComplete), flagArgs), toComplete), ShellCompDirectiveNoFileComp
 			}
 		}
 		// Флаги `futi modules <sub>` (модуль не задействован).
@@ -134,7 +134,7 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 	if len(flagArgs) > 0 {
 		if moduleFound {
 			if cmd, err := currentCommand(loader, manifest, root, commandPath); err == nil && len(cmd.Commands) == 0 {
-				return filterMatches(paramMatches(cmd, ""), toComplete), ShellCompDirectiveNoFileComp
+				return filterMatches(withoutUsed(paramMatches(cmd, ""), flagArgs), toComplete), ShellCompDirectiveNoFileComp
 			}
 		}
 		return nil, ShellCompDirectiveNoFileComp
@@ -147,6 +147,24 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 
 	// Модуль не зарезолвен — подсказываем children namespace и/или builtins.
 	return namespaceMatches(source, loader, positionals, toComplete)
+}
+
+// withoutUsed убирает из подсказок параметры, уже введённые как --name или
+// --name=val (повтор флага парсер допускает, но подсказывать его незачем).
+func withoutUsed(matches []Match, flagArgs []string) []Match {
+	used := make(map[string]bool)
+	for _, a := range flagArgs {
+		if strings.HasPrefix(a, "--") {
+			used["--"+flagName(a)] = true
+		}
+	}
+	out := make([]Match, 0, len(matches))
+	for _, m := range matches {
+		if !used[m.Text] {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // isBoolFlag сообщает, что name — bool-параметр текущей команды.

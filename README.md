@@ -1043,7 +1043,7 @@ futi completion fish > ~/.config/fish/completions/futi.fish
 - **После значения флага** — `futi images qr make --out qr.png <TAB>` подсказывает оставшиеся флаги (`--text`, `--scale`); значение флага не ломает подсказки. Путь (namespace и команда) всегда идёт до первого флага, поэтому после флагов слова пути и `help` не предлагаются
 - **Пути в значениях флагов** — при вводе значения не-bool флага (`--out ~/<TAB>`, `--out=~/<TAB>`) shell предлагает файлы/директории; в будущем — только для параметров типа `path` (ROADMAP)
 - **Параметры default-команды** — модуль-однокоманда (`cmd` + `params`, без `commands`) подсказывает свои флаги: `futi meta <TAB>` → `--json`
-- **После bool-флага** — `futi docker build --force <TAB>` подсказывает оставшиеся флаги (`--tag`); значения `true`/`false` не предлагаются: bool-флаг значения не берёт, `false` задаётся как `--force=false`
+- **После bool-флага** — `futi docker build --force <TAB>` подсказывает оставшиеся (ещё не введённые) флаги (`--tag`); значения `true`/`false` не предлагаются: bool-флаг значения не берёт, `false` задаётся как `--force=false`
 - **Builtins** — `futi cache <TAB>` → `refresh`/`status`/`clear`; `futi completion <TAB>` → `bash`/`zsh`/`fish`
 - **Подсказка `help`** — `help` предлагается на каждом уровне (модуль/команда/subcommand): `futi demo <TAB>`, `futi demo db <TAB>`, `futi demo greet <TAB>`. Если в модуле уже определена команда `help` (user-defined), она и предлагается — системная не дублируется.
 
