@@ -733,16 +733,73 @@ func TestCompositeListChildrenNotFound(t *testing.T) {
 	}
 }
 
-// TestCompositeNotFoundWithBrokenSourceIsPartial: namespace мог быть в
-// нечитаемом source — вместо ErrNotFound возвращается *PartialError.
-func TestCompositeNotFoundWithBrokenSourceIsPartial(t *testing.T) {
+// TestCompositeNotFoundWithBrokenSourceIsPlainError: namespace не найден, а
+// source недоступен — результата нет, ошибка обычная (не *PartialError) и не
+// ErrNotFound: namespace мог быть в недоступном source.
+func TestCompositeNotFoundWithBrokenSourceIsPlainError(t *testing.T) {
 	a := t.TempDir()
 	b := filepath.Join(t.TempDir(), "nope")
 	s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: a}, {Path: b}}})
 
 	_, err := s.ListChildren("zzz")
 	var pe *PartialError
-	if !errors.As(err, &pe) || errors.Is(err, ErrNotFound) {
-		t.Fatalf("err = %v, want *PartialError без ErrNotFound", err)
+	if err == nil || errors.As(err, &pe) || errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), b) {
+		t.Fatalf("err = %v, want обычная ошибка с путём %q", err, b)
 	}
+}
+
+// TestCompositeInvalidNamespaceIsPlainError: ошибка делегата без результата
+// от других sources — обычная ошибка, не *PartialError.
+func TestCompositeInvalidNamespaceIsPlainError(t *testing.T) {
+	a := t.TempDir()
+	writeFile(t, filepath.Join(a, "x.yaml"), "name: x\n")
+	s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: a}}})
+
+	tests := []struct {
+		name string
+		list func() ([]Child, error)
+	}{
+		{"ListChildren", func() ([]Child, error) { return s.ListChildren("a..b") }},
+		{"ListChildrenRecursive", func() ([]Child, error) { return s.ListChildrenRecursive("a..b") }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.list()
+			var pe *PartialError
+			if err == nil || errors.As(err, &pe) {
+				t.Fatalf("err = %v, want обычная ошибка (не *PartialError)", err)
+			}
+		})
+	}
+}
+
+// TestCompositeUnreadableNamespaceDir: каталог namespace без прав в одном из
+// sources — при результате от другого source это *PartialError с детьми,
+// без него — обычная ошибка.
+func TestCompositeUnreadableNamespaceDir(t *testing.T) {
+	a := t.TempDir()
+	writeFile(t, filepath.Join(a, "ns", "m.yaml"), "name: m\n")
+	b := t.TempDir()
+	mkdir(t, filepath.Join(b, "ns"))
+	noAccessDir(t, filepath.Join(b, "ns"))
+
+	t.Run("есть результат от другого source", func(t *testing.T) {
+		s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: a}, {Path: b}}})
+		children, err := s.ListChildren("ns")
+		var pe *PartialError
+		if !errors.As(err, &pe) {
+			t.Fatalf("err = %v, want *PartialError", err)
+		}
+		if len(children) != 1 || children[0].Name != "m" {
+			t.Fatalf("children = %+v, want [m]", children)
+		}
+	})
+	t.Run("единственный source", func(t *testing.T) {
+		s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: b}}})
+		_, err := s.ListChildren("ns")
+		var pe *PartialError
+		if err == nil || errors.As(err, &pe) {
+			t.Fatalf("err = %v, want обычная ошибка (не *PartialError)", err)
+		}
+	})
 }
