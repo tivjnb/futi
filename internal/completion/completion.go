@@ -110,7 +110,7 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 			}
 		}
 		// Флаги `futi modules <sub>` (модуль не задействован).
-		if len(positionals) == 2 && positionals[0] == "modules" {
+		if len(positionals) >= 2 && positionals[0] == "modules" {
 			var flags []string
 			switch positionals[1] {
 			case "init":
