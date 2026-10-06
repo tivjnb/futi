@@ -1200,23 +1200,43 @@ func TestListChildrenRecursiveUnreadableDirPartial(t *testing.T) {
 	}
 }
 
-// TestListingsUnreadableRootPartial: нечитаемый корень — пустой результат и
-// *PartialError; отсутствующий корень — nil, nil (свежая установка).
-func TestListingsUnreadableRootPartial(t *testing.T) {
+// TestListingsUnreadableStartDirIsPlainError: нечитаемый стартовый каталог
+// (корень или каталог namespace) — обычная ошибка во всех листингах, одинаково
+// для list и list -r; результат nil. Отсутствующий корень — nil, nil (свежая
+// установка).
+func TestListingsUnreadableStartDirIsPlainError(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "a.yaml"), "name: a\n")
-	noAccessDir(t, root)
+	writeFile(t, filepath.Join(root, "ns", "b.yaml"), "name: b\n")
 	s := NewGlobalSource(root)
 
-	children, err := s.ListChildrenRecursive("")
-	var pe *PartialError
-	if !errors.As(err, &pe) || len(children) != 0 {
-		t.Fatalf("ListChildrenRecursive = %+v, %v; want пусто и *PartialError", children, err)
+	check := func(t *testing.T, name string, children []Child, err error) {
+		t.Helper()
+		var pe *PartialError
+		if err == nil || errors.As(err, &pe) || errors.Is(err, ErrNotFound) || children != nil {
+			t.Fatalf("%s = %+v, %v; want nil и обычная ошибка (не *PartialError, не ErrNotFound)", name, children, err)
+		}
 	}
-	modules, err := s.List()
-	if !errors.As(err, &pe) || len(modules) != 0 {
-		t.Fatalf("List = %+v, %v; want пусто и *PartialError", modules, err)
-	}
+
+	t.Run("корень", func(t *testing.T) {
+		noAccessDir(t, root)
+		children, err := s.ListChildren("")
+		check(t, "ListChildren(\"\")", children, err)
+		children, err = s.ListChildrenRecursive("")
+		check(t, "ListChildrenRecursive(\"\")", children, err)
+		modules, err := s.List()
+		var pe *PartialError
+		if err == nil || errors.As(err, &pe) || modules != nil {
+			t.Fatalf("List = %+v, %v; want nil и обычная ошибка", modules, err)
+		}
+	})
+	t.Run("каталог namespace", func(t *testing.T) {
+		noAccessDir(t, filepath.Join(root, "ns"))
+		children, err := s.ListChildren("ns")
+		check(t, "ListChildren(ns)", children, err)
+		children, err = s.ListChildrenRecursive("ns")
+		check(t, "ListChildrenRecursive(ns)", children, err)
+	})
 }
 
 func TestListingsMissingRootNoError(t *testing.T) {

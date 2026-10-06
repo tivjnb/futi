@@ -167,7 +167,11 @@ func (s *GlobalSource) List() ([]ModuleInfo, error) {
 
 	var modules []ModuleInfo
 	var errs []error
-	s.walkModules(s.RootDir, "", &modules, make(map[string]bool), &errs)
+	// Нечитаемый корень — обычная ошибка (результата нет), как и в ListChildren;
+	// PartialError — только для вложенных каталогов.
+	if err := s.walkModules(s.RootDir, "", &modules, make(map[string]bool), &errs); err != nil && !isMissingDir(err) {
+		return nil, fmt.Errorf("discovery: list: %w", err)
+	}
 	return modules, newPartialError(errs)
 }
 
@@ -181,29 +185,28 @@ func (s *GlobalSource) List() ([]ModuleInfo, error) {
 // симлинки) число записей растёт как k^глубина; лимита нет осознанно.
 // Пакет (директория с config.yaml) — лист: внутрь не заходим, его *.yaml
 // не модули (согласовано с Resolve и ListChildrenRecursive).
-// Ошибки чтения каталога (кроме исчезновения каталога, см. collectWalkError)
-// накапливаются в *errs: обход продолжается, листинг станет частичным.
-func (s *GlobalSource) walkModules(dir, nsPrefix string, modules *[]ModuleInfo, ancestors map[string]bool, errs *[]error) {
+// Ошибка чтения самого dir возвращается; ошибки вложенных каталогов (кроме
+// исчезновения каталога, см. collectWalkError) накапливаются в *errs: обход
+// продолжается, листинг станет частичным.
+func (s *GlobalSource) walkModules(dir, nsPrefix string, modules *[]ModuleInfo, ancestors map[string]bool, errs *[]error) error {
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		collectWalkError(errs, err)
-		return
+		return err
 	}
 	if ancestors[real] {
-		return
+		return nil
 	}
 	ancestors[real] = true
 	defer delete(ancestors, real)
 
 	entries, err := readModuleEntries(dir)
 	if err != nil {
-		collectWalkError(errs, err)
-		return
+		return err
 	}
 
 	for _, e := range entries {
 		if e.kind == entryNamespace {
-			s.walkModules(e.path, nsPrefix+e.name+".", modules, ancestors, errs)
+			collectWalkError(errs, s.walkModules(e.path, nsPrefix+e.name+".", modules, ancestors, errs))
 			continue
 		}
 		*modules = append(*modules, ModuleInfo{
@@ -212,16 +215,22 @@ func (s *GlobalSource) walkModules(dir, nsPrefix string, modules *[]ModuleInfo, 
 			ModuleRoot:   e.moduleRoot,
 		})
 	}
+	return nil
 }
 
 // collectWalkError добавляет в *errs ошибку обхода каталога. Каталог,
 // исчезнувший между шагами обхода (ErrNotExist, ENOTDIR), — не ошибка:
 // его просто нет.
 func collectWalkError(errs *[]error, err error) {
-	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+	if err == nil || isMissingDir(err) {
 		return
 	}
 	*errs = append(*errs, fmt.Errorf("discovery: %w", err))
+}
+
+// isMissingDir сообщает, что каталога нет (ErrNotExist, ENOTDIR).
+func isMissingDir(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
 }
 
 // entryKind — вид записи каталога модулей.
@@ -477,7 +486,11 @@ func (s *GlobalSource) ListChildrenRecursive(namespace string) ([]Child, error) 
 
 	var result []Child
 	var errs []error
-	s.walkChildrenRecursive(dir, "", &result, s.startAncestors(namespace), &errs)
+	// Нечитаемый стартовый каталог — обычная ошибка (результата нет), как и в
+	// ListChildren; PartialError — только для вложенных каталогов.
+	if err := s.walkChildrenRecursive(dir, "", &result, s.startAncestors(namespace), &errs); err != nil && !isMissingDir(err) {
+		return nil, fmt.Errorf("discovery: list recursive %q: %w", namespace, err)
+	}
 	return result, newPartialError(errs)
 }
 
@@ -507,23 +520,22 @@ func (s *GlobalSource) startAncestors(namespace string) map[string]bool {
 // (включая предков стартового каталога): защита от циклов симлинков
 // (a → b → a); алиасы на один каталог раскрываются независимо.
 // Риск: при веерных алиасах число записей растёт как k^глубина; лимита нет.
-// Ошибки чтения каталогов накапливаются в *errs (см. collectWalkError).
-func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child, ancestors map[string]bool, errs *[]error) {
+// Ошибка чтения самого dir возвращается; ошибки вложенных каталогов
+// накапливаются в *errs (см. collectWalkError).
+func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child, ancestors map[string]bool, errs *[]error) error {
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		collectWalkError(errs, err)
-		return
+		return err
 	}
 	if ancestors[real] {
-		return
+		return nil
 	}
 	ancestors[real] = true
 	defer delete(ancestors, real)
 
 	entries, err := readModuleEntries(dir)
 	if err != nil {
-		collectWalkError(errs, err)
-		return
+		return err
 	}
 
 	for _, e := range entries {
@@ -533,7 +545,7 @@ func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child
 		}
 		if e.kind == entryNamespace {
 			*result = append(*result, Child{Name: fullName, Type: "namespace"})
-			s.walkChildrenRecursive(e.path, fullName, result, ancestors, errs)
+			collectWalkError(errs, s.walkChildrenRecursive(e.path, fullName, result, ancestors, errs))
 			continue
 		}
 		// Модуль (в т.ч. пакет — лист: внутрь не углубляемся).
@@ -545,4 +557,5 @@ func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child
 			Conflict:     e.conflict,
 		})
 	}
+	return nil
 }
