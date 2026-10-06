@@ -246,7 +246,7 @@ func TestCompositeListChildrenWithMountAsNamespace(t *testing.T) {
 	}
 }
 
-func TestCompositeListChildrenConflictModuleFromTwoSources(t *testing.T) {
+func TestCompositeListChildrenConflictModuleFromTwoSourcesIsMarked(t *testing.T) {
 	dir1 := t.TempDir()
 	dir2 := t.TempDir()
 	writeFile(t, filepath.Join(dir1, "docker.yaml"), "name: docker\n")
@@ -260,9 +260,12 @@ func TestCompositeListChildrenConflictModuleFromTwoSources(t *testing.T) {
 	}
 	s := NewCompositeSource(cfg)
 
-	_, err := s.ListChildren("ns1")
-	if err == nil {
-		t.Fatal("expected conflict error")
+	children, err := s.ListChildren("ns1")
+	if err != nil {
+		t.Fatalf("ListChildren: %v", err)
+	}
+	if len(children) != 1 || !children[0].Conflict || !reflect.DeepEqual(children[0].ConflictSources, []string{dir1, dir2}) {
+		t.Fatalf("children = %+v, want один модуль docker с Conflict и sources [%s %s]", children, dir1, dir2)
 	}
 }
 
@@ -465,10 +468,10 @@ func TestCompositeListChildrenKeepsConflictBehindNamespace(t *testing.T) {
 	}
 }
 
-// TestCompositeRecursiveDeepConflictIsError: модуль с одним именем из двух
-// sources на втором уровне — ошибка конфликта и в рекурсивном листинге
-// (как в ListChildren этого уровня и в Resolve), с префиксом и без.
-func TestCompositeRecursiveDeepConflictIsError(t *testing.T) {
+// TestCompositeRecursiveDeepConflictIsMarked: модуль с одним именем из двух
+// sources на втором уровне помечается Conflict и в рекурсивном листинге
+// (как в ListChildren этого уровня), с префиксом и без.
+func TestCompositeRecursiveDeepConflictIsMarked(t *testing.T) {
 	dir1 := t.TempDir()
 	dir2 := t.TempDir()
 	writeFile(t, filepath.Join(dir1, "ns", "docker.yaml"), "name: docker\n")
@@ -487,11 +490,20 @@ func TestCompositeRecursiveDeepConflictIsError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewCompositeSource(&config.Config{Sources: tt.sources})
 			children, err := s.ListChildrenRecursive(tt.namespace)
-			if err == nil {
-				t.Fatalf("ListChildrenRecursive(%q) = %+v, ожидалась ошибка конфликта", tt.namespace, children)
+			if err != nil {
+				t.Fatalf("ListChildrenRecursive(%q): %v", tt.namespace, err)
 			}
-			if !strings.Contains(err.Error(), "conflict") {
-				t.Fatalf("error %q does not mention conflict", err)
+			var got []string
+			for _, c := range children {
+				if c.Type == "module" && c.Conflict {
+					got = append(got, c.Name)
+					if !reflect.DeepEqual(c.ConflictSources, []string{dir1, dir2}) {
+						t.Fatalf("ConflictSources = %v, want [%s %s]", c.ConflictSources, dir1, dir2)
+					}
+				}
+			}
+			if len(got) != 1 {
+				t.Fatalf("конфликтных модулей %v, want один (docker): %+v", got, children)
 			}
 		})
 	}
@@ -570,5 +582,167 @@ func TestCompositeRecursiveMountedExactlyAtNs(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ListChildrenRecursive(tools) =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+// TestCompositeMissingSourcePartial: несуществующий source не роняет листинг —
+// модули остальных возвращаются вместе с *PartialError, где назван путь.
+func TestCompositeMissingSourcePartial(t *testing.T) {
+	a := t.TempDir()
+	writeFile(t, filepath.Join(a, "x.yaml"), "name: x\n")
+	b := filepath.Join(t.TempDir(), "nope")
+	s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: a}, {Path: b}}})
+
+	tests := []struct {
+		name string
+		list func() ([]Child, error)
+	}{
+		{"ListChildren", func() ([]Child, error) { return s.ListChildren("") }},
+		{"ListChildrenRecursive", func() ([]Child, error) { return s.ListChildrenRecursive("") }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			children, err := tt.list()
+			var pe *PartialError
+			if !errors.As(err, &pe) {
+				t.Fatalf("err = %v, want *PartialError", err)
+			}
+			if !strings.Contains(err.Error(), b) {
+				t.Fatalf("err %q не содержит путь %q", err, b)
+			}
+			want := []Child{{Name: "x", Type: "module", ManifestPath: filepath.Join(a, "x.yaml"), ModuleRoot: a}}
+			if !reflect.DeepEqual(children, want) {
+				t.Fatalf("children = %+v, want %+v", children, want)
+			}
+		})
+	}
+
+	t.Run("List", func(t *testing.T) {
+		modules, err := s.List()
+		var pe *PartialError
+		if !errors.As(err, &pe) || !strings.Contains(err.Error(), b) {
+			t.Fatalf("err = %v, want *PartialError с путём %q", err, b)
+		}
+		if len(modules) != 1 || modules[0].Name != "x" {
+			t.Fatalf("modules = %+v, want [x]", modules)
+		}
+	})
+}
+
+// TestCompositeSourceIsFilePartial: source — файл, а не каталог: ошибка
+// «not a directory», синтетические namespace для него не создаются.
+func TestCompositeSourceIsFilePartial(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "file")
+	writeFile(t, f, "x")
+	s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: f, Mountpoint: "m"}}})
+
+	children, err := s.ListChildren("")
+	var pe *PartialError
+	if !errors.As(err, &pe) || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("err = %v, want *PartialError not a directory", err)
+	}
+	if len(children) != 0 {
+		t.Fatalf("children = %+v, want пусто (без namespace m)", children)
+	}
+}
+
+// TestCompositeConflictMarked: модуль из нескольких sources помечается
+// Conflict с перечнем RootDir; листинг не падает, Resolve — ошибка.
+func TestCompositeConflictMarked(t *testing.T) {
+	a := t.TempDir()
+	b := t.TempDir()
+	writeFile(t, filepath.Join(a, "x.yaml"), "name: x\n")
+	writeFile(t, filepath.Join(b, "x.yaml"), "name: x\n")
+	writeFile(t, filepath.Join(a, "ns", "y.yaml"), "name: y\n")
+	writeFile(t, filepath.Join(b, "ns", "y.yaml"), "name: y\n")
+
+	s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: a}, {Path: b}}})
+
+	children, err := s.ListChildren("")
+	if err != nil {
+		t.Fatalf("ListChildren: %v", err)
+	}
+	want := []Child{
+		{Name: "ns", Type: "namespace"},
+		{Name: "x", Type: "module", ManifestPath: filepath.Join(a, "x.yaml"), ModuleRoot: a, Conflict: true, ConflictSources: []string{a, b}},
+	}
+	if !reflect.DeepEqual(children, want) {
+		t.Fatalf("ListChildren = %+v, want %+v", children, want)
+	}
+
+	rec, err := s.ListChildrenRecursive("")
+	if err != nil {
+		t.Fatalf("ListChildrenRecursive: %v", err)
+	}
+	wantRec := []Child{
+		{Name: "ns", Type: "namespace"},
+		{Name: "ns.y", Type: "module", ManifestPath: filepath.Join(a, "ns", "y.yaml"), ModuleRoot: filepath.Join(a, "ns"), Conflict: true, ConflictSources: []string{a, b}},
+		{Name: "x", Type: "module", ManifestPath: filepath.Join(a, "x.yaml"), ModuleRoot: a, Conflict: true, ConflictSources: []string{a, b}},
+	}
+	if !reflect.DeepEqual(rec, wantRec) {
+		t.Fatalf("ListChildrenRecursive = %+v, want %+v", rec, wantRec)
+	}
+
+	_, _, err = s.Resolve("x")
+	if err == nil || !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("Resolve(x) err = %v, want conflict", err)
+	}
+}
+
+// TestCompositeConflictMarkedWithMountpoint: конфликт под общим mountpoint
+// помечается в рекурсивном листинге с полным именем.
+func TestCompositeConflictMarkedWithMountpoint(t *testing.T) {
+	a := t.TempDir()
+	b := t.TempDir()
+	writeFile(t, filepath.Join(a, "x.yaml"), "name: x\n")
+	writeFile(t, filepath.Join(b, "x.yaml"), "name: x\n")
+	s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: a, Mountpoint: "ns"}, {Path: b, Mountpoint: "ns"}}})
+
+	rec, err := s.ListChildrenRecursive("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Child{
+		{Name: "ns", Type: "namespace"},
+		{Name: "ns.x", Type: "module", ManifestPath: filepath.Join(a, "x.yaml"), ModuleRoot: a, Conflict: true, ConflictSources: []string{a, b}},
+	}
+	if !reflect.DeepEqual(rec, want) {
+		t.Fatalf("got %+v, want %+v", rec, want)
+	}
+}
+
+// TestCompositeListChildrenNotFound: namespace, которого нет ни в одном
+// source, — ErrNotFound; корень — никогда.
+func TestCompositeListChildrenNotFound(t *testing.T) {
+	a := t.TempDir()
+	writeFile(t, filepath.Join(a, "x.yaml"), "name: x\n")
+	s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: a}}})
+
+	if _, err := s.ListChildren("nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ListChildren(nope) err = %v, want ErrNotFound", err)
+	}
+	if _, err := s.ListChildrenRecursive("nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ListChildrenRecursive(nope) err = %v, want ErrNotFound", err)
+	}
+	empty := NewCompositeSource(&config.Config{})
+	if _, err := empty.ListChildren(""); err != nil {
+		t.Fatalf("ListChildren(\"\") без sources: %v", err)
+	}
+	if _, err := empty.ListChildrenRecursive(""); err != nil {
+		t.Fatalf("ListChildrenRecursive(\"\") без sources: %v", err)
+	}
+}
+
+// TestCompositeNotFoundWithBrokenSourceIsPartial: namespace мог быть в
+// нечитаемом source — вместо ErrNotFound возвращается *PartialError.
+func TestCompositeNotFoundWithBrokenSourceIsPartial(t *testing.T) {
+	a := t.TempDir()
+	b := filepath.Join(t.TempDir(), "nope")
+	s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: a}, {Path: b}}})
+
+	_, err := s.ListChildren("zzz")
+	var pe *PartialError
+	if !errors.As(err, &pe) || errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want *PartialError без ErrNotFound", err)
 	}
 }

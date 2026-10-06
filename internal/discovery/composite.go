@@ -3,6 +3,7 @@ package discovery
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"futi/internal/config"
@@ -71,20 +72,92 @@ func (cs *CompositeSource) Resolve(namespace string) (string, string, error) {
 	}
 }
 
+// checkRoot проверяет, что RootDir source-а i — существующий каталог. Иначе
+// ошибка добавляется в *errs и возвращается false: такой source ничего не
+// даёт в результат. Все sources CompositeSource заданы в config.yaml явно,
+// поэтому отсутствующий каталог — это ошибка, а не «свежая установка».
+func (cs *CompositeSource) checkRoot(i int, errs *[]error) bool {
+	root := cs.sources[i].RootDir
+	info, err := os.Stat(root)
+	if err != nil {
+		*errs = append(*errs, fmt.Errorf("discovery: source %q: %w", root, err))
+		return false
+	}
+	if !info.IsDir() {
+		*errs = append(*errs, fmt.Errorf("discovery: source %q: not a directory", root))
+		return false
+	}
+	return true
+}
+
+// acceptListing разбирает ошибку делегированного листинга source-а i.
+// Возвращает true, если результат листинга нужно использовать:
+// ErrNotFound — source не содержит namespace (false, не ошибка);
+// *PartialError — результат берётся, ошибки добавляются в *errs;
+// любая другая ошибка добавляется в *errs, source пропускается.
+func (cs *CompositeSource) acceptListing(i int, err error, errs *[]error) (use, found bool) {
+	if err == nil {
+		return true, true
+	}
+	if errors.Is(err, ErrNotFound) {
+		return false, false
+	}
+	var pe *PartialError
+	if errors.As(err, &pe) {
+		*errs = append(*errs, pe.Errs...)
+		return true, true
+	}
+	*errs = append(*errs, fmt.Errorf("discovery: source %q: %w", cs.sources[i].RootDir, err))
+	return false, false
+}
+
+// markSourceConflicts помечает модули, найденные в нескольких sources:
+// Conflict = true и ConflictSources — RootDir этих sources в порядке
+// конфигурации. moduleSources — по полному имени модуля.
+func markSourceConflicts(result []Child, moduleSources map[string][]string) {
+	for i := range result {
+		c := &result[i]
+		if c.Type == "module" && len(moduleSources[c.Name]) > 1 {
+			c.Conflict = true
+			c.ConflictSources = moduleSources[c.Name]
+		}
+	}
+}
+
+// listingResult собирает итог листинга: ErrNotFound для namespace, которого
+// нет ни в одном source и о котором нет ошибок; nil и *PartialError, если
+// ошибки есть, а namespace не найден (он мог быть в нечитаемом source);
+// иначе результат и *PartialError (nil без ошибок).
+func listingResult(namespace string, found bool, result []Child, errs []error) ([]Child, error) {
+	if !found && namespace != "" {
+		if len(errs) == 0 {
+			return nil, newNamespaceNotFound(namespace)
+		}
+		return nil, newPartialError(errs)
+	}
+	return result, newPartialError(errs)
+}
+
 // ListChildren возвращает непосредственных детей namespace, объединяя
 // результаты из всех sources. Ключ слияния — пара (имя, тип): модуль x и
 // namespace x сосуществуют, как и в Resolve (x — модуль, x.y — внутри
-// namespace). Если два source дают модуль с одинаковым именем — ошибка
-// конфликта (Resolve для него тоже вернёт конфликт).
+// namespace). Если два source дают модуль с одинаковым именем — запись
+// помечается Conflict, ConflictSources перечисляет их RootDir (Resolve для
+// него вернёт ошибку конфликта).
+// Недоступный source (нет каталога, не каталог, ошибка листинга) не роняет
+// листинг: остальные sources отдают результат, ошибки — в *PartialError.
+// Namespace, которого нет ни в одном source, — ErrNotFound (кроме корня).
 func (cs *CompositeSource) ListChildren(namespace string) ([]Child, error) {
 	type childKey struct{ name, typ string }
 	seen := make(map[childKey]bool)
-	moduleCount := make(map[string]int)
+	moduleSources := make(map[string][]string)
 	var result []Child
+	var errs []error
+	found := false
 
-	add := func(c Child) {
+	add := func(c Child, root string) {
 		if c.Type == "module" {
-			moduleCount[c.Name]++
+			moduleSources[c.Name] = append(moduleSources[c.Name], root)
 		}
 		key := childKey{c.Name, c.Type}
 		if seen[key] {
@@ -94,71 +167,80 @@ func (cs *CompositeSource) ListChildren(namespace string) ([]Child, error) {
 		result = append(result, c)
 	}
 
-	addNamespace := func(name string) {
-		add(Child{Name: name, Type: "namespace"})
-	}
-
 	for i, sc := range cs.configs {
 		prefix := sc.FullPrefix()
+		root := cs.sources[i].RootDir
 
 		switch {
 		case prefix == namespace:
 			// Source смонтирован ровно тут — его прямые дети
+			if !cs.checkRoot(i, &errs) {
+				continue
+			}
 			children, err := cs.sources[i].ListChildren("")
-			if err != nil {
+			use, ok := cs.acceptListing(i, err, &errs)
+			found = found || ok
+			if !use {
 				continue
 			}
 			for _, c := range children {
-				add(c)
+				add(c, root)
 			}
 
 		case namespace == "" && prefix != "":
 			// Листинг корня, source не в корне — первый сегмент = child namespace
-			firstSeg := strings.SplitN(prefix, ".", 2)[0]
-			addNamespace(firstSeg)
+			if !cs.checkRoot(i, &errs) {
+				continue
+			}
+			found = true
+			add(Child{Name: strings.SplitN(prefix, ".", 2)[0], Type: "namespace"}, root)
 
 		case strings.HasPrefix(prefix, namespace+"."):
 			// Source смонтирован ниже — следующий сегмент = child namespace
+			if !cs.checkRoot(i, &errs) {
+				continue
+			}
+			found = true
 			rest := prefix[len(namespace)+1:]
-			firstSeg := strings.SplitN(rest, ".", 2)[0]
-			addNamespace(firstSeg)
+			add(Child{Name: strings.SplitN(rest, ".", 2)[0], Type: "namespace"}, root)
 
 		case prefix == "" || strings.HasPrefix(namespace, prefix+"."):
 			// Source содержит namespace в своём дереве
+			if !cs.checkRoot(i, &errs) {
+				continue
+			}
 			relNs := namespace
 			if prefix != "" {
 				relNs = namespace[len(prefix)+1:]
 			}
 			children, err := cs.sources[i].ListChildren(relNs)
-			if err != nil {
+			use, ok := cs.acceptListing(i, err, &errs)
+			found = found || ok
+			if !use {
 				continue
 			}
 			for _, c := range children {
-				add(c)
+				add(c, root)
 			}
 		}
 	}
 
-	// Модуль с одним именем из нескольких sources — конфликт.
-	for _, c := range result {
-		if c.Type == "module" && moduleCount[c.Name] > 1 {
-			return nil, fmt.Errorf("discovery: conflict: module %q found in multiple sources", c.Name)
-		}
-	}
-
-	return result, nil
+	markSourceConflicts(result, moduleSources)
+	return listingResult(namespace, found, result, errs)
 }
 
 // ListChildrenRecursive рекурсивно обходит поддерево namespace, объединяя
 // результаты из всех sources. Обход делегируется каждому GlobalSource
 // (защита от циклов симлинков — в нём); source, смонтированный ниже
 // namespace, даёт синтетические namespace-записи для сегментов префикса.
-// Слияние — как в ListChildren: ключ (имя, тип), source с ошибкой
-// пропускается; модуль с одним именем из нескольких sources на любом
-// уровне — ошибка конфликта.
+// Слияние, обработка недоступных sources и отсутствующего namespace — как в
+// ListChildren; модуль с одним именем из нескольких sources на любом уровне
+// помечается Conflict.
 func (cs *CompositeSource) ListChildrenRecursive(namespace string) ([]Child, error) {
 	var lists [][]Child
-	moduleCount := make(map[string]int)
+	moduleSources := make(map[string][]string)
+	var errs []error
+	found := false
 
 	for i, sc := range cs.configs {
 		prefix := sc.FullPrefix()
@@ -180,6 +262,13 @@ func (cs *CompositeSource) ListChildrenRecursive(namespace string) ([]Child, err
 			continue
 		}
 
+		if !cs.checkRoot(i, &errs) {
+			continue
+		}
+		if mountRest != "" || prefix == namespace {
+			found = true
+		}
+
 		var list []Child
 		if mountRest != "" {
 			// Source смонтирован ниже — namespace для каждого сегмента префикса
@@ -190,13 +279,15 @@ func (cs *CompositeSource) ListChildrenRecursive(namespace string) ([]Child, err
 		}
 
 		children, err := cs.sources[i].ListChildrenRecursive(relNs)
-		if err == nil {
+		use, ok := cs.acceptListing(i, err, &errs)
+		found = found || ok
+		if use {
 			for _, c := range children {
 				if mountRest != "" {
 					c.Name = mountRest + "." + c.Name
 				}
 				if c.Type == "module" {
-					moduleCount[c.Name]++
+					moduleSources[c.Name] = append(moduleSources[c.Name], cs.sources[i].RootDir)
 				}
 				list = append(list, c)
 			}
@@ -205,25 +296,23 @@ func (cs *CompositeSource) ListChildrenRecursive(namespace string) ([]Child, err
 	}
 
 	result := mergeRecursive(lists)
-
-	// Модуль с одним именем из нескольких sources — конфликт.
-	for _, c := range result {
-		if c.Type == "module" && moduleCount[c.Name] > 1 {
-			return nil, fmt.Errorf("discovery: conflict: module %q found in multiple sources", c.Name)
-		}
-	}
-
-	return result, nil
+	markSourceConflicts(result, moduleSources)
+	return listingResult(namespace, found, result, errs)
 }
 
-// List возвращает все модули из всех sources.
+// List возвращает все модули из всех sources. Недоступный source не роняет
+// листинг: остальные отдают модули, ошибки — в *PartialError.
 // Примечание: в CLI сейчас используется ListChildren/ListChildrenRecursive;
 // List оставлен для обратной совместимости и тестов.
 func (cs *CompositeSource) List() ([]ModuleInfo, error) {
 	var modules []ModuleInfo
+	var errs []error
 	for i, sc := range cs.configs {
+		if !cs.checkRoot(i, &errs) {
+			continue
+		}
 		srcModules, err := cs.sources[i].List()
-		if err != nil {
+		if use, _ := cs.acceptListing(i, err, &errs); !use {
 			continue
 		}
 		prefix := sc.FullPrefix()
@@ -234,5 +323,5 @@ func (cs *CompositeSource) List() ([]ModuleInfo, error) {
 			modules = append(modules, m)
 		}
 	}
-	return modules, nil
+	return modules, newPartialError(errs)
 }

@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -1161,5 +1162,65 @@ func TestRecursiveLoopStillTerminates(t *testing.T) {
 	names := listNames(t, s)
 	if len(names) != 1 || names["a.m"] == "" {
 		t.Errorf("List = %v, want только a.m", names)
+	}
+}
+
+// TestListChildrenRecursiveUnreadableDirPartial: нечитаемый подкаталог не
+// роняет и не скрывает обход — результат возвращается с *PartialError.
+func TestListChildrenRecursiveUnreadableDirPartial(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "a.yaml"), "name: a\n")
+	writeFile(t, filepath.Join(root, "sub", "b.yaml"), "name: b\n")
+	noAccessDir(t, filepath.Join(root, "sub"))
+	s := NewGlobalSource(root)
+
+	children, err := s.ListChildrenRecursive("")
+	var pe *PartialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("err = %v, want *PartialError", err)
+	}
+	if !strings.Contains(err.Error(), filepath.Join(root, "sub")) {
+		t.Fatalf("err %q не содержит путь sub", err)
+	}
+	want := []string{"a:module", "sub:namespace"}
+	if got := childKeys(children); !reflect.DeepEqual(got, want) {
+		t.Fatalf("children = %v, want %v", got, want)
+	}
+
+	modules, err := s.List()
+	if !errors.As(err, &pe) {
+		t.Fatalf("List err = %v, want *PartialError", err)
+	}
+	if len(modules) != 1 || modules[0].Name != "a" {
+		t.Fatalf("List = %+v, want [a]", modules)
+	}
+}
+
+// TestListingsUnreadableRootPartial: нечитаемый корень — пустой результат и
+// *PartialError; отсутствующий корень — nil, nil (свежая установка).
+func TestListingsUnreadableRootPartial(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "a.yaml"), "name: a\n")
+	noAccessDir(t, root)
+	s := NewGlobalSource(root)
+
+	children, err := s.ListChildrenRecursive("")
+	var pe *PartialError
+	if !errors.As(err, &pe) || len(children) != 0 {
+		t.Fatalf("ListChildrenRecursive = %+v, %v; want пусто и *PartialError", children, err)
+	}
+	modules, err := s.List()
+	if !errors.As(err, &pe) || len(modules) != 0 {
+		t.Fatalf("List = %+v, %v; want пусто и *PartialError", modules, err)
+	}
+}
+
+func TestListingsMissingRootNoError(t *testing.T) {
+	s := NewGlobalSource(filepath.Join(t.TempDir(), "nope"))
+	if children, err := s.ListChildrenRecursive(""); children != nil || err != nil {
+		t.Fatalf("ListChildrenRecursive = %+v, %v; want nil, nil", children, err)
+	}
+	if modules, err := s.List(); modules != nil || err != nil {
+		t.Fatalf("List = %+v, %v; want nil, nil", modules, err)
 	}
 }
