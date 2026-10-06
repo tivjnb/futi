@@ -2380,8 +2380,16 @@ func TestRunSystemHelpPartialListing(t *testing.T) {
 	if !errors.As(err, &pe) {
 		t.Fatalf("runSystemHelp err = %v, want *discovery.PartialError", err)
 	}
-	if !strings.Contains(buf.String(), "ns.x") && !strings.Contains(buf.String(), "x") {
-		t.Errorf("дети не выведены:\n%s", buf.String())
+	found := false
+	for _, line := range strings.Split(buf.String(), "\n") {
+		cells := strings.Split(line, "│")
+		// cells: ["", TYPE, NAME, DESCRIPTION, ""]
+		if len(cells) >= 4 && strings.TrimSpace(cells[1]) == "module" && strings.TrimSpace(cells[2]) == "x" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("нет строки модуля x в выводе:\n%s", buf.String())
 	}
 }
 
@@ -2411,7 +2419,15 @@ func TestRunCompleteMainPartialListingIsSilent(t *testing.T) {
 	if !strings.Contains(out.String(), "x\n") && !strings.Contains(out.String(), "x\t") {
 		t.Errorf("нет подсказки x:\n%s", out.String())
 	}
-	if strings.Contains(errBuf.String(), "warning") || strings.Contains(errBuf.String(), "refresh") || strings.Contains(errBuf.String(), "missing") {
-		t.Errorf("stderr не молчит:\n%s", errBuf.String())
+	// runCompleteMain передаёт stderr в runComplete, который штатно пишет туда
+	// строку директивы; кроме неё stderr должен быть пуст.
+	var rest []string
+	for _, line := range strings.Split(errBuf.String(), "\n") {
+		if line != "" && !strings.HasPrefix(line, "Completion ended with directive") {
+			rest = append(rest, line)
+		}
+	}
+	if len(rest) > 0 {
+		t.Errorf("stderr не молчит:\n%s", strings.Join(rest, "\n"))
 	}
 }
