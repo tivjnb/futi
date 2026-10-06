@@ -672,4 +672,28 @@ func TestCompleteModulesFlagsAfterPositional(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("uninstall with namespace: got %v, want %v", got, want)
 	}
+
+	// Случай 3: modules install с --ref перед URL (флаг уже введён)
+	matches, _ = Complete(src, nil, []string{"modules", "install", "--ref", "v1", "https://x/repo.git"}, "--")
+	got = text(matches)
+	want = []string{"--from-archive", "--from-git", "--from-local", "--local", "--namespace", "--skip-attach"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("install with --ref before URL: got %v, want %v", got, want)
+	}
+
+	// Случай 4: modules install с URL и --ref после (флаг уже введён)
+	matches, _ = Complete(src, nil, []string{"modules", "install", "https://x/repo.git", "--ref", "v1"}, "--")
+	got = text(matches)
+	want = []string{"--from-archive", "--from-git", "--from-local", "--local", "--namespace", "--skip-attach"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("install with --ref after URL: got %v, want %v", got, want)
+	}
+
+	// Случай 5: modules info (нет флагов)
+	matches, _ = Complete(src, nil, []string{"modules", "info", "x"}, "--")
+	got = text(matches)
+	want = []string{}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("info with namespace: got %v, want %v", got, want)
+	}
 }

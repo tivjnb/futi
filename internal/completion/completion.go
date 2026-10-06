@@ -123,7 +123,7 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 				flags = modulesUpdateFlags
 			}
 			if flags != nil {
-				return filterMatches(flagMatches(flags, toComplete), toComplete), ShellCompDirectiveNoFileComp
+				return filterMatches(withoutUsed(flagMatches(flags, toComplete), flagArgs), toComplete), ShellCompDirectiveNoFileComp
 			}
 		}
 		return nil, ShellCompDirectiveNoFileComp
