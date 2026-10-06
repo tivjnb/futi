@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -1765,5 +1766,52 @@ func TestRefreshPartialKeepsEntries(t *testing.T) {
 				t.Fatalf("y в кэше = %v, want %v", kept, tt.wantYKept)
 			}
 		})
+	}
+}
+
+// TestRefreshKeepsModulesOfUnsearchableDir: каталог ns потерял право поиска
+// (r--): листинг не может проверить его записи и становится частичным, поэтому
+// Refresh возвращает *PartialError и не вычищает ns/y.yaml из кэша.
+func TestRefreshKeepsModulesOfUnsearchableDir(t *testing.T) {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("chmod не ограничивает доступ для root и в Windows")
+	}
+	dir := t.TempDir()
+	nsDir := filepath.Join(dir, "ns")
+	yPath := filepath.Join(nsDir, "y.yaml")
+	if err := os.Mkdir(nsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, yPath, "name: y\n")
+	src := discovery.NewGlobalSource(dir)
+	cache := newTestCache()
+	restore := suppressLog(t)
+	defer restore()
+
+	if _, err := cache.Refresh(src); err != nil {
+		t.Fatalf("первый Refresh: %v", err)
+	}
+	if cache.ModuleCount() != 1 {
+		t.Fatalf("после первого Refresh ModuleCount = %d, want 1", cache.ModuleCount())
+	}
+
+	if err := os.Chmod(nsDir, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(nsDir, 0o755) })
+
+	_, err := cache.Refresh(src)
+	var pe *discovery.PartialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("второй Refresh err = %v, want *discovery.PartialError", err)
+	}
+	if cache.ModuleCount() != 1 {
+		t.Fatalf("после второго Refresh ModuleCount = %d, want 1 (ns/y.yaml сохранён)", cache.ModuleCount())
+	}
+	cache.mu.RLock()
+	_, kept := cache.entries[yPath]
+	cache.mu.RUnlock()
+	if !kept {
+		t.Fatalf("запись %s удалена из кэша", yPath)
 	}
 }

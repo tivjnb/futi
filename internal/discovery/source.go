@@ -162,7 +162,8 @@ func (s *GlobalSource) withinPackage(segments []string) (bool, error) {
 // алиасы на один каталог раскрываются независимо (см. walkModules).
 // Записи, которые Resolve не найдёт, пропускаются (см. classifyEntry):
 // битые симлинки, FIFO и устройства с именем *.yaml, имена с точкой,
-// пустые и "config".
+// пустые и "config". Записи с иной ошибкой stat (например, EACCES) тоже
+// пропускаются, но листинг возвращается с *PartialError.
 func (s *GlobalSource) List() ([]ModuleInfo, error) {
 	// Non-existent root = no modules (fresh install)
 	if _, err := os.Stat(s.RootDir); err != nil {
@@ -193,8 +194,9 @@ func (s *GlobalSource) List() ([]ModuleInfo, error) {
 // Пакет (директория с config.yaml) — лист: внутрь не заходим, его *.yaml
 // не модули (согласовано с Resolve и ListChildrenRecursive).
 // Ошибка чтения самого dir возвращается; ошибки вложенных каталогов (кроме
-// исчезновения каталога, см. collectWalkError) накапливаются в *errs: обход
-// продолжается, листинг станет частичным.
+// исчезновения каталога, см. collectWalkError) и ошибки записей dir (см.
+// readModuleEntries) накапливаются в *errs: обход продолжается, листинг
+// станет частичным.
 func (s *GlobalSource) walkModules(dir, nsPrefix string, modules *[]ModuleInfo, ancestors map[string]bool, errs *[]error) error {
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
@@ -206,9 +208,12 @@ func (s *GlobalSource) walkModules(dir, nsPrefix string, modules *[]ModuleInfo, 
 	ancestors[real] = true
 	defer delete(ancestors, real)
 
-	entries, err := readModuleEntries(dir)
+	entries, entryErr, err := readModuleEntries(dir)
 	if err != nil {
 		return err
+	}
+	if entryErr != nil {
+		*errs = append(*errs, entryErr)
 	}
 
 	for _, e := range entries {
@@ -261,23 +266,34 @@ type moduleEntry struct {
 
 // readModuleEntries читает dir и классифицирует записи (classifyEntry);
 // пропущенные записи не возвращаются. Порядок — как у os.ReadDir (по имени).
+// err — ошибка чтения самого dir (результата нет). entryErr — первая ошибка
+// stat записи (например, EACCES в каталоге без права поиска), обёрнутая в
+// "discovery: ...": такие записи пропускаются, остальные возвращаются, а
+// листинг неполон. Ошибка одна на каталог, чтобы каталог без права поиска
+// не давал по предупреждению на каждую запись; nil, если ошибок нет.
 // Конфликт x.yaml и x/config.yaml (Resolve вернёт для него ошибку) сводится
 // в одну запись yaml-модуля с conflict=true: манифест от x.yaml,
 // детерминированно; запись-пакет отбрасывается.
 // Общий шаг всех обходов GlobalSource: листинги согласованы между собой
 // и с Resolve.
-func readModuleEntries(dir string) ([]moduleEntry, error) {
+func readModuleEntries(dir string) (entries []moduleEntry, entryErr error, err error) {
 	dirEntries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var entries []moduleEntry
 	for _, de := range dirEntries {
-		if e, ok := classifyEntry(dir, de); ok {
+		e, ok, err := classifyEntry(dir, de)
+		if err != nil {
+			if entryErr == nil {
+				entryErr = fmt.Errorf("discovery: %w", err)
+			}
+			continue
+		}
+		if ok {
 			entries = append(entries, e)
 		}
 	}
-	return mergeConflicts(entries), nil
+	return mergeConflicts(entries), entryErr, nil
 }
 
 // mergeConflicts сводит пары «yaml-модуль x + пакет x» в одну запись
@@ -309,29 +325,47 @@ func mergeConflicts(entries []moduleEntry) []moduleEntry {
 }
 
 // classifyEntry определяет вид записи de каталога dir, следуя симлинкам.
-// ok=false — запись пропускается, потому что Resolve её не найдёт:
+// ok=false без ошибки — запись пропускается тихо, потому что Resolve её не
+// найдёт:
 //   - сегмент namespace пустой, содержит "." или равен "config"
 //     (my.tool.yaml, .yaml, foo..yaml, config.yaml, my.dir/, .git/, config/);
-//   - .yaml-файл (в т.ч. симлинк), у которого Stat падает или который не
-//     обычный файл (битый симлинк, FIFO, устройство);
+//   - .yaml-файл (в т.ч. симлинк), цели которого нет (битый или зацикленный
+//     симлинк) или который не обычный файл (FIFO, устройство);
 //   - не каталог и не .yaml-файл.
-func classifyEntry(dir string, de os.DirEntry) (moduleEntry, bool) {
+//
+// Прочие ошибки stat (например, EACCES в каталоге без права поиска) — для
+// симлинка, .yaml-файла или config.yaml каталога — возвращаются (ok=false):
+// вид записи неизвестен, а Resolve на ней тоже упадёт, так что молча
+// пропускать её нельзя — листинг неполон.
+func classifyEntry(dir string, de os.DirEntry) (moduleEntry, bool, error) {
 	path := filepath.Join(dir, de.Name())
-	if entryIsDir(path, de) {
+	isDir, err := entryIsDir(path, de)
+	if err != nil {
+		return moduleEntry{}, false, err
+	}
+	if isDir {
 		if !validSegment(de.Name()) {
-			return moduleEntry{}, false
+			return moduleEntry{}, false, nil
 		}
 		configPath := filepath.Join(path, "config.yaml")
-		if fileExists(configPath) {
-			return moduleEntry{kind: entryPackage, name: de.Name(), path: path, manifestPath: configPath, moduleRoot: path}, true
+		isPackage, err := statEntryFile(configPath)
+		if err != nil {
+			return moduleEntry{}, false, err
 		}
-		return moduleEntry{kind: entryNamespace, name: de.Name(), path: path}, true
+		if isPackage {
+			return moduleEntry{kind: entryPackage, name: de.Name(), path: path, manifestPath: configPath, moduleRoot: path}, true, nil
+		}
+		return moduleEntry{kind: entryNamespace, name: de.Name(), path: path}, true, nil
 	}
 	name, isYAML := strings.CutSuffix(de.Name(), ".yaml")
-	if !isYAML || !validSegment(name) || !fileExists(path) {
-		return moduleEntry{}, false
+	if !isYAML || !validSegment(name) {
+		return moduleEntry{}, false, nil
 	}
-	return moduleEntry{kind: entryYAMLModule, name: name, path: path, manifestPath: path, moduleRoot: dir}, true
+	isFile, err := statEntryFile(path)
+	if err != nil || !isFile {
+		return moduleEntry{}, false, err
+	}
+	return moduleEntry{kind: entryYAMLModule, name: name, path: path, manifestPath: path, moduleRoot: dir}, true, nil
 }
 
 // validSegment сообщает, что name годится как сегмент namespace для Resolve:
@@ -342,17 +376,27 @@ func validSegment(name string) bool {
 }
 
 // entryIsDir определяет, является ли entry директорией, следуя симлинкам.
-// Битый симлинк (цель недоступна) — не директория; как файл он тоже не
-// листится (classifyEntry: Stat падает).
-func entryIsDir(path string, entry os.DirEntry) bool {
+// Битый или зацикленный симлинк (цели нет) — не директория без ошибки; как
+// файл он тоже не листится (classifyEntry). Прочие ошибки stat симлинка
+// (например, EACCES) возвращаются.
+func entryIsDir(path string, entry os.DirEntry) (bool, error) {
 	if entry.Type()&os.ModeSymlink == 0 {
-		return entry.IsDir()
+		return entry.IsDir(), nil
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return false
+		if isDanglingLink(err) {
+			return false, nil
+		}
+		return false, err
 	}
-	return info.IsDir()
+	return info.IsDir(), nil
+}
+
+// isDanglingLink сообщает, что stat упал, потому что цели пути нет:
+// ErrNotExist, ENOTDIR (битый симлинк) или ELOOP (зацикленный симлинк).
+func isDanglingLink(err error) bool {
+	return isMissingDir(err) || errors.Is(err, syscall.ELOOP)
 }
 
 // nsName строит имя модуля с namespace-префиксом.
@@ -379,13 +423,14 @@ func statFile(path string) (bool, error) {
 	return info.Mode().IsRegular(), nil
 }
 
-// fileExists сообщает, что path — существующий обычный файл.
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
+// statEntryFile — statFile для записей листинга: зацикленный симлинк (ELOOP),
+// как и битый, — «файла нет» без ошибки (classifyEntry пропускает его тихо).
+func statEntryFile(path string) (bool, error) {
+	isFile, err := statFile(path)
+	if err != nil && errors.Is(err, syscall.ELOOP) {
+		return false, nil
 	}
-	return info.Mode().IsRegular()
+	return isFile, err
 }
 
 // namespaceDir возвращает каталог namespace ("" — RootDir). Сегменты
@@ -413,15 +458,16 @@ func (s *GlobalSource) namespaceDir(namespace string) (string, error) {
 //   - поддиректории с config.yaml → child module (пакет)
 //   - поддиректории без config.yaml → child namespace
 //
-// Записи, которые Resolve не найдёт, пропускаются (см. classifyEntry).
-// Пустой namespace = корень RootDir.
+// Записи, которые Resolve не найдёт, пропускаются (см. classifyEntry);
+// записи с иной ошибкой stat тоже пропускаются, а результат возвращается
+// с *PartialError. Пустой namespace = корень RootDir.
 func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {
 	dir, err := s.namespaceDir(namespace)
 	if err != nil {
 		return nil, err
 	}
 
-	entries, err := readModuleEntries(dir)
+	entries, entryErr, err := readModuleEntries(dir)
 	if err != nil {
 		// ENOTDIR — сегмент namespace оказался файлом: namespace нет, как и в Resolve.
 		if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) {
@@ -457,6 +503,10 @@ func (s *GlobalSource) ListChildren(namespace string) ([]Child, error) {
 		})
 	}
 
+	if entryErr != nil {
+		// Записи с ошибкой stat пропущены: результат валиден, но неполон.
+		return children, &PartialError{Errs: []error{entryErr}}
+	}
 	return children, nil
 }
 
@@ -527,8 +577,8 @@ func (s *GlobalSource) startAncestors(namespace string) map[string]bool {
 // (включая предков стартового каталога): защита от циклов симлинков
 // (a → b → a); алиасы на один каталог раскрываются независимо.
 // Риск: при веерных алиасах число записей растёт как k^глубина; лимита нет.
-// Ошибка чтения самого dir возвращается; ошибки вложенных каталогов
-// накапливаются в *errs (см. collectWalkError).
+// Ошибка чтения самого dir возвращается; ошибки вложенных каталогов (см.
+// collectWalkError) и записей dir (см. readModuleEntries) накапливаются в *errs.
 func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child, ancestors map[string]bool, errs *[]error) error {
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
@@ -540,9 +590,12 @@ func (s *GlobalSource) walkChildrenRecursive(dir, prefix string, result *[]Child
 	ancestors[real] = true
 	defer delete(ancestors, real)
 
-	entries, err := readModuleEntries(dir)
+	entries, entryErr, err := readModuleEntries(dir)
 	if err != nil {
 		return err
+	}
+	if entryErr != nil {
+		*errs = append(*errs, entryErr)
 	}
 
 	for _, e := range entries {

@@ -1000,13 +1000,21 @@ func TestGlobalSourceResolveConflictIsNotNotFound(t *testing.T) {
 // noAccessDir создаёт каталог без прав доступа; права возвращаются в Cleanup.
 func noAccessDir(t *testing.T, path string) {
 	t.Helper()
+	restrictDir(t, path, 0)
+}
+
+// restrictDir ставит каталогу path права mode и восстанавливает 0755 в
+// t.Cleanup. Пропускает тест под root и в Windows: там chmod не ограничивает
+// доступ.
+func restrictDir(t *testing.T, path string, mode os.FileMode) {
+	t.Helper()
 	if os.Geteuid() == 0 {
 		t.Skip("root обходит права доступа")
 	}
 	if runtime.GOOS == "windows" {
-		t.Skip("chmod 000 не ограничивает доступ в Windows")
+		t.Skip("chmod не ограничивает доступ в Windows")
 	}
-	if err := os.Chmod(path, 0); err != nil {
+	if err := os.Chmod(path, mode); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(path, 0o755) })
@@ -1171,6 +1179,8 @@ func TestRecursiveLoopStillTerminates(t *testing.T) {
 
 // TestListChildrenRecursiveUnreadableDirPartial: нечитаемый подкаталог не
 // роняет и не скрывает обход — результат возвращается с *PartialError.
+// Сам sub не листится: без прав нельзя узнать, пакет он или namespace
+// (stat sub/config.yaml падает).
 func TestListChildrenRecursiveUnreadableDirPartial(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "a.yaml"), "name: a\n")
@@ -1186,7 +1196,7 @@ func TestListChildrenRecursiveUnreadableDirPartial(t *testing.T) {
 	if !strings.Contains(err.Error(), filepath.Join(root, "sub")) {
 		t.Fatalf("err %q не содержит путь sub", err)
 	}
-	want := []string{"a:module", "sub:namespace"}
+	want := []string{"a:module"}
 	if got := childKeys(children); !reflect.DeepEqual(got, want) {
 		t.Fatalf("children = %v, want %v", got, want)
 	}
@@ -1246,5 +1256,165 @@ func TestListingsMissingRootNoError(t *testing.T) {
 	}
 	if modules, err := s.List(); modules != nil || err != nil {
 		t.Fatalf("List = %+v, %v; want nil, nil", modules, err)
+	}
+}
+
+// assertPartialMentions проверяет, что err — *PartialError из want ошибок и
+// её текст содержит path.
+func assertPartialMentions(t *testing.T, name string, err error, wantErrs int, path string) {
+	t.Helper()
+	var pe *PartialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("%s err = %v, want *PartialError", name, err)
+	}
+	if len(pe.Errs) != wantErrs {
+		t.Errorf("%s: %d ошибок (%v), want %d", name, len(pe.Errs), err, wantErrs)
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("%s err %q не содержит путь %s", name, err, path)
+	}
+}
+
+// moduleNames возвращает имена модулей List в порядке листинга.
+func moduleNames(modules []ModuleInfo) []string {
+	names := make([]string, 0, len(modules))
+	for _, m := range modules {
+		names = append(names, m.Name)
+	}
+	return names
+}
+
+// TestListingsReportUnsearchableNamespaceDir: каталог namespace с правами r--
+// (ReadDir работает, stat записей — EACCES) не выпадает из листинга молча:
+// запись ns пропускается (пакет это или namespace — неизвестно), а листинг
+// становится частичным с путём ns/config.yaml в ошибке. Иначе Refresh счёл
+// бы листинг полным и вычистил модули ns из кэша.
+func TestListingsReportUnsearchableNamespaceDir(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "a.yaml"), "name: a\n")
+	writeFile(t, filepath.Join(root, "ns", "y.yaml"), "name: y\n")
+	restrictDir(t, filepath.Join(root, "ns"), 0o644)
+	s := NewGlobalSource(root)
+	configPath := filepath.Join(root, "ns", "config.yaml")
+
+	children, err := s.ListChildrenRecursive("")
+	assertPartialMentions(t, "ListChildrenRecursive(\"\")", err, 1, configPath)
+	if got, want := childKeys(children), []string{"a:module"}; !slices.Equal(got, want) {
+		t.Errorf("ListChildrenRecursive(\"\") = %v, want %v", got, want)
+	}
+
+	children, err = s.ListChildren("")
+	assertPartialMentions(t, "ListChildren(\"\")", err, 1, configPath)
+	if got, want := childKeys(children), []string{"a:module"}; !slices.Equal(got, want) {
+		t.Errorf("ListChildren(\"\") = %v, want %v", got, want)
+	}
+
+	modules, err := s.List()
+	assertPartialMentions(t, "List()", err, 1, configPath)
+	if got, want := moduleNames(modules), []string{"a"}; !slices.Equal(got, want) {
+		t.Errorf("List() = %v, want %v", got, want)
+	}
+}
+
+// TestListChildrenUnsearchableNamespaceIsPlainError: листинг самого каталога
+// ns с правами r-- — обычная ошибка (проверка «внутри пакета» не может
+// выполнить stat ns/config.yaml), как и Resolve любого ns.*.
+func TestListChildrenUnsearchableNamespaceIsPlainError(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "ns", "y.yaml"), "name: y\n")
+	restrictDir(t, filepath.Join(root, "ns"), 0o644)
+
+	children, err := NewGlobalSource(root).ListChildren("ns")
+	var pe *PartialError
+	if err == nil || errors.As(err, &pe) || errors.Is(err, ErrNotFound) || children != nil {
+		t.Fatalf("ListChildren(ns) = %+v, %v; want nil и обычная ошибка (не *PartialError, не ErrNotFound)", children, err)
+	}
+}
+
+// TestListingsReportYAMLStatErrorOncePerDir: stat .yaml-записей падает (корень
+// r--) — записи пропускаются, листинг частичный с одной ошибкой на каталог
+// (первая по имени запись), а не по ошибке на каждую запись.
+func TestListingsReportYAMLStatErrorOncePerDir(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "a.yaml"), "name: a\n")
+	writeFile(t, filepath.Join(root, "b.yaml"), "name: b\n")
+	restrictDir(t, root, 0o644)
+	s := NewGlobalSource(root)
+	aPath := filepath.Join(root, "a.yaml")
+
+	children, err := s.ListChildren("")
+	assertPartialMentions(t, "ListChildren(\"\")", err, 1, aPath)
+	if len(children) != 0 {
+		t.Errorf("ListChildren(\"\") = %+v, want пусто", children)
+	}
+	children, err = s.ListChildrenRecursive("")
+	assertPartialMentions(t, "ListChildrenRecursive(\"\")", err, 1, aPath)
+	if len(children) != 0 {
+		t.Errorf("ListChildrenRecursive(\"\") = %+v, want пусто", children)
+	}
+	modules, err := s.List()
+	assertPartialMentions(t, "List()", err, 1, aPath)
+	if len(modules) != 0 {
+		t.Errorf("List() = %+v, want пусто", modules)
+	}
+}
+
+// TestListingsReportSymlinkStatError: симлинк y.yaml на файл в каталоге без
+// права поиска — stat падает с EACCES (не «цели нет»): запись пропускается,
+// листинг частичный с путём симлинка; соседний ok.yaml листится.
+func TestListingsReportSymlinkStatError(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	writeFile(t, filepath.Join(outside, "locked", "y.yaml"), "name: y\n")
+	writeFile(t, filepath.Join(root, "ns2", "ok.yaml"), "name: ok\n")
+	linkPath := filepath.Join(root, "ns2", "y.yaml")
+	symlinkOrFail(t, filepath.Join(outside, "locked", "y.yaml"), linkPath)
+	restrictDir(t, filepath.Join(outside, "locked"), 0o644)
+	s := NewGlobalSource(root)
+
+	children, err := s.ListChildrenRecursive("")
+	assertPartialMentions(t, "ListChildrenRecursive(\"\")", err, 1, linkPath)
+	if got, want := childKeys(children), []string{"ns2.ok:module", "ns2:namespace"}; !slices.Equal(got, want) {
+		t.Errorf("ListChildrenRecursive(\"\") = %v, want %v", got, want)
+	}
+
+	children, err = s.ListChildren("ns2")
+	assertPartialMentions(t, "ListChildren(ns2)", err, 1, linkPath)
+	if got, want := childKeys(children), []string{"ok:module"}; !slices.Equal(got, want) {
+		t.Errorf("ListChildren(ns2) = %v, want %v", got, want)
+	}
+
+	modules, err := s.List()
+	assertPartialMentions(t, "List()", err, 1, linkPath)
+	if got, want := moduleNames(modules), []string{"ns2.ok"}; !slices.Equal(got, want) {
+		t.Errorf("List() = %v, want %v", got, want)
+	}
+}
+
+// TestListingsSkipDanglingSymlinksSilently: битый (цели нет) и зацикленный
+// (ELOOP) симлинки *.yaml пропускаются тихо — это не ошибка чтения, листинг
+// полный.
+func TestListingsSkipDanglingSymlinksSilently(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "real.yaml"), "name: real\n")
+	symlinkOrFail(t, "nope", filepath.Join(root, "z.yaml"))
+	symlinkOrFail(t, "loop.yaml", filepath.Join(root, "loop.yaml"))
+	s := NewGlobalSource(root)
+
+	for name, list := range map[string]func(string) ([]Child, error){"ListChildren": s.ListChildren, "ListChildrenRecursive": s.ListChildrenRecursive} {
+		children, err := list("")
+		if err != nil {
+			t.Errorf("%s(\"\") err = %v, want nil", name, err)
+		}
+		if got, want := childKeys(children), []string{"real:module"}; !slices.Equal(got, want) {
+			t.Errorf("%s(\"\") = %v, want %v", name, got, want)
+		}
+	}
+	modules, err := s.List()
+	if err != nil {
+		t.Errorf("List() err = %v, want nil", err)
+	}
+	if got, want := moduleNames(modules), []string{"real"}; !slices.Equal(got, want) {
+		t.Errorf("List() = %v, want %v", got, want)
 	}
 }
