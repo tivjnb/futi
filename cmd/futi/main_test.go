@@ -2468,3 +2468,27 @@ func TestRunCompleteMainPartialListingIsSilent(t *testing.T) {
 		t.Errorf("stderr не молчит:\n%s", strings.Join(rest, "\n"))
 	}
 }
+
+// TestRunListErrorsHaveSingleListPrefix: все ошибки runList начинаются ровно с
+// одного «list: » — вызывающий печатает их как есть, без своего префикса.
+func TestRunListErrorsHaveSingleListPrefix(t *testing.T) {
+	dir := t.TempDir()
+	writeMainTestFile(t, filepath.Join(dir, "a.yaml"), "name: a\ncmd: echo a\n")
+	writeMainTestFile(t, filepath.Join(dir, "c.yaml"), "name: c\n")
+	if err := os.Mkdir(filepath.Join(dir, "c"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMainTestFile(t, filepath.Join(dir, "c", "config.yaml"), "name: c\n")
+
+	for _, ns := range []string{"nope", "a.nope", "c"} {
+		var buf bytes.Buffer
+		err := runList(&buf, discovery.NewGlobalSource(dir), ns, false, false, nil)
+		if err == nil {
+			t.Fatalf("runList(%q) err = nil, want ошибка", ns)
+		}
+		msg := err.Error()
+		if !strings.HasPrefix(msg, "list: ") || strings.HasPrefix(msg, "list: list: ") {
+			t.Errorf("runList(%q) err = %q, want ровно один префикс «list: »", ns, msg)
+		}
+	}
+}

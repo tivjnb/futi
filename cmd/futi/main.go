@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -471,7 +470,7 @@ func runList(w io.Writer, source discovery.Source, namespace string, verbose, re
 	// чтобы вызывающий показал предупреждения.
 	var partial *discovery.PartialError
 	if listErr != nil && !errors.As(listErr, &partial) {
-		return listErr
+		return fmt.Errorf("list: %w", listErr)
 	}
 	if len(children) == 0 {
 		fmt.Fprintln(w, "No modules found.")
@@ -560,7 +559,10 @@ func renderCommandTable(w io.Writer, commands map[string]*execmodule.Command, ma
 	if err := tw.Bulk(rows); err != nil {
 		return fmt.Errorf("list: render: %w", err)
 	}
-	return tw.Render()
+	if err := tw.Render(); err != nil {
+		return fmt.Errorf("list: render: %w", err)
+	}
+	return nil
 }
 
 func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader modulerunner.ModuleLoader) error {
@@ -606,7 +608,10 @@ func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader
 	if err := tw.Bulk(rows); err != nil {
 		return fmt.Errorf("list: render: %w", err)
 	}
-	return tw.Render()
+	if err := tw.Render(); err != nil {
+		return fmt.Errorf("list: render: %w", err)
+	}
+	return nil
 }
 
 func printUsage() {
@@ -1114,7 +1119,8 @@ func main() {
 				os.Exit(1)
 			}
 			if listErr := runList(os.Stdout, source, listReq.namespace, listReq.verbose, listReq.recurse, cache); listErr != nil && !printPartialWarnings(os.Stderr, listErr) {
-				log.Fatalf("list: %v", listErr)
+				fmt.Fprintln(os.Stderr, listErr)
+				os.Exit(1)
 			}
 			return
 		case errors.As(err, &valReq):
