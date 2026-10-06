@@ -32,9 +32,16 @@ func NewCompositeSource(cfg *config.Config) *CompositeSource {
 
 // Resolve находит модуль по полному namespace, проверяя все sources.
 // Если модуль найден в нескольких sources — ошибка конфликта.
+// Нечитаемый source (не ErrNotFound) не мешает модулям других sources: модуль
+// найден ровно в одном — он и возвращается, а о нечитаемом source предупреждает
+// листинг. Поэтому конфликт с нечитаемым source не обнаруживается; конфликт
+// x.yaml и x/config.yaml внутри одного source по-прежнему ошибка. Если модуль
+// не найден нигде, а ошибки были — возвращаются они (одна как есть, несколько
+// через errors.Join; не ErrNotFound): модуль мог быть в нечитаемом source.
 func (cs *CompositeSource) Resolve(namespace string) (string, string, error) {
 	var foundManifest, foundRoot string
 	foundCount := 0
+	var errs []error
 
 	for i, sc := range cs.configs {
 		prefix := sc.FullPrefix()
@@ -57,14 +64,26 @@ func (cs *CompositeSource) Resolve(namespace string) (string, string, error) {
 			foundManifest = manifest
 			foundRoot = root
 		} else if !errors.Is(err, ErrNotFound) {
-			// Конфликт/I/O-ошибка источника — не «не найдено», не считаем как отсутствие.
-			return "", "", err
+			var conflict *sourceConflictError
+			if errors.As(err, &conflict) {
+				// Конфликт x.yaml и x/config.yaml в одном source — ошибка модулей.
+				return "", "", err
+			}
+			// I/O-ошибка источника — не «не найдено», но и не отказ для других sources.
+			errs = append(errs, err)
 		}
 	}
 
 	switch foundCount {
 	case 0:
-		return "", "", newModuleNotFound(namespace)
+		switch len(errs) {
+		case 0:
+			return "", "", newModuleNotFound(namespace)
+		case 1:
+			return "", "", errs[0]
+		default:
+			return "", "", errors.Join(errs...)
+		}
 	case 1:
 		return foundManifest, foundRoot, nil
 	default:

@@ -70,6 +70,13 @@ func NewGlobalSource(rootDir string) *GlobalSource {
 	return &GlobalSource{RootDir: rootDir}
 }
 
+// sourceConflictError — конфликт x.yaml и x/config.yaml внутри одного source.
+// В отличие от ошибок чтения это ошибка конфигурации модулей: CompositeSource
+// не прячет её за модулем из другого source.
+type sourceConflictError struct{ msg string }
+
+func (e *sourceConflictError) Error() string { return e.msg }
+
 // Resolve реализует SaltStack-модель:
 //
 //	namespace "dev.deploy" → dev/deploy.yaml или dev/deploy/config.yaml
@@ -116,7 +123,7 @@ func (s *GlobalSource) Resolve(namespace string) (string, string, error) {
 
 	switch {
 	case yamlExists && pkgExists:
-		return "", "", fmt.Errorf("discovery: conflict for namespace %q: both %q and %q exist", namespace, yamlPath, pkgPath)
+		return "", "", &sourceConflictError{msg: fmt.Sprintf("discovery: conflict for namespace %q: both %q and %q exist", namespace, yamlPath, pkgPath)}
 	case yamlExists:
 		return yamlPath, filepath.Dir(yamlPath), nil
 	case pkgExists:

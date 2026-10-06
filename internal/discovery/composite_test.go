@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"errors"
+	"io/fs"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -831,6 +832,57 @@ func TestCompositeUnreadableRootSource(t *testing.T) {
 			if err == nil || errors.As(err, &pe) {
 				t.Fatalf("%s(ns) err = %v, want обычная ошибка (не *PartialError)", name, err)
 			}
+		}
+	})
+}
+
+// TestCompositeResolveWithUnreadableSource: нечитаемый source не ломает
+// модули других sources (о нём предупреждает листинг).
+func TestCompositeResolveWithUnreadableSource(t *testing.T) {
+	newSources := func(t *testing.T, aHasX bool) (*CompositeSource, string) {
+		dirA, dirB := t.TempDir(), t.TempDir()
+		if aHasX {
+			writeFile(t, filepath.Join(dirA, "x.yaml"), "name: x\n")
+		}
+		writeFile(t, filepath.Join(dirB, "x.yaml"), "name: x\n")
+		noAccessDir(t, dirB)
+		return NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: dirB}}}), dirA
+	}
+
+	t.Run("найден в читаемом source", func(t *testing.T) {
+		s, dirA := newSources(t, true)
+		manifest, root, err := s.Resolve("x")
+		if err != nil {
+			t.Fatalf("Resolve(x) err = %v, want nil", err)
+		}
+		if manifest != filepath.Join(dirA, "x.yaml") || root != dirA {
+			t.Fatalf("Resolve(x) = %q, %q; want манифест source A", manifest, root)
+		}
+	})
+	t.Run("не найден нигде, есть нечитаемый", func(t *testing.T) {
+		s, _ := newSources(t, false)
+		_, _, err := s.Resolve("x")
+		if err == nil || errors.Is(err, ErrNotFound) {
+			t.Fatalf("Resolve(x) err = %v, want ошибка чтения (не ErrNotFound)", err)
+		}
+		if !errors.Is(err, fs.ErrPermission) {
+			t.Fatalf("Resolve(x) err = %v, want fs.ErrPermission", err)
+		}
+	})
+	t.Run("не найден нигде, ошибок нет", func(t *testing.T) {
+		s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: t.TempDir()}}})
+		if _, _, err := s.Resolve("x"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Resolve(x) err = %v, want ErrNotFound", err)
+		}
+	})
+	t.Run("конфликт читаемых sources", func(t *testing.T) {
+		dirA, dirB := t.TempDir(), t.TempDir()
+		writeFile(t, filepath.Join(dirA, "x.yaml"), "name: x\n")
+		writeFile(t, filepath.Join(dirB, "x.yaml"), "name: x\n")
+		s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: dirB}}})
+		_, _, err := s.Resolve("x")
+		if err == nil || errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "conflict") {
+			t.Fatalf("Resolve(x) err = %v, want ошибка конфликта", err)
 		}
 	})
 }
