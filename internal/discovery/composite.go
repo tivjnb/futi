@@ -74,8 +74,9 @@ func (cs *CompositeSource) Resolve(namespace string) (string, string, error) {
 
 // checkRoot проверяет, что RootDir source-а i — существующий каталог. Иначе
 // ошибка добавляется в *errs и возвращается false: такой source ничего не
-// даёт в результат (в итог листинга она попадёт по правилу listingResult). Все sources CompositeSource заданы в config.yaml явно,
-// поэтому отсутствующий каталог — это ошибка, а не «свежая установка».
+// даёт в результат (в итог листинга она попадёт по правилу listingResult).
+// Все sources CompositeSource заданы в config.yaml явно, поэтому
+// отсутствующий каталог — это ошибка, а не «свежая установка».
 func (cs *CompositeSource) checkRoot(i int, errs *[]error) bool {
 	root := cs.sources[i].RootDir
 	info, err := os.Stat(root)
