@@ -1295,13 +1295,19 @@ echo '{"port": 8080}' | futi docker run --image nginx   # futi создаст в
 
 Одно ядро — множество способов доступа. Модуль пишется один раз, доступен из любого интерфейса:
 
-- **HTTP API** — REST endpoint для CI/CD и автоматизации
-- **MCP** — интеграция с AI-агентами (Claude, GPT, etc.)
-- **WebSocket** — real-time взаимодействие
+- **MCP** — интеграция с AI-агентами (Claude, GPT и т.п.): команды модулей становятся tools,
+  схема параметров — их input schema. Основной сценарий — **удалённый**: futi развёрнут на
+  машине как сервер, удалённый агент подключается по сети (MCP over streamable HTTP) и
+  запускает команды на этой машине. Локально — `futi mcp` по stdio
+- **HTTP API** — REST для CI/CD и автоматизации, на том же сервере, что и MCP
+- **Безопасность сервера** — по умолчанию слушает только localhost; токены, права по
+  namespace (allowlist), лимиты вывода и времени, аудит-лог
+- **Стрим вывода** (SSE/WebSocket) — позже
 
 ```bash
-futi serve --http --port 8080
-curl -X POST http://localhost:8080/api/v1/docker/build -d '{"tag": "myapp"}'
+futi serve --addr 127.0.0.1:8080            # форма команды предварительная
+curl -X POST http://localhost:8080/api/v1/exec -H "Authorization: Bearer $TOKEN" \
+  -d '{"namespace": "docker", "command": "build", "params": {"tag": "myapp"}}'
 ```
 
 ### Менеджер модулей
