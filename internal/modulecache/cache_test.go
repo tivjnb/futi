@@ -1691,3 +1691,79 @@ func TestStartStaleBinaryReloadsModuleFromDisk(t *testing.T) {
 		})
 	}
 }
+
+// stubSource — Source-заглушка: ListChildrenRecursive отдаёт заданных детей и ошибку.
+type stubSource struct {
+	children []discovery.Child
+	err      error
+}
+
+func (s *stubSource) Resolve(string) (string, string, error) {
+	return "", "", discovery.ErrNotFound
+}
+func (s *stubSource) List() ([]discovery.ModuleInfo, error)          { return nil, nil }
+func (s *stubSource) ListChildren(string) ([]discovery.Child, error) { return nil, nil }
+func (s *stubSource) ListChildrenRecursive(string) ([]discovery.Child, error) {
+	return s.children, s.err
+}
+
+// TestRefreshPartialKeepsEntries: частичный листинг (*PartialError) не вычищает
+// кэш — модуль y, пропавший из неполного результата, остаётся в кэше, а ошибка
+// возвращается вызывающему как есть. Без PartialError y удаляется.
+func TestRefreshPartialKeepsEntries(t *testing.T) {
+	dir := t.TempDir()
+	xPath := filepath.Join(dir, "x.yaml")
+	yPath := filepath.Join(dir, "y.yaml")
+	writeFile(t, xPath, "name: x\n")
+	writeFile(t, yPath, "name: y\n")
+	childX := discovery.Child{Name: "x", Type: "module", ManifestPath: xPath, ModuleRoot: dir}
+	childY := discovery.Child{Name: "y", Type: "module", ManifestPath: yPath, ModuleRoot: dir}
+
+	tests := []struct {
+		name      string
+		listErr   error
+		wantYKept bool
+		wantCount int
+	}{
+		{"частичный листинг сохраняет y", &discovery.PartialError{Errs: []error{errors.New("boom")}}, true, 2},
+		{"полный листинг удаляет y", nil, false, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cache := newTestCache()
+			src := &stubSource{children: []discovery.Child{childX, childY}}
+			if _, err := cache.Refresh(src); err != nil {
+				t.Fatalf("первый Refresh: %v", err)
+			}
+			if got := cache.ModuleCount(); got != 2 {
+				t.Fatalf("после первого Refresh ModuleCount = %d, want 2", got)
+			}
+
+			src.children = []discovery.Child{childX}
+			src.err = tt.listErr
+			result, err := cache.Refresh(src)
+
+			if tt.listErr != nil {
+				var pe *discovery.PartialError
+				if !errors.As(err, &pe) || pe != tt.listErr {
+					t.Fatalf("Refresh err = %v, want исходная *PartialError", err)
+				}
+			} else if err != nil {
+				t.Fatalf("Refresh: %v", err)
+			}
+			if result.Total != 1 {
+				t.Fatalf("result.Total = %d, want 1", result.Total)
+			}
+			if got := cache.ModuleCount(); got != tt.wantCount {
+				t.Fatalf("ModuleCount = %d, want %d", got, tt.wantCount)
+			}
+			cache.mu.RLock()
+			_, ok := cache.entries[yPath]
+			kept := ok && cache.persistentPaths[yPath]
+			cache.mu.RUnlock()
+			if kept != tt.wantYKept {
+				t.Fatalf("y в кэше = %v, want %v", kept, tt.wantYKept)
+			}
+		})
+	}
+}
