@@ -750,3 +750,33 @@ func TestLayeredPartialAndBrokenLayers(t *testing.T) {
 		}
 	})
 }
+
+// TestLayeredJoinedLayerErrorIsFlattened: ошибка слоя — errors.Join (Composite
+// без результата) — попадает в *PartialError отдельными элементами, а не одной
+// многострочной ошибкой.
+func TestLayeredJoinedLayerErrorIsFlattened(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "good.yaml"), "name: good\n")
+	e1, e2 := errors.New("first"), errors.New("second")
+	s := NewLayeredSource(&brokenLayer{err: errors.Join(e1, e2)}, NewGlobalSource(dir))
+
+	lists := map[string]func() error{
+		"List":         func() error { _, err := s.List(); return err },
+		"ListChildren": func() error { _, err := s.ListChildren(""); return err },
+		"ListChildrenRecursive": func() error {
+			_, err := s.ListChildrenRecursive("")
+			return err
+		},
+	}
+	for name, list := range lists {
+		t.Run(name, func(t *testing.T) {
+			var pe *PartialError
+			if err := list(); !errors.As(err, &pe) {
+				t.Fatalf("err = %v, want *PartialError", err)
+			}
+			if len(pe.Errs) != 2 || pe.Errs[0] != e1 || pe.Errs[1] != e2 {
+				t.Fatalf("Errs = %v, want [first second] отдельными элементами", pe.Errs)
+			}
+		})
+	}
+}

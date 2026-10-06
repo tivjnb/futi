@@ -89,8 +89,8 @@ func (s *LayeredSource) Resolve(namespace string) (string, string, error) {
 
 // layerOutcome накапливает итоги листингов слоёв LayeredSource по единому
 // правилу: ErrNotFound слоя — слой пропускается; *PartialError — результат
-// слоя используется, ошибки накапливаются; любая другая ошибка накапливается,
-// слой пропускается.
+// слоя используется, ошибки накапливаются; любая другая ошибка накапливается
+// (errors.Join раскрывается в отдельные ошибки), слой пропускается.
 type layerOutcome struct {
 	errs     []error
 	notFound error // последняя ErrNotFound слоя
@@ -113,7 +113,13 @@ func (o *layerOutcome) accept(err error) bool {
 		o.found = true
 		return true
 	}
-	o.errs = append(o.errs, err)
+	// errors.Join (Composite без результата) раскрывается: иначе предупреждение
+	// получилось бы многострочным.
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		o.errs = append(o.errs, joined.Unwrap()...)
+	} else {
+		o.errs = append(o.errs, err)
+	}
 	return false
 }
 
