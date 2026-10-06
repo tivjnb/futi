@@ -87,12 +87,65 @@ func (s *LayeredSource) Resolve(namespace string) (string, string, error) {
 	return "", "", newModuleNotFound(namespace)
 }
 
+// layerOutcome накапливает итоги листингов слоёв LayeredSource по единому
+// правилу: ErrNotFound слоя — слой пропускается; *PartialError — результат
+// слоя используется, ошибки накапливаются; любая другая ошибка накапливается
+// (errors.Join раскрывается в отдельные ошибки), слой пропускается.
+type layerOutcome struct {
+	errs     []error
+	notFound error // последняя ErrNotFound слоя
+	found    bool  // хотя бы один слой дал результат
+}
+
+// accept разбирает ошибку листинга слоя; true — результат слоя нужно слить.
+func (o *layerOutcome) accept(err error) bool {
+	if err == nil {
+		o.found = true
+		return true
+	}
+	if errors.Is(err, ErrNotFound) {
+		o.notFound = err
+		return false
+	}
+	var pe *PartialError
+	if errors.As(err, &pe) {
+		o.errs = append(o.errs, pe.Errs...)
+		o.found = true
+		return true
+	}
+	// errors.Join (Composite без результата) раскрывается: иначе предупреждение
+	// получилось бы многострочным.
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		o.errs = append(o.errs, joined.Unwrap()...)
+	} else {
+		o.errs = append(o.errs, err)
+	}
+	return false
+}
+
+// err возвращает ошибку итога листинга. Если ни один слой не дал результата:
+// накопленные ошибки (errors.Join, не PartialError — результата нет), иначе
+// ErrNotFound последнего слоя (nil, если слоёв не было). Иначе — *PartialError
+// с накопленными ошибками или nil.
+func (o *layerOutcome) err() error {
+	if o.found {
+		return newPartialError(o.errs)
+	}
+	if len(o.errs) > 0 {
+		return errors.Join(o.errs...)
+	}
+	return o.notFound
+}
+
+// List объединяет модули всех слоёв; верхний слой перекрывает нижний.
+// Ошибки слоёв — по правилу layerOutcome.
 func (s *LayeredSource) List() ([]ModuleInfo, error) {
 	seen := make(map[string]bool)
 	var modules []ModuleInfo
+	var out layerOutcome
 	for _, layer := range s.layers {
 		layerModules, err := layer.List()
-		if err != nil {
+		if !out.accept(err) {
 			continue
 		}
 		for _, m := range layerModules {
@@ -103,27 +156,33 @@ func (s *LayeredSource) List() ([]ModuleInfo, error) {
 			modules = append(modules, m)
 		}
 	}
-	return modules, nil
+	if !out.found {
+		return nil, out.err()
+	}
+	return modules, out.err()
 }
 
 // ListChildren объединяет детей namespace из всех слоёв. Ключ слияния — пара
 // (имя, тип): модуль x и namespace x сосуществуют, как и в Resolve
 // (x — модуль, x.y — внутри namespace). Внутри одного ключа побеждает
 // верхний слой; запись берётся целиком, вместе с пометкой Conflict.
+// Слой, в котором namespace нет (ErrNotFound), пропускается, если namespace
+// листит другой слой; если не листит никто — ErrNotFound. Слой с
+// *PartialError сливается, его ошибки возвращаются как *PartialError; слой с
+// другой ошибкой пропускается, ошибка тоже уходит в *PartialError. Если
+// результата нет ни от одного слоя, а ошибки были — они возвращаются через
+// errors.Join (результат невалиден).
 func (s *LayeredSource) ListChildren(namespace string) ([]Child, error) {
 	type childKey struct{ name, typ string }
 	seen := make(map[childKey]bool)
 	var result []Child
-	var anyErr error
-	foundAny := false
+	var out layerOutcome
 
 	for _, layer := range s.layers {
 		children, err := layer.ListChildren(namespace)
-		if err != nil {
-			anyErr = err
+		if !out.accept(err) {
 			continue
 		}
-		foundAny = true
 		for _, c := range children {
 			key := childKey{c.Name, c.Type}
 			if seen[key] {
@@ -134,42 +193,33 @@ func (s *LayeredSource) ListChildren(namespace string) ([]Child, error) {
 		}
 	}
 
-	if !foundAny && anyErr != nil {
-		return nil, anyErr
+	if !out.found {
+		return nil, out.err()
 	}
-	return result, nil
+	return result, out.err()
 }
 
 // ListChildrenRecursive делегирует обход поддерева каждому слою (защита от
 // циклов симлинков — в самих слоях) и сливает результаты как ListChildren:
 // ключ — пара (имя, тип), побеждает верхний слой, Conflict сохраняется.
-// Слой, в котором namespace нет (ErrNotFound), пропускается, если namespace
-// листит другой слой; если не листит никто — ошибка «не найден». Остальные
-// ошибки (конфликт модуля из двух sources в Composite на любом уровне,
-// invalid namespace, ввод-вывод) пробрасываются всегда: иначе пропал бы
-// весь слой, а ошибка осталась бы незамеченной.
+// Ошибки слоёв — по правилу ListChildren (layerOutcome): ErrNotFound —
+// слой пропускается; *PartialError — результат сливается; прочие ошибки
+// слоя не прячут остальные слои, а возвращаются в *PartialError.
 func (s *LayeredSource) ListChildrenRecursive(namespace string) ([]Child, error) {
 	var lists [][]Child
-	var anyErr error
-	foundAny := false
+	var out layerOutcome
 
 	for _, layer := range s.layers {
 		children, err := layer.ListChildrenRecursive(namespace)
-		if err != nil {
-			if !errors.Is(err, ErrNotFound) {
-				return nil, err
-			}
-			anyErr = err
-			continue
+		if out.accept(err) {
+			lists = append(lists, children)
 		}
-		foundAny = true
-		lists = append(lists, children)
 	}
 
-	if !foundAny && anyErr != nil {
-		return nil, anyErr
+	if !out.found {
+		return nil, out.err()
 	}
-	return mergeRecursive(lists), nil
+	return mergeRecursive(lists), out.err()
 }
 
 // mergeRecursive сливает рекурсивные листинги (имена — пути от общего

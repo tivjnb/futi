@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -337,9 +339,12 @@ func cacheSubcommand(args []string) (subcommand string, present bool) {
 // модулей (фикс #15).
 func runCacheRefresh(w io.Writer, cache *modulecache.Cache, globalSource discovery.Source, verbose bool) error {
 	result, err := cache.Refresh(globalSource)
-	if err != nil {
+	var partial *discovery.PartialError
+	if err != nil && !errors.As(err, &partial) {
 		return fmt.Errorf("cache refresh: %w", err)
 	}
+	// Частичный листинг: сводка по читаемым sources выводится, ошибка
+	// возвращается в конце — вызывающий покажет предупреждения.
 	fmt.Fprintf(w, "Cache refreshed: %d modules, %d updated", result.Total, result.Updated)
 	if result.Skipped > 0 {
 		fmt.Fprintf(w, ", %d skipped", result.Skipped)
@@ -359,6 +364,9 @@ func runCacheRefresh(w io.Writer, cache *modulecache.Cache, globalSource discove
 				fmt.Fprintf(w, "  %s (%s)\n", sm.Path, sm.Reason)
 			}
 		}
+	}
+	if partial != nil {
+		return fmt.Errorf("cache refresh: %w", err)
 	}
 	return nil
 }
@@ -459,14 +467,20 @@ func runList(w io.Writer, source discovery.Source, namespace string, verbose, re
 	} else {
 		children, listErr = source.ListChildren(namespace)
 	}
-	if listErr != nil {
+	// Частичный листинг: результат валиден, выводим его и возвращаем ошибку,
+	// чтобы вызывающий показал предупреждения.
+	var partial *discovery.PartialError
+	if listErr != nil && !errors.As(listErr, &partial) {
 		return listErr
 	}
 	if len(children) == 0 {
 		fmt.Fprintln(w, "No modules found.")
-		return nil
+		return listErr
 	}
-	return printChildren(w, children, verbose, loader)
+	if err := printChildren(w, children, verbose, loader); err != nil {
+		return err
+	}
+	return listErr
 }
 
 func printCommands(w io.Writer, manifestPath, moduleRoot string, verbose bool, loader modulerunner.ModuleLoader) error {
@@ -555,7 +569,10 @@ func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader
 		var desc, path string
 		if c.Type == "module" {
 			path = c.ManifestPath
-			if c.Conflict {
+			if c.Conflict && len(c.ConflictSources) > 0 {
+				// Модуль с одним именем в нескольких sources.
+				desc = "конфликт: модуль в нескольких sources: " + strings.Join(c.ConflictSources, ", ")
+			} else if c.Conflict {
 				// Resolve для такого имени вернёт ошибку конфликта: описание не грузим.
 				// ManifestPath конфликтной записи — от x.yaml; c.Name в `list -r` —
 				// полный путь (ns.x), поэтому имена файлов берём из пути.
@@ -948,6 +965,9 @@ func commandPath(pa *parsedArgs) []string {
 // exitAfterHelp печатает справку по пути в stdout (код 0); ошибка — в stderr, код 1.
 func exitAfterHelp(source discovery.Source, loader modulerunner.ModuleLoader, path []string) {
 	if err := runSystemHelp(os.Stdout, source, loader, path); err != nil {
+		if printPartialWarnings(os.Stderr, err) {
+			return
+		}
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
@@ -1042,7 +1062,7 @@ func main() {
 				}
 			}
 			cache.Load() // load from disk without Refresh
-			if err := runCacheRefresh(os.Stdout, cache, globalSource, verbose); err != nil {
+			if err := runCacheRefresh(os.Stdout, cache, globalSource, verbose); err != nil && !printPartialWarnings(os.Stderr, err) {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
 			}
@@ -1077,7 +1097,7 @@ func main() {
 
 	// Создаём и запускаем кэш. Ошибки кэша не фатальны — CLI работает и без него.
 	cache := newCacheFromConfig(cfg)
-	if err := cache.Start(globalSource); err != nil {
+	if err := cache.Start(globalSource); err != nil && !printPartialWarnings(os.Stderr, err) {
 		fmt.Fprintf(os.Stderr, "cache: %v (continuing without cache)\n", err)
 	}
 
@@ -1093,7 +1113,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "source: %v\n", err)
 				os.Exit(1)
 			}
-			if listErr := runList(os.Stdout, source, listReq.namespace, listReq.verbose, listReq.recurse, cache); listErr != nil {
+			if listErr := runList(os.Stdout, source, listReq.namespace, listReq.verbose, listReq.recurse, cache); listErr != nil && !printPartialWarnings(os.Stderr, listErr) {
 				log.Fatalf("list: %v", listErr)
 			}
 			return
@@ -1114,7 +1134,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "source: %v\n", err)
 				os.Exit(1)
 			}
-			if helpErr := runHelp(os.Stdout, source, cache, helpReq.positional); helpErr != nil {
+			if helpErr := runHelp(os.Stdout, source, cache, helpReq.positional); helpErr != nil && !printPartialWarnings(os.Stderr, helpErr) {
 				fmt.Fprintf(os.Stderr, "%v\n", helpErr)
 				os.Exit(1)
 			}
@@ -1158,4 +1178,45 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%s\n", formatRunError(err))
 		exitAfterRunError(err)
 	}
+}
+
+// printedWarnings — ключи предупреждений (см. warningKey), уже выведенных в этом процессе:
+// один и тот же нечитаемый source не должен предупреждать дважды (Start кэша и листинг).
+var (
+	printedWarningsMu sync.Mutex
+	printedWarnings   = map[string]bool{}
+)
+
+// printPartialWarnings печатает в w по строке `warning: <ошибка>` для каждой
+// ошибки частичного листинга (*discovery.PartialError в цепочке err) и возвращает
+// true. Уже выведенные в этом процессе тексты не повторяются. Для прочих ошибок
+// (и nil) ничего не печатает и возвращает false.
+func printPartialWarnings(w io.Writer, err error) bool {
+	var pe *discovery.PartialError
+	if !errors.As(err, &pe) {
+		return false
+	}
+	printedWarningsMu.Lock()
+	defer printedWarningsMu.Unlock()
+	for _, e := range pe.Errs {
+		msg := e.Error()
+		key := warningKey(e)
+		if printedWarnings[key] {
+			continue
+		}
+		printedWarnings[key] = true
+		fmt.Fprintf(w, "warning: %s\n", msg)
+	}
+	return true
+}
+
+// warningKey — ключ дедупа предупреждений: первый *fs.PathError в цепочке
+// (операция, путь, причина) — одна и та же проблема чтения приходит из разных
+// листингов с разной обёрткой; без PathError — полный текст ошибки.
+func warningKey(err error) string {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Op + "\x00" + pathErr.Path + "\x00" + pathErr.Err.Error()
+	}
+	return err.Error()
 }

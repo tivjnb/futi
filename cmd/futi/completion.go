@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -102,7 +103,9 @@ func runCompleteMain(stdout, stderr io.Writer, cfg *config.Config, globalSource 
 	// Самообновление: если кэш холодный/устаревший — прогреваем один раз.
 	// Ошибка Refresh не фатальна: completion продолжит с тем, что есть.
 	if completionNeedsRefresh(cache) {
-		if _, err := cache.Refresh(globalSource); err != nil {
+		// Частичный листинг (нечитаемый source) в completion молчит.
+		var partial *discovery.PartialError
+		if _, err := cache.Refresh(globalSource); err != nil && !errors.As(err, &partial) {
 			fmt.Fprintf(stderr, "__complete: cache refresh: %v (continuing with existing data)\n", err)
 		}
 	}

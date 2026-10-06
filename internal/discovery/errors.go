@@ -27,3 +27,19 @@ func newModuleNotFound(namespace string) error {
 func newNamespaceNotFound(namespace string) error {
 	return &notFoundError{msg: fmt.Sprintf("discovery: namespace %q not found", namespace)}
 }
+
+// PartialError — листинг выполнен не полностью: часть источников или
+// каталогов не прочитана. Результат, возвращённый вместе с ней, валиден,
+// но неполон. Не совпадает с ErrNotFound.
+type PartialError struct{ Errs []error }
+
+func (e *PartialError) Error() string   { return errors.Join(e.Errs...).Error() }
+func (e *PartialError) Unwrap() []error { return e.Errs }
+
+// newPartialError возвращает nil для пустого списка ошибок и *PartialError иначе.
+func newPartialError(errs []error) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	return &PartialError{Errs: errs}
+}

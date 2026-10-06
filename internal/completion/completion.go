@@ -6,6 +6,7 @@
 package completion
 
 import (
+	"errors"
 	"sort"
 	"strings"
 
@@ -315,8 +316,11 @@ func namespaceMatches(source discovery.Source, loader modulerunner.ModuleLoader,
 	}
 
 	// Children namespace. Ошибку (несуществующий namespace) проглатываем —
-	// возвращаем пустой список, как и положено по протоколу.
-	if children, err := source.ListChildren(ns); err == nil {
+	// возвращаем пустой список, как и положено по протоколу. Частичный листинг
+	// (часть sources нечитаема) — валидный результат: подсказки молча из читаемых.
+	children, err := source.ListChildren(ns)
+	var partial *discovery.PartialError
+	if err == nil || errors.As(err, &partial) {
 		for _, c := range children {
 			m := Match{Text: c.Name}
 			if c.Type == "module" && !c.Conflict { // конфликтный модуль не загружаем

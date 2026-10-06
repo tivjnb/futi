@@ -88,11 +88,18 @@ func runSystemHelp(w io.Writer, source discovery.Source, loader modulerunner.Mod
 		// Не модуль — возможно, каталог-namespace: справка = его дочерние элементы
 		// (как `futi <ns> list`).
 		children, err := source.ListChildren(strings.Join(positional, "."))
-		if err != nil && !errors.Is(err, discovery.ErrNotFound) {
+		var partial *discovery.PartialError
+		isPartial := errors.As(err, &partial)
+		if err != nil && !isPartial && !errors.Is(err, discovery.ErrNotFound) {
 			return fmt.Errorf("help: %w", err)
 		}
-		if err == nil && len(children) > 0 {
-			return printChildren(w, children, false, loader)
+		if (err == nil || isPartial) && len(children) > 0 {
+			// Частичный листинг: дети читаемых sources выводятся, ошибка
+			// возвращается — вызывающий покажет предупреждения.
+			if perr := printChildren(w, children, false, loader); perr != nil {
+				return perr
+			}
+			return err
 		}
 		return fmt.Errorf("help: module not found for %q", strings.Join(positional, " "))
 	}

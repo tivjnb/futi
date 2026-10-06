@@ -15,6 +15,7 @@ package modulecache
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -234,12 +235,13 @@ type RefreshResult struct {
 // Вызывается из Start (по политике) и из `futi cache refresh` (явно).
 //
 // Для каждого модуля из globalSource.ListChildrenRecursive(""):
-// 1. os.Stat(manifestPath) → получить mtime, size.
-// 2. Сравнить с entries[path] — если mtime+size совпадают, пропустить.
-// 3. Иначе: execmodule.LoadModule → обновить entries[path], добавить в persistentPaths.
-// 4. Cleanup: удалить из entries/persistentPaths те, кого больше нет в source.
-// 5. Обновить lastRefresh (только если не все модули пропущены).
-// 6. saveToStorage.
+//  1. os.Stat(manifestPath) → получить mtime, size.
+//  2. Сравнить с entries[path] — если mtime+size совпадают, пропустить.
+//  3. Иначе: execmodule.LoadModule → обновить entries[path], добавить в persistentPaths.
+//  4. Cleanup: удалить из entries/persistentPaths те, кого больше нет в source
+//     (пропускается при частичном листинге, см. ниже).
+//  5. Обновить lastRefresh (только если не все модули пропущены).
+//  6. saveToStorage.
 //
 // Листинг source отдаёт только резолвимые манифесты: обычные файлы, Stat
 // которых успешен. Битый симлинк (в т.ч. на временно недоступную цель) в
@@ -249,10 +251,21 @@ type RefreshResult struct {
 // Skipped инкрементируется, ошибка логируется, запись кэша сохраняется
 // (модуль есть в source). При следующем Refresh retry.
 // Ошибка Save не фатальна: in-memory кэш актуален, логируется.
+//
+// Контракт ошибки: если листинг вернул *discovery.PartialError (часть
+// источников не прочитана), Refresh не фатален: модули из неполного результата
+// обрабатываются как обычно, шаг 4 (Cleanup) пропускается, чтобы не стереть
+// записи недоступных источников, а исходная ошибка возвращается вместе с
+// результатом (не оборачивается и не логируется — это дело вызывающего).
+// Любая другая ошибка листинга фатальна: возвращается обёрнутой, результат пуст.
 func (c *Cache) Refresh(globalSource discovery.Source) (RefreshResult, error) {
-	children, err := globalSource.ListChildrenRecursive("")
-	if err != nil {
-		return RefreshResult{}, fmt.Errorf("modulecache: refresh: list source: %w", err)
+	children, listErr := globalSource.ListChildrenRecursive("")
+	// Частичный листинг (*PartialError): результат валиден, но неполон —
+	// обрабатываем детей как обычно, а Cleanup пропускаем.
+	var partial *discovery.PartialError
+	isPartial := errors.As(listErr, &partial)
+	if listErr != nil && !isPartial {
+		return RefreshResult{}, fmt.Errorf("modulecache: refresh: list source: %w", listErr)
 	}
 
 	result := RefreshResult{}
@@ -325,10 +338,14 @@ func (c *Cache) Refresh(globalSource discovery.Source) (RefreshResult, error) {
 	}
 
 	// Cleanup: удаляем из кэша модули, которых больше нет в source.
-	for path := range c.persistentPaths {
-		if !seenPaths[path] {
-			delete(c.entries, path)
-			delete(c.persistentPaths, path)
+	// При частичном листинге пропускаем: отсутствие модуля в неполном
+	// результате не означает, что его больше нет.
+	if !isPartial {
+		for path := range c.persistentPaths {
+			if !seenPaths[path] {
+				delete(c.entries, path)
+				delete(c.persistentPaths, path)
+			}
 		}
 	}
 
@@ -347,7 +364,7 @@ func (c *Cache) Refresh(globalSource discovery.Source) (RefreshResult, error) {
 		log.Printf("modulecache: refresh: save: %v", err)
 	}
 
-	return result, nil
+	return result, listErr
 }
 
 // buildCacheFile строит snapshot cacheFile из persistent entries.

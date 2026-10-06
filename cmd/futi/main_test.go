@@ -2295,3 +2295,176 @@ func TestParseArgsEmptyPathHintOnlyWithFlags(t *testing.T) {
 		t.Fatalf("err = %q, must not mention flags when none given", err)
 	}
 }
+
+// partialSource — Composite из читаемого source A (с x.yaml) и несуществующего B.
+func partialSource(t *testing.T) (src discovery.Source, dirA, dirB string) {
+	t.Helper()
+	dirA = t.TempDir()
+	dirB = filepath.Join(t.TempDir(), "missing")
+	writeMainTestFile(t, filepath.Join(dirA, "x.yaml"), "name: x\ndescription: Икс\ncmd: echo x\n")
+	cfg := &config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: dirB}}}
+	return discovery.NewCompositeSource(cfg), dirA, dirB
+}
+
+func TestRunListPartialListingReturnsPartialError(t *testing.T) {
+	src, _, _ := partialSource(t)
+	var buf bytes.Buffer
+	err := runList(&buf, src, "", false, false, nil)
+	var pe *discovery.PartialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("runList err = %v, want *discovery.PartialError", err)
+	}
+	found := false
+	for _, line := range strings.Split(buf.String(), "\n") {
+		cells := strings.Split(line, "│")
+		// cells: ["", TYPE, NAME, DESCRIPTION, ""]
+		if len(cells) >= 4 && strings.TrimSpace(cells[1]) == "module" && strings.TrimSpace(cells[2]) == "x" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("нет строки модуля x в листинге читаемых sources:\n%s", buf.String())
+	}
+}
+
+// TestPrintPartialWarningsDedupSamePathError: одна и та же проблема чтения,
+// пришедшая из листингов с разной обёрткой (рекурсивный и нерекурсивный),
+// печатается один раз.
+func TestPrintPartialWarningsDedupSamePathError(t *testing.T) {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("chmod 000 не ограничивает доступ для root и в Windows")
+	}
+	dirA, dirB := t.TempDir(), t.TempDir()
+	writeMainTestFile(t, filepath.Join(dirA, "x.yaml"), "name: x\ncmd: echo x\n")
+	if err := os.Chmod(dirB, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dirB, 0o755) })
+	src := discovery.NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: dirB}}})
+
+	_, errRec := src.ListChildrenRecursive("")
+	_, errFlat := src.ListChildren("")
+	var buf bytes.Buffer
+	for _, err := range []error{errRec, errFlat} {
+		if !printPartialWarnings(&buf, err) {
+			t.Fatalf("printPartialWarnings(%v) = false, want true", err)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], "warning: ") || !strings.Contains(lines[0], dirB) {
+		t.Errorf("предупреждения:\n%s\nwant ровно одну строку warning: с путём %s", buf.String(), dirB)
+	}
+}
+
+func TestPrintPartialWarnings(t *testing.T) {
+	src, _, dirB := partialSource(t)
+	_, err := src.ListChildren("")
+	var buf bytes.Buffer
+	if !printPartialWarnings(&buf, err) {
+		t.Fatalf("printPartialWarnings(%v) = false, want true", err)
+	}
+	out := buf.String()
+	if !strings.HasPrefix(out, "warning: discovery: source \""+dirB+"\"") {
+		t.Errorf("предупреждение = %q, want префикс warning: discovery: source %q", out, dirB)
+	}
+	// Повторный вызов с той же ошибкой ничего не добавляет.
+	buf.Reset()
+	if !printPartialWarnings(&buf, err) {
+		t.Fatalf("повторный вызов вернул false")
+	}
+	if buf.Len() != 0 {
+		t.Errorf("повторное предупреждение напечатано: %q", buf.String())
+	}
+	// Не PartialError — false и тишина.
+	buf.Reset()
+	if printPartialWarnings(&buf, errors.New("boom")) || buf.Len() != 0 {
+		t.Errorf("обычная ошибка: ожидалось false и пустой вывод, got %q", buf.String())
+	}
+	if printPartialWarnings(&buf, nil) {
+		t.Errorf("nil: ожидалось false")
+	}
+}
+
+func TestPrintChildrenConflictSources(t *testing.T) {
+	children := []discovery.Child{{
+		Type: "module", Name: "x", Conflict: true,
+		ManifestPath:    "/a/x.yaml",
+		ConflictSources: []string{"/a", "/b"},
+	}}
+	var buf bytes.Buffer
+	if err := printChildren(&buf, children, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "конфликт: модуль в нескольких sources: /a, /b") {
+		t.Errorf("нет текста конфликта sources:\n%s", buf.String())
+	}
+	if strings.Contains(buf.String(), "x.yaml и") {
+		t.Errorf("текст конфликта файлов вместо sources:\n%s", buf.String())
+	}
+}
+
+func TestRunSystemHelpPartialListing(t *testing.T) {
+	dirA := t.TempDir()
+	dirB := filepath.Join(t.TempDir(), "missing")
+	if err := os.MkdirAll(filepath.Join(dirA, "ns"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMainTestFile(t, filepath.Join(dirA, "ns", "x.yaml"), "name: x\ncmd: echo x\n")
+	src := discovery.NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: dirB}}})
+	var buf bytes.Buffer
+	err := runSystemHelp(&buf, src, nil, []string{"ns"})
+	var pe *discovery.PartialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("runSystemHelp err = %v, want *discovery.PartialError", err)
+	}
+	found := false
+	for _, line := range strings.Split(buf.String(), "\n") {
+		cells := strings.Split(line, "│")
+		// cells: ["", TYPE, NAME, DESCRIPTION, ""]
+		if len(cells) >= 4 && strings.TrimSpace(cells[1]) == "module" && strings.TrimSpace(cells[2]) == "x" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("нет строки модуля x в выводе:\n%s", buf.String())
+	}
+}
+
+func TestRunCacheRefreshPartialPrintsSummary(t *testing.T) {
+	src, _, _ := partialSource(t)
+	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
+	var buf bytes.Buffer
+	err := runCacheRefresh(&buf, cache, src, false)
+	var pe *discovery.PartialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("runCacheRefresh err = %v, want *discovery.PartialError", err)
+	}
+	if !strings.Contains(buf.String(), "Cache refreshed: 1 modules") {
+		t.Errorf("нет сводки:\n%s", buf.String())
+	}
+}
+
+func TestRunCompleteMainPartialListingIsSilent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	src, _, _ := partialSource(t)
+	var out, errBuf bytes.Buffer
+	if code := runCompleteMain(&out, &errBuf, nil, src, []string{""}); code != 0 {
+		t.Fatalf("exit = %d, stderr:\n%s", code, errBuf.String())
+	}
+	if !strings.Contains(out.String(), "x\n") && !strings.Contains(out.String(), "x\t") {
+		t.Errorf("нет подсказки x:\n%s", out.String())
+	}
+	// runCompleteMain передаёт stderr в runComplete, который штатно пишет туда
+	// строку директивы; кроме неё stderr должен быть пуст.
+	var rest []string
+	for _, line := range strings.Split(errBuf.String(), "\n") {
+		if line != "" && !strings.HasPrefix(line, "Completion ended with directive") {
+			rest = append(rest, line)
+		}
+	}
+	if len(rest) > 0 {
+		t.Errorf("stderr не молчит:\n%s", strings.Join(rest, "\n"))
+	}
+}

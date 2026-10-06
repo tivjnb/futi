@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"futi/internal/config"
 	"futi/internal/discovery"
 )
 
@@ -695,5 +696,23 @@ func TestCompleteModulesFlagsAfterPositional(t *testing.T) {
 	want = []string{}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("info with namespace: got %v, want %v", got, want)
+	}
+}
+
+func TestCompletePartialListingSuggestsReadableSources(t *testing.T) {
+	dirA := t.TempDir()
+	writeFile(t, filepath.Join(dirA, "x.yaml"), "name: x\ncmd: echo x\n")
+	missing := filepath.Join(t.TempDir(), "missing")
+	src := discovery.NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: missing}}})
+
+	matches, _ := Complete(src, nil, nil, "")
+	found := false
+	for _, s := range text(matches) {
+		if s == "x" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("подсказки %v не содержат x", text(matches))
 	}
 }

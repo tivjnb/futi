@@ -398,10 +398,9 @@ func TestLayeredRecursiveLoopMatchesGlobal(t *testing.T) {
 // TestLayeredRecursiveLayerErrors фиксирует решение об ошибках слоёв
 // (решает тип ошибки): слой, у которого нет запрошенного namespace
 // (ErrNotFound), пропускается, если namespace листит другой слой; если не
-// листит никто — ошибка ErrNotFound пробрасывается. Остальные ошибки
-// (конфликт модуля из двух sources в Composite на любом уровне, invalid
-// namespace) пробрасываются всегда — иначе пропал бы весь слой, а ошибка
-// осталась бы незамеченной.
+// листит никто — ошибка ErrNotFound пробрасывается. Конфликт модуля из двух
+// sources в Composite — не ошибка листинга (помечается Conflict); invalid
+// namespace во всех слоях — ошибка.
 func TestLayeredRecursiveLayerErrors(t *testing.T) {
 	onlyNs := t.TempDir()
 	writeFile(t, filepath.Join(onlyNs, "ns", "m.yaml"), "name: m\n")
@@ -437,11 +436,11 @@ func TestLayeredRecursiveLayerErrors(t *testing.T) {
 		{"FileSource не листит namespace", NewLayeredSource(fileSrc, NewGlobalSource(onlyNs)), "ns", noErr},
 		{"единственный слой без namespace", NewLayeredSource(NewGlobalSource(onlyNs)), "nope", notFoundErr},
 		{"ни один слой не листит namespace", NewLayeredSource(fileSrc, NewGlobalSource(onlyNs)), "nope", notFoundErr},
-		{"единственный слой с конфликтом", NewLayeredSource(conflicting), "", otherErr},
-		{"FileSource поверх конфликта", NewLayeredSource(fileSrc, conflicting), "", otherErr},
-		{"FileSource поверх конфликта в корне Composite", NewLayeredSource(fileSrc, rootConflicting), "", otherErr},
-		{"конфликт за namespace другого слоя", NewLayeredSource(NewGlobalSource(onlyNs), conflicting), "", otherErr},
-		{"запрос ns при конфликте в ns", NewLayeredSource(NewGlobalSource(onlyNs), conflicting), "ns", otherErr},
+		{"единственный слой с конфликтом", NewLayeredSource(conflicting), "", noErr},
+		{"FileSource поверх конфликта", NewLayeredSource(fileSrc, conflicting), "", noErr},
+		{"FileSource поверх конфликта в корне Composite", NewLayeredSource(fileSrc, rootConflicting), "", noErr},
+		{"конфликт за namespace другого слоя", NewLayeredSource(NewGlobalSource(onlyNs), conflicting), "", noErr},
+		{"запрос ns при конфликте в ns", NewLayeredSource(NewGlobalSource(onlyNs), conflicting), "ns", noErr},
 		{"invalid namespace не маскируется другим слоем", NewLayeredSource(NewGlobalSource(onlyNs), conflicting), "a..b", otherErr},
 	}
 	for _, tt := range tests {
@@ -682,5 +681,102 @@ func TestLayeredListChildrenKeepsConflictBehindNamespace(t *testing.T) {
 	}
 	if !reflect.DeepEqual(children, want) {
 		t.Fatalf("ListChildren(\"\") = %+v, want %+v", children, want)
+	}
+}
+
+// brokenLayer — слой, листинги которого возвращают заданную ошибку.
+type brokenLayer struct {
+	FileSource
+	err error
+}
+
+func (b *brokenLayer) List() ([]ModuleInfo, error)                   { return nil, b.err }
+func (b *brokenLayer) ListChildren(string) ([]Child, error)          { return nil, b.err }
+func (b *brokenLayer) ListChildrenRecursive(string) ([]Child, error) { return nil, b.err }
+
+// TestLayeredPartialAndBrokenLayers: слой с *PartialError сливается и
+// сохраняет ошибки; слой с другой ошибкой пропускается, но ошибка не теряется.
+func TestLayeredPartialAndBrokenLayers(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "good.yaml"), "name: good\n")
+	good := NewGlobalSource(dir)
+
+	missing := filepath.Join(t.TempDir(), "nope")
+	partialLayer := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: missing}}})
+	boom := errors.New("boom")
+	broken := &brokenLayer{err: boom}
+
+	tests := []struct {
+		name   string
+		layers []Source
+		want   string // текст, который обязан быть в ошибке
+	}{
+		{"слой PartialError + нормальный", []Source{partialLayer, good}, missing},
+		{"слой с другой ошибкой + нормальный", []Source{broken, good}, "boom"},
+	}
+	for _, tt := range tests {
+		s := NewLayeredSource(tt.layers...)
+		lists := map[string]func() (int, error){
+			"List": func() (int, error) { m, err := s.List(); return len(m), err },
+			"ListChildren": func() (int, error) {
+				c, err := s.ListChildren("")
+				return len(c), err
+			},
+			"ListChildrenRecursive": func() (int, error) {
+				c, err := s.ListChildrenRecursive("")
+				return len(c), err
+			},
+		}
+		for name, list := range lists {
+			t.Run(tt.name+"/"+name, func(t *testing.T) {
+				n, err := list()
+				var pe *PartialError
+				if !errors.As(err, &pe) || !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("err = %v, want *PartialError с %q", err, tt.want)
+				}
+				if n != 1 {
+					t.Fatalf("результатов %d, want 1 (good)", n)
+				}
+			})
+		}
+	}
+
+	t.Run("только сломанные слои — не PartialError", func(t *testing.T) {
+		s := NewLayeredSource(broken)
+		_, err := s.ListChildren("")
+		var pe *PartialError
+		if err == nil || errors.As(err, &pe) || !errors.Is(err, boom) {
+			t.Fatalf("err = %v, want boom без PartialError", err)
+		}
+	})
+}
+
+// TestLayeredJoinedLayerErrorIsFlattened: ошибка слоя — errors.Join (Composite
+// без результата) — попадает в *PartialError отдельными элементами, а не одной
+// многострочной ошибкой.
+func TestLayeredJoinedLayerErrorIsFlattened(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "good.yaml"), "name: good\n")
+	e1, e2 := errors.New("first"), errors.New("second")
+	s := NewLayeredSource(&brokenLayer{err: errors.Join(e1, e2)}, NewGlobalSource(dir))
+
+	lists := map[string]func() error{
+		"List":         func() error { _, err := s.List(); return err },
+		"ListChildren": func() error { _, err := s.ListChildren(""); return err },
+		"ListChildrenRecursive": func() error {
+			_, err := s.ListChildrenRecursive("")
+			return err
+		},
+	}
+	for name, list := range lists {
+		t.Run(name, func(t *testing.T) {
+			var pe *PartialError
+			if err := list(); !errors.As(err, &pe) {
+				t.Fatalf("err = %v, want *PartialError", err)
+			}
+			if len(pe.Errs) != 2 || pe.Errs[0] != e1 || pe.Errs[1] != e2 {
+				t.Fatalf("Errs = %v, want [first second] отдельными элементами", pe.Errs)
+			}
+		})
 	}
 }
