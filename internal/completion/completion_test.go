@@ -570,7 +570,7 @@ func TestCompleteAfterFlagValue(t *testing.T) {
 func TestCompleteFlagValueAllowsFiles(t *testing.T) {
 	// Значение не-bool флага (user-supplied путь/строка): разрешаем шеллу
 	// дефолтное файловое дополнение (директива Default). В будущем —
-	// только для параметров типа PATH (см. NEXT_STEPS).
+	// только для параметров типа path (ROADMAP в README).
 	src := newTestSource(t)
 
 	// Курсор на пустом значении: --out <TAB>

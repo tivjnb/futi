@@ -540,7 +540,7 @@ import os
 out = os.path.join(os.getcwd(), "result.png")
 ```
 
-> **Migration note (pre-release):** до WORKDIR.md futi вызывал команды с
+> **Migration note (pre-release):** до переработки рабочего каталога futi вызывал команды с
 > `WorkDir` = корень модуля и передавал `FUTI_CWD` в env. Это поведение
 > удалено. Правки модулей:
 >
@@ -549,8 +549,6 @@ out = os.path.join(os.getcwd(), "result.png")
 > - `base = os.environ.get("FUTI_CWD") or os.getcwd()` → `base = os.getcwd()`
 >   (cwd вызова futi = cwd скрипта, `getcwd()` достаточно)
 > - `os.environ["FUTI_CWD"]` для путей модуля → `os.environ["FUTI_MODULE_ROOT"]`
->
-> См. `MD/WORKDIR.md`.
 
 ---
 
