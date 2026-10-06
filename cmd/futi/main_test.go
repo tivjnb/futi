@@ -2314,8 +2314,45 @@ func TestRunListPartialListingReturnsPartialError(t *testing.T) {
 	if !errors.As(err, &pe) {
 		t.Fatalf("runList err = %v, want *discovery.PartialError", err)
 	}
-	if !strings.Contains(buf.String(), "x") || strings.Contains(buf.String(), "No modules found") {
-		t.Errorf("листинг читаемых sources не выведен:\n%s", buf.String())
+	found := false
+	for _, line := range strings.Split(buf.String(), "\n") {
+		cells := strings.Split(line, "│")
+		// cells: ["", TYPE, NAME, DESCRIPTION, ""]
+		if len(cells) >= 4 && strings.TrimSpace(cells[1]) == "module" && strings.TrimSpace(cells[2]) == "x" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("нет строки модуля x в листинге читаемых sources:\n%s", buf.String())
+	}
+}
+
+// TestPrintPartialWarningsDedupSamePathError: одна и та же проблема чтения,
+// пришедшая из листингов с разной обёрткой (рекурсивный и нерекурсивный),
+// печатается один раз.
+func TestPrintPartialWarningsDedupSamePathError(t *testing.T) {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("chmod 000 не ограничивает доступ для root и в Windows")
+	}
+	dirA, dirB := t.TempDir(), t.TempDir()
+	writeMainTestFile(t, filepath.Join(dirA, "x.yaml"), "name: x\ncmd: echo x\n")
+	if err := os.Chmod(dirB, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dirB, 0o755) })
+	src := discovery.NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: dirB}}})
+
+	_, errRec := src.ListChildrenRecursive("")
+	_, errFlat := src.ListChildren("")
+	var buf bytes.Buffer
+	for _, err := range []error{errRec, errFlat} {
+		if !printPartialWarnings(&buf, err) {
+			t.Fatalf("printPartialWarnings(%v) = false, want true", err)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], "warning: ") || !strings.Contains(lines[0], dirB) {
+		t.Errorf("предупреждения:\n%s\nwant ровно одну строку warning: с путём %s", buf.String(), dirB)
 	}
 }
 

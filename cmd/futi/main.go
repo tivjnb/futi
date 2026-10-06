@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -1179,7 +1180,7 @@ func main() {
 	}
 }
 
-// printedWarnings — тексты предупреждений, уже выведенные в этом процессе:
+// printedWarnings — ключи предупреждений (см. warningKey), уже выведенных в этом процессе:
 // один и тот же нечитаемый source не должен предупреждать дважды (Start кэша и листинг).
 var (
 	printedWarningsMu sync.Mutex
@@ -1199,11 +1200,23 @@ func printPartialWarnings(w io.Writer, err error) bool {
 	defer printedWarningsMu.Unlock()
 	for _, e := range pe.Errs {
 		msg := e.Error()
-		if printedWarnings[msg] {
+		key := warningKey(e)
+		if printedWarnings[key] {
 			continue
 		}
-		printedWarnings[msg] = true
+		printedWarnings[key] = true
 		fmt.Fprintf(w, "warning: %s\n", msg)
 	}
 	return true
+}
+
+// warningKey — ключ дедупа предупреждений: первый *fs.PathError в цепочке
+// (операция, путь, причина) — одна и та же проблема чтения приходит из разных
+// листингов с разной обёрткой; без PathError — полный текст ошибки.
+func warningKey(err error) string {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Op + "\x00" + pathErr.Path + "\x00" + pathErr.Err.Error()
+	}
+	return err.Error()
 }
