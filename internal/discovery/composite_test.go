@@ -803,3 +803,34 @@ func TestCompositeUnreadableNamespaceDir(t *testing.T) {
 		}
 	})
 }
+
+// TestCompositeUnreadableRootSource: единственный source с chmod 000 в корне
+// (ns == "") — пустой результат и *PartialError; тот же source, смонтированный
+// в ns, при запросе ns — обычная ошибка (результата нет), одинаково для
+// ListChildren и ListChildrenRecursive.
+func TestCompositeUnreadableRootSource(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "m.yaml"), "name: m\n")
+	noAccessDir(t, root)
+
+	t.Run("корень", func(t *testing.T) {
+		s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: root}}})
+		for name, list := range map[string]func(string) ([]Child, error){"ListChildren": s.ListChildren, "ListChildrenRecursive": s.ListChildrenRecursive} {
+			children, err := list("")
+			var pe *PartialError
+			if !errors.As(err, &pe) || len(children) != 0 {
+				t.Fatalf("%s(\"\") = %+v, %v; want пусто и *PartialError", name, children, err)
+			}
+		}
+	})
+	t.Run("смонтирован в ns", func(t *testing.T) {
+		s := NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: root, Mountpoint: "ns"}}})
+		for name, list := range map[string]func(string) ([]Child, error){"ListChildren": s.ListChildren, "ListChildrenRecursive": s.ListChildrenRecursive} {
+			_, err := list("ns")
+			var pe *PartialError
+			if err == nil || errors.As(err, &pe) {
+				t.Fatalf("%s(ns) err = %v, want обычная ошибка (не *PartialError)", name, err)
+			}
+		}
+	})
+}

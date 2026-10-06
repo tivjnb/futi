@@ -73,36 +73,31 @@ func (cs *CompositeSource) Resolve(namespace string) (string, string, error) {
 }
 
 // checkRoot проверяет, что RootDir source-а i — существующий каталог. Иначе
-// ошибка добавляется в errs.soft и возвращается false: такой source ничего не
-// даёт в результат. Все sources CompositeSource заданы в config.yaml явно,
+// ошибка добавляется в *errs и возвращается false: такой source ничего не
+// даёт в результат (в итог листинга она попадёт по правилу listingResult). Все sources CompositeSource заданы в config.yaml явно,
 // поэтому отсутствующий каталог — это ошибка, а не «свежая установка».
-func (cs *CompositeSource) checkRoot(i int, errs *listingErrs) bool {
+func (cs *CompositeSource) checkRoot(i int, errs *[]error) bool {
 	root := cs.sources[i].RootDir
 	info, err := os.Stat(root)
 	if err != nil {
-		errs.soft = append(errs.soft, fmt.Errorf("discovery: source %q: %w", root, err))
+		*errs = append(*errs, fmt.Errorf("discovery: source %q: %w", root, err))
 		return false
 	}
 	if !info.IsDir() {
-		errs.soft = append(errs.soft, fmt.Errorf("discovery: source %q: not a directory", root))
+		*errs = append(*errs, fmt.Errorf("discovery: source %q: not a directory", root))
 		return false
 	}
 	return true
 }
 
-// listingErrs — ошибки листинга CompositeSource. soft всегда уходят в
-// *PartialError (ошибки stat корня source, ошибки частичных листингов);
-// hard (прочие ошибки делегированного листинга) — в *PartialError, только
-// если хотя бы один source дал результат, иначе возвращаются обычной ошибкой.
-type listingErrs struct{ soft, hard []error }
-
 // acceptListing разбирает ошибку делегированного листинга source-а i.
 // Возвращает use=true, если результат листинга нужно использовать, и
 // found=true, если source дал результат (nil или *PartialError):
 // ErrNotFound — source не содержит namespace (не ошибка);
-// *PartialError — результат берётся, ошибки добавляются в errs.soft;
-// любая другая ошибка добавляется в errs.hard, source пропускается.
-func (cs *CompositeSource) acceptListing(i int, err error, errs *listingErrs) (use, found bool) {
+// *PartialError — ошибки добавляются в *errs, результат берётся, если он
+// непуст (count — число записей; пустой неполный листинг результатом не считается);
+// любая другая ошибка добавляется в *errs, source пропускается.
+func (cs *CompositeSource) acceptListing(i int, count int, err error, errs *[]error) (use, found bool) {
 	if err == nil {
 		return true, true
 	}
@@ -111,10 +106,12 @@ func (cs *CompositeSource) acceptListing(i int, err error, errs *listingErrs) (u
 	}
 	var pe *PartialError
 	if errors.As(err, &pe) {
-		errs.soft = append(errs.soft, pe.Errs...)
-		return true, true
+		*errs = append(*errs, pe.Errs...)
+		// Пустой неполный листинг — результата нет: namespace мог быть
+		// в непрочитанной части.
+		return count > 0, count > 0
 	}
-	errs.hard = append(errs.hard, fmt.Errorf("discovery: source %q: %w", cs.sources[i].RootDir, err))
+	*errs = append(*errs, fmt.Errorf("discovery: source %q: %w", cs.sources[i].RootDir, err))
 	return false, false
 }
 
@@ -131,24 +128,26 @@ func markSourceConflicts(result []Child, moduleSources map[string][]string) {
 	}
 }
 
-// listingResult собирает итог листинга.
-// Есть результат (found) или namespace пуст (корень не бывает «не найден»):
-// результат и *PartialError со всеми ошибками (nil без ошибок).
+// listingResult собирает итог листинга по единому правилу.
+// Есть результат (found: хотя бы один source дал результат или синтетический
+// namespace) или namespace пуст (корень не бывает «не найден», даже если ни
+// один source не прочитан — результат пуст) — результат и *PartialError со
+// всеми ошибками, включая stat корней (nil без ошибок).
 // Иначе результата нет: без ошибок — ErrNotFound; с ошибками — они
-// возвращаются обычной ошибкой (errors.Join, не *PartialError): результат
-// невалиден, namespace мог быть в недоступном source.
-func listingResult(namespace string, found bool, result []Child, errs listingErrs) ([]Child, error) {
-	all := append(append([]error(nil), errs.soft...), errs.hard...)
+// возвращаются обычной ошибкой (одна как есть, несколько через errors.Join;
+// не *PartialError): результат невалиден, namespace мог быть в недоступном
+// source.
+func listingResult(namespace string, found bool, result []Child, errs []error) ([]Child, error) {
 	if found || namespace == "" {
-		return result, newPartialError(all)
+		return result, newPartialError(errs)
 	}
-	switch len(all) {
+	switch len(errs) {
 	case 0:
 		return nil, newNamespaceNotFound(namespace)
 	case 1:
-		return nil, all[0]
+		return nil, errs[0]
 	default:
-		return nil, errors.Join(all...)
+		return nil, errors.Join(errs...)
 	}
 }
 
@@ -160,17 +159,16 @@ func listingResult(namespace string, found bool, result []Child, errs listingErr
 // него вернёт ошибку конфликта).
 // Недоступный source (нет каталога, не каталог, ошибка листинга) не роняет
 // листинг: остальные sources отдают результат, ошибки — в *PartialError.
-// Если ни один source не дал результата для namespace (не корня): без ошибок —
-// ErrNotFound; с ошибками (stat корней, ошибки листинга) — они возвращаются
-// обычной ошибкой (errors.Join), не *PartialError. Ошибки делегированного
-// листинга (кроме ErrNotFound) при наличии результата от другого source
-// уходят в *PartialError.
+// Итог — по правилу listingResult: есть результат или namespace корневой —
+// результат и *PartialError со всеми ошибками (корень без единого прочитанного
+// source — пустой результат и *PartialError); иначе без ошибок — ErrNotFound,
+// с ошибками — обычная ошибка (errors.Join), не *PartialError.
 func (cs *CompositeSource) ListChildren(namespace string) ([]Child, error) {
 	type childKey struct{ name, typ string }
 	seen := make(map[childKey]bool)
 	moduleSources := make(map[string][]string)
 	var result []Child
-	var errs listingErrs
+	var errs []error
 	found := false
 
 	add := func(c Child, root string) {
@@ -196,7 +194,7 @@ func (cs *CompositeSource) ListChildren(namespace string) ([]Child, error) {
 				continue
 			}
 			children, err := cs.sources[i].ListChildren("")
-			use, ok := cs.acceptListing(i, err, &errs)
+			use, ok := cs.acceptListing(i, len(children), err, &errs)
 			found = found || ok
 			if !use {
 				continue
@@ -232,7 +230,7 @@ func (cs *CompositeSource) ListChildren(namespace string) ([]Child, error) {
 				relNs = namespace[len(prefix)+1:]
 			}
 			children, err := cs.sources[i].ListChildren(relNs)
-			use, ok := cs.acceptListing(i, err, &errs)
+			use, ok := cs.acceptListing(i, len(children), err, &errs)
 			found = found || ok
 			if !use {
 				continue
@@ -257,7 +255,7 @@ func (cs *CompositeSource) ListChildren(namespace string) ([]Child, error) {
 func (cs *CompositeSource) ListChildrenRecursive(namespace string) ([]Child, error) {
 	var lists [][]Child
 	moduleSources := make(map[string][]string)
-	var errs listingErrs
+	var errs []error
 	found := false
 
 	for i, sc := range cs.configs {
@@ -283,8 +281,8 @@ func (cs *CompositeSource) ListChildrenRecursive(namespace string) ([]Child, err
 		if !cs.checkRoot(i, &errs) {
 			continue
 		}
-		if mountRest != "" || prefix == namespace {
-			found = true
+		if mountRest != "" {
+			found = true // синтетические namespace — результат сами по себе
 		}
 
 		var list []Child
@@ -297,7 +295,7 @@ func (cs *CompositeSource) ListChildrenRecursive(namespace string) ([]Child, err
 		}
 
 		children, err := cs.sources[i].ListChildrenRecursive(relNs)
-		use, ok := cs.acceptListing(i, err, &errs)
+		use, ok := cs.acceptListing(i, len(children), err, &errs)
 		found = found || ok
 		if use {
 			for _, c := range children {
@@ -324,13 +322,13 @@ func (cs *CompositeSource) ListChildrenRecursive(namespace string) ([]Child, err
 // List оставлен для обратной совместимости и тестов.
 func (cs *CompositeSource) List() ([]ModuleInfo, error) {
 	var modules []ModuleInfo
-	var errs listingErrs
+	var errs []error
 	for i, sc := range cs.configs {
 		if !cs.checkRoot(i, &errs) {
 			continue
 		}
 		srcModules, err := cs.sources[i].List()
-		if use, _ := cs.acceptListing(i, err, &errs); !use {
+		if use, _ := cs.acceptListing(i, len(srcModules), err, &errs); !use {
 			continue
 		}
 		prefix := sc.FullPrefix()
@@ -341,5 +339,5 @@ func (cs *CompositeSource) List() ([]ModuleInfo, error) {
 			modules = append(modules, m)
 		}
 	}
-	return modules, newPartialError(append(errs.soft, errs.hard...))
+	return modules, newPartialError(errs)
 }

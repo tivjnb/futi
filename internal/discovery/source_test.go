@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -1001,6 +1002,9 @@ func noAccessDir(t *testing.T, path string) {
 	t.Helper()
 	if os.Geteuid() == 0 {
 		t.Skip("root обходит права доступа")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod 000 не ограничивает доступ в Windows")
 	}
 	if err := os.Chmod(path, 0); err != nil {
 		t.Fatal(err)
