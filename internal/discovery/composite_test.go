@@ -886,3 +886,26 @@ func TestCompositeResolveWithUnreadableSource(t *testing.T) {
 		}
 	})
 }
+
+// TestCompositeResolveInSourceConflictWinsOverOtherSource: конфликт x.yaml и
+// x/config.yaml внутри одного source — ошибка модулей, даже если x однозначно
+// найден в другом source; порядок sources не важен.
+func TestCompositeResolveInSourceConflictWinsOverOtherSource(t *testing.T) {
+	for _, conflictFirst := range []bool{true, false} {
+		dirA, dirB := t.TempDir(), t.TempDir()
+		writeFile(t, filepath.Join(dirA, "x.yaml"), "name: x\n")
+		writeFile(t, filepath.Join(dirA, "x", "config.yaml"), "name: x\n")
+		writeFile(t, filepath.Join(dirB, "x.yaml"), "name: x\n")
+		sources := []config.SourceConfig{{Path: dirA}, {Path: dirB}}
+		if !conflictFirst {
+			sources[0], sources[1] = sources[1], sources[0]
+		}
+		s := NewCompositeSource(&config.Config{Sources: sources})
+
+		_, _, err := s.Resolve("x")
+		var conflict *sourceConflictError
+		if !errors.As(err, &conflict) {
+			t.Fatalf("conflictFirst=%v: Resolve(x) err = %v, want *sourceConflictError", conflictFirst, err)
+		}
+	}
+}

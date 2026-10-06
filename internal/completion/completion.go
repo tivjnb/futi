@@ -92,7 +92,7 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 	// значения не берёт (парсер: "--force true" — ошибка), поэтому после него
 	// подсказываем оставшиеся флаги (ниже). Значение string/int-флага
 	// user-supplied: разрешаем шеллу файловое дополнение (пути в значениях).
-	// В будущем ограничим параметрами типа PATH (см. NEXT_STEPS).
+	// В будущем ограничим параметрами типа path (ROADMAP в README).
 	if len(args) > 0 && strings.HasPrefix(args[len(args)-1], "--") && !strings.Contains(args[len(args)-1], "=") && !strings.HasPrefix(toComplete, "--") {
 		if !moduleFound || !isBoolFlag(loader, manifest, root, commandPath, flagName(args[len(args)-1])) {
 			return nil, ShellCompDirectiveDefault
