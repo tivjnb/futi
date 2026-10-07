@@ -92,7 +92,7 @@ func TestAttachNoAnswerHintsYes(t *testing.T) {
 	t.Run("update", func(t *testing.T) {
 		global := attachEnv(t)
 		setStdinTerminal(t, true)
-		installThenChange(t, global, "qr")
+		dest := installThenChange(t, global, "qr")
 
 		var err error
 		captureStderr(t, func() {
@@ -100,6 +100,12 @@ func TestAttachNoAnswerHintsYes(t *testing.T) {
 		})
 		if err == nil || !strings.Contains(err.Error(), "--yes") || !strings.Contains(err.Error(), "module not updated") {
 			t.Fatalf("err = %v, want hint about --yes and module not updated", err)
+		}
+		if data, _ := os.ReadFile(filepath.Join(dest, "config.yaml")); strings.Contains(string(data), "echo v2") {
+			t.Fatal("old tree must stay when there is no answer")
+		}
+		if exists(dest + backupSuffix) {
+			t.Fatal("backup must not be created")
 		}
 	})
 }

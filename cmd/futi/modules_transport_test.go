@@ -195,7 +195,7 @@ func TestFetchArchiveEnforcesSizeLimit(t *testing.T) {
 }
 
 func TestRunModulesUpdateRejectsHTTPSource(t *testing.T) {
-	fakeBin(t, map[string]string{"curl": "exit 0"})
+	bin := fakeBin(t, map[string]string{"curl": "exit 0"})
 	global := t.TempDir()
 	t.Setenv("FUTI_MODULES_DIR", global)
 	t.Chdir(t.TempDir())
@@ -219,5 +219,8 @@ func TestRunModulesUpdateRejectsHTTPSource(t *testing.T) {
 	err = runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"qr"})
 	if err == nil || !strings.Contains(err.Error(), "only https:// is supported") {
 		t.Fatalf("err = %v, want https error", err)
+	}
+	if a := readArgv(t, bin, "curl"); a != nil {
+		t.Errorf("curl must not run, argv = %q", a)
 	}
 }
