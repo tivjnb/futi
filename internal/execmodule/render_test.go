@@ -148,6 +148,30 @@ func TestValidateNormalizesBoolParams(t *testing.T) {
 	}
 }
 
+func TestValidateBoolDefaultSynonyms(t *testing.T) {
+	cases := []struct {
+		defaul string
+		want   string
+	}{
+		{"off", ""},
+		{"on", "true"},
+		{" YES ", "true"},
+		{"0", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.defaul, func(t *testing.T) {
+			cmd := &Command{Params: []Param{{Name: "follow", Type: "bool", Default: tc.defaul}}}
+			resolved, err := cmd.Validate(nil)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resolved["follow"] != tc.want {
+				t.Fatalf("default %q: got %q, want %q", tc.defaul, resolved["follow"], tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateRejectsInvalidBool(t *testing.T) {
 	for _, in := range []string{"maybe", "flase", "", "anything"} {
 		t.Run(in, func(t *testing.T) {
