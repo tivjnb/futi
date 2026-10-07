@@ -1140,6 +1140,7 @@ func TestOldValidateSyntaxHint(t *testing.T) {
 	}{
 		{[]string{"m", "validate"}, "hint: use 'futi modules validate m'"},
 		{[]string{"validate"}, "hint: use 'futi modules validate <namespace>'"},
+		{[]string{"nomod", "validate"}, "hint: use 'futi modules validate nomod'"},
 		{[]string{"m", "ps", "validate"}, "hint: use 'futi modules validate m.ps'"},
 	}
 	for _, c := range cases {
