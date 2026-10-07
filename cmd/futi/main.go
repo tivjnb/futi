@@ -623,14 +623,13 @@ first token starting with "-"; a word after a flag is only accepted as the
 value of the preceding string/int flag. "-h" / "--help" after the path shows
 help for that path.
 
-"list" is a reserved word — it cannot be used as a command name in a module.
+Reserved words: "list", "cache", "modules", "completion", "__complete". They
+cannot be used as a module name or as any segment of a module path, and "list"
+cannot be a command name in a module.
 
 Arguments after "--" are passed to the command's template as {{.args}}
 (space-joined string) and {{.args_list}} (array). Example:
   futi echo_mod echo -- hello world  →  cmd: "echo {{.args}}"  → echo hello world
-
-Note: the "--" separator for args may be replaced by a hybrid mode in
-future versions (positional args for leaf commands without explicit "--").
 
 MODULES
   Modules live in ~/.config/futi/modules/ by default (override with

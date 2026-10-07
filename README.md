@@ -1062,6 +1062,8 @@ futi completion fish > ~/.config/fish/completions/futi.fish
 - **Параметры default-команды** — модуль-однокоманда (`cmd` + `params`, без `commands`) подсказывает свои флаги: `futi meta <TAB>` → `--json`
 - **После bool-флага** — `futi docker build --force <TAB>` подсказывает оставшиеся (ещё не введённые) флаги (`--tag`); значения `true`/`false` не предлагаются: bool-флаг значения не берёт, `false` задаётся как `--force=false`
 - **Builtins** — `futi cache <TAB>` → `refresh`/`status`/`clear`; `futi completion <TAB>` → `bash`/`zsh`/`fish`
+- **Валидация модуля** — `futi modules validate <TAB>` подсказывает полные имена модулей (`dev.deploy`), после первого аргумента подсказок нет
+- **Приоритет builtins** — на корне `cache`, `completion`, `list`, `modules` подсказываются как builtins даже при одноимённом модуле (CLI исполнит builtin); `futi cache <TAB>` не показывает команды такого модуля
 - **Подсказка `help`** — `help` предлагается на каждом уровне (модуль/команда/subcommand): `futi demo <TAB>`, `futi demo db <TAB>`, `futi demo greet <TAB>`. Если в модуле уже определена команда `help` (user-defined), она и предлагается — системная не дублируется.
 
 Значения строковых/числовых параметров (обычно user-supplied, например `--tag myapp`)

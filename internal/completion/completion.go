@@ -22,11 +22,6 @@ type Match struct {
 	Description string
 }
 
-// builtinNames — встроенные команды корневого уровня (до резолва модулей).
-// list зарезервирован и не может быть командой модуля; cache/modules/
-// completion имеют приоритет над одноимёнными модулями на корне.
-var builtinNames = []string{"cache", "completion", "list", "modules", "validate"}
-
 // ReservedNames — единый canonical-список слов корня, которые нельзя
 // использовать ни в одном сегменте пути модуля: main.go перехватывает их
 // до резолва модулей (cache/modules/completion/__complete — по первому
@@ -35,6 +30,22 @@ var builtinNames = []string{"cache", "completion", "list", "modules", "validate"
 // в main.go — добавить имя сюда. help не зарезервирован: диспетчер сначала
 // пробует его как пользовательскую команду.
 var ReservedNames = []string{"list", "cache", "modules", "completion", "__complete"}
+
+// hiddenReserved — зарезервированное слово, которое не подсказывается на корне.
+const hiddenReserved = "__complete"
+
+// rootBuiltins — builtin-подсказки корня: ReservedNames без скрытой
+// __complete. Модуль с таким именем на корне не подсказывается: CLI
+// исполнит builtin.
+func rootBuiltins() []string {
+	out := make([]string, 0, len(ReservedNames))
+	for _, r := range ReservedNames {
+		if r != hiddenReserved {
+			out = append(out, r)
+		}
+	}
+	return out
+}
 
 // IsReservedName сообщает, входит ли name в ReservedNames.
 func IsReservedName(name string) bool {
@@ -53,7 +64,7 @@ var cacheSubcommands = []string{"clear", "refresh", "status"}
 var completionShells = []string{"bash", "fish", "zsh"}
 
 // modulesSubcommands — подкоманды `futi modules`.
-var modulesSubcommands = []string{"add_command", "info", "init", "install", "list", "path", "remove_command", "uninstall", "update"}
+var modulesSubcommands = []string{"add_command", "info", "init", "install", "list", "path", "remove_command", "uninstall", "update", "validate"}
 
 // modulesInitFlags — флаги `futi modules init` (бывший futi init).
 var modulesInitFlags = []string{"--command", "--default-cmd", "--desc", "--global"}
@@ -105,7 +116,16 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 	}
 
 	// Резолвим модуль progressive-ом. commandPath — остаток после namespace.
-	manifest, root, moduleFound, commandPath := resolveModule(source, positionals)
+	// Зарезервированное первое слово — builtin: CLI исполнит его до резолва
+	// модулей, поэтому одноимённый модуль не подсказываем.
+	var (
+		manifest, root string
+		moduleFound    bool
+		commandPath    []string
+	)
+	if len(positionals) == 0 || !IsReservedName(positionals[0]) {
+		manifest, root, moduleFound, commandPath = resolveModule(source, positionals)
+	}
 
 	// Случай: предыдущее слово — флаг без "=", а текущее — не флаг. Bool-флаг
 	// значения не берёт (парсер: "--force true" — ошибка), поэтому после него
@@ -312,16 +332,21 @@ func withHelp(matches []Match) []Match {
 // namespaceMatches формирует подсказки, когда модуль не зарезолвлен:
 // builtins (корень) + children namespace.
 func namespaceMatches(source discovery.Source, loader modulerunner.ModuleLoader, positionals []string, toComplete string) ([]Match, Directive) {
-	// Специальные builtins с собственными подсказками.
-	if len(positionals) == 1 {
-		switch positionals[0] {
-		case "cache":
-			return filterMatches(strMatches(cacheSubcommands), toComplete), ShellCompDirectiveNoFileComp
-		case "completion":
-			return filterMatches(strMatches(completionShells), toComplete), ShellCompDirectiveNoFileComp
-		case "modules":
-			return filterMatches(strMatches(modulesSubcommands), toComplete), ShellCompDirectiveNoFileComp
+	// Builtins корня с собственными подсказками. Остальные зарезервированные
+	// слова (list, __complete) и позиции глубже — подсказывать нечего.
+	if len(positionals) > 0 && IsReservedName(positionals[0]) {
+		var names []string
+		switch {
+		case len(positionals) == 1 && positionals[0] == "cache":
+			names = cacheSubcommands
+		case len(positionals) == 1 && positionals[0] == "completion":
+			names = completionShells
+		case len(positionals) == 1 && positionals[0] == "modules":
+			names = modulesSubcommands
+		case len(positionals) == 2 && positionals[0] == "modules" && positionals[1] == "validate":
+			return validateMatches(source, toComplete), ShellCompDirectiveNoFileComp
 		}
+		return filterMatches(strMatches(names), toComplete), ShellCompDirectiveNoFileComp
 	}
 
 	ns := strings.Join(positionals, ".")
@@ -329,7 +354,7 @@ func namespaceMatches(source discovery.Source, loader modulerunner.ModuleLoader,
 
 	// Builtins только на корне (positionals пуст).
 	if len(positionals) == 0 {
-		for _, b := range builtinNames {
+		for _, b := range rootBuiltins() {
 			matches = append(matches, Match{Text: b})
 		}
 	}
@@ -341,6 +366,10 @@ func namespaceMatches(source discovery.Source, loader modulerunner.ModuleLoader,
 	var partial *discovery.PartialError
 	if err == nil || errors.As(err, &partial) {
 		for _, c := range children {
+			// На корне имя builtin выигрывает у модуля/namespace: без дубля.
+			if len(positionals) == 0 && IsReservedName(c.Name) {
+				continue
+			}
 			m := Match{Text: c.Name}
 			if c.Type == "module" && !c.Conflict { // конфликтный модуль не загружаем
 				// Подтягиваем описание модуля (zsh); ошибку игнорируем.
@@ -353,6 +382,21 @@ func namespaceMatches(source discovery.Source, loader modulerunner.ModuleLoader,
 	}
 
 	return filterMatches(matches, toComplete), ShellCompDirectiveNoFileComp
+}
+
+// validateMatches — полные точечные имена модулей для `futi modules validate`.
+// Частичный листинг (*PartialError) — подсказки из читаемых источников.
+func validateMatches(source discovery.Source, toComplete string) []Match {
+	mods, err := source.List()
+	var partial *discovery.PartialError
+	if err != nil && !errors.As(err, &partial) {
+		return nil
+	}
+	matches := make([]Match, 0, len(mods))
+	for _, m := range mods {
+		matches = append(matches, Match{Text: m.Name})
+	}
+	return filterMatches(matches, toComplete)
 }
 
 // commandMatches превращает map команд в подсказки (имя + описание).
