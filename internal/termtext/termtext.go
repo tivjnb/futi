@@ -27,14 +27,22 @@ func filter(s string, keep func(rune) rune) string {
 	return b.String()
 }
 
+// isBidiControl сообщает, что r — bidi-управляющий символ: им можно визуально
+// переставить текст в терминале (trojan source). Прочие Cf (например ZWJ в
+// emoji) не трогаем.
+func isBidiControl(r rune) bool {
+	return r == 0x061C || r == 0x200E || r == 0x200F ||
+		(r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069)
+}
+
 // Line подготавливает однострочный текст: \t, \n, \r заменяются пробелом,
-// прочие управляющие руны (C0, DEL, C1) удаляются, края обрезаются.
+// прочие управляющие руны (C0, DEL, C1) и bidi-управляющие удаляются, края обрезаются.
 func Line(s string) string {
 	return strings.TrimSpace(filter(s, func(r rune) rune {
 		switch {
 		case r == '\t' || r == '\n' || r == '\r':
 			return ' '
-		case unicode.IsControl(r):
+		case unicode.IsControl(r) || isBidiControl(r):
 			return -1
 		}
 		return r
@@ -42,13 +50,13 @@ func Line(s string) string {
 }
 
 // Block подготавливает многострочный текст: \n и \t сохраняются,
-// \r и прочие управляющие руны удаляются.
+// \r, прочие управляющие руны и bidi-управляющие удаляются.
 func Block(s string) string {
 	return filter(s, func(r rune) rune {
 		switch {
 		case r == '\n' || r == '\t':
 			return r
-		case unicode.IsControl(r):
+		case unicode.IsControl(r) || isBidiControl(r):
 			return -1
 		}
 		return r
