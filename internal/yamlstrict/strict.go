@@ -6,6 +6,7 @@
 package yamlstrict
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -73,7 +74,12 @@ func (w *walker) walk(node *yaml.Node, typ reflect.Type, path string) {
 		w.walkStruct(node, typ, path)
 	case node.Kind == yaml.MappingNode && typ.Kind() == reflect.Map:
 		for i := 0; i+1 < len(node.Content); i += 2 {
-			w.walk(node.Content[i+1], typ.Elem(), joinKey(path, node.Content[i].Value))
+			key, val := node.Content[i], node.Content[i+1]
+			if key.Tag == "!!merge" {
+				w.walkMerge(val, typ, path)
+				continue
+			}
+			w.walk(val, typ.Elem(), joinKey(path, key.Value))
 		}
 	case node.Kind == yaml.SequenceNode && (typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array):
 		for i, c := range node.Content {
@@ -102,12 +108,12 @@ func (w *walker) walkStruct(node *yaml.Node, typ reflect.Type, path string) {
 		if path != "" {
 			msg += " in " + path
 		}
-		w.errs = append(w.errs, fmt.Errorf("%s", msg))
+		w.errs = append(w.errs, errors.New(msg))
 	}
 }
 
 // walkMerge проверяет значение merge-ключа (<<): mapping, алиас на mapping или
-// список таковых — против той же структуры, что и содержащий их mapping.
+// список таковых — против того же типа (структуры или map), что и содержащий их mapping.
 func (w *walker) walkMerge(val *yaml.Node, typ reflect.Type, path string) {
 	if val.Kind == yaml.SequenceNode {
 		for _, c := range val.Content {

@@ -80,6 +80,9 @@ func TestUnknownKeys(t *testing.T) {
 		{"alias to good anchor", "x-base: &b {name: a}\nopts: *b\n", nil},
 		{"merge bad base", "x-base: &b {bad: a, name: n}\nopts:\n  <<: *b\n", []string{`line 1: unknown key "bad" in opts`}},
 		{"merge good base", "x-base: &b {name: a}\nopts:\n  <<: *b\n  name: z\n", nil},
+		{"merge into map good base", "x-base: &b {foo: {name: a}}\nby_name:\n  <<: *b\n  bar: {name: b}\n", nil},
+		{"merge into map bad element", "x-base: &b {foo: {nme: a}}\nby_name:\n  <<: *b\n  bar: {name: b}\n", []string{`line 1: unknown key "nme" in by_name.foo`}},
+		{"merge list into map", "x-a: &a {foo: {name: a}}\nx-b: &b {baz: {bad: 1}}\nby_name:\n  <<: [*a, *b]\n", []string{`line 2: unknown key "bad" in by_name.baz`}},
 		{"merge list of bases", "x-a: &a {name: a}\nx-b: &b {bad: 1}\nopts:\n  <<: [*a, *b]\n", []string{`line 2: unknown key "bad" in opts`}},
 	}
 	for _, tc := range tests {
