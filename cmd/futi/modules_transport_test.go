@@ -68,6 +68,18 @@ func TestFetchGitPassesDoubleDashBeforeURL(t *testing.T) {
 	}
 }
 
+// TestFetchGitForbidsHTTPProtocol: git не должен идти по редиректу на http:// (audit F50).
+func TestFetchGitForbidsHTTPProtocol(t *testing.T) {
+	bin := fakeBin(t, map[string]string{"git": "exit 1"})
+	_, _, _ = fetchGit(context.Background(), "https://example.com/r.git", "", t.TempDir())
+	argv := readArgv(t, bin, "git")
+	c := indexOf(argv, "-c")
+	clone := indexOf(argv, "clone")
+	if c != 0 || clone < 0 || argv[c+1] != "protocol.http.allow=never" || c > clone {
+		t.Fatalf("git argv = %q, want -c protocol.http.allow=never before clone", argv)
+	}
+}
+
 func TestFetchArchiveCurlHardeningArgs(t *testing.T) {
 	bin := fakeBin(t, map[string]string{"curl": "exit 1"})
 	_, _ = fetchArchive(context.Background(), "https://example.com/m.tar.gz", t.TempDir())

@@ -68,7 +68,10 @@ func checkTransportSource(src string, kind sourceKind, ref string) error {
 func fetchGit(ctx context.Context, url, ref, tempBase string) (string, string, error) {
 	dest := filepath.Join(tempBase, "repo")
 
-	args := []string{"clone", "--depth=1"}
+	// protocol.http.allow=never: редирект https→http (в том числе от сервера)
+	// не отрабатывается; http.followRedirects не трогаем — GitHub отвечает 301
+	// для переименованных репозиториев.
+	args := []string{"-c", "protocol.http.allow=never", "clone", "--depth=1"}
 	if ref != "" {
 		args = append(args, "--branch", ref)
 	}
