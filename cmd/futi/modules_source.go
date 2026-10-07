@@ -268,6 +268,9 @@ func fetchLocalSource(src, tempBase string) (string, error) {
 // удаляется им же через defer). Возвращает каталог модуля (возможно, сам
 // tempBase-подкаталог — install делает os.Rename от него) и commit (git).
 func fetchSource(ctx context.Context, src string, kind sourceKind, ref, tempBase string) (moduleDir, commit string, err error) {
+	if err := checkTransportSource(src, kind, ref); err != nil {
+		return "", "", err
+	}
 	switch kind {
 	case kindLocal:
 		dir, err := fetchLocalSource(src, tempBase)

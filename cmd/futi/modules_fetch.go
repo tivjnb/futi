@@ -3,14 +3,58 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tivjnb/futi/internal/executor"
 )
+
+const (
+	maxDownloadBytes = 100 << 20
+	downloadTimeout  = 5 * time.Minute
+)
+
+// downloadLimit — действующий лимит размера скачивания (переменная — для тестов).
+var downloadLimit int64 = maxDownloadBytes
+
+var errDownloadTooLarge = errors.New("exceeds 100 MiB limit")
+
+// limitWriter пишет в w не больше left байт, дальше возвращает errDownloadTooLarge
+// (curl --max-filesize не срабатывает на ответ без Content-Length).
+type limitWriter struct {
+	w    io.Writer
+	left int64
+}
+
+func (l *limitWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > l.left {
+		return 0, errDownloadTooLarge
+	}
+	l.left -= int64(len(p))
+	return l.w.Write(p)
+}
+
+// checkTransportSource отвергает опасные значения source/ref до запуска
+// git/curl: ведущий "-" (читался бы как опция) и незащищённый http://.
+func checkTransportSource(src string, kind sourceKind, ref string) error {
+	if strings.HasPrefix(src, "-") {
+		return fmt.Errorf("source %q must not start with \"-\"", src)
+	}
+	if strings.HasPrefix(ref, "-") {
+		return fmt.Errorf("ref %q must not start with \"-\"", ref)
+	}
+	if (kind == kindGit || kind == kindArchive) && strings.HasPrefix(strings.ToLower(src), "http://") {
+		return fmt.Errorf("insecure http:// source %q: only https:// is supported; download it manually and install from a local path", src)
+	}
+	return nil
+}
 
 // fetchGit клонирует репозиторий (--depth=1) в tempBase/repo, удаляет .git
 // и возвращает каталог модуля. commit — full SHA HEAD (до удаления .git).
@@ -21,7 +65,7 @@ func fetchGit(ctx context.Context, url, ref, tempBase string) (string, string, e
 	if ref != "" {
 		args = append(args, "--branch", ref)
 	}
-	args = append(args, url, dest)
+	args = append(args, "--", url, dest)
 	if err := executor.RunWithConfig(ctx, executor.NewConfig(), "git", args...); err != nil {
 		return "", "", fmt.Errorf("git clone: %w", err)
 	}
@@ -59,9 +103,17 @@ func fetchArchive(ctx context.Context, url, tempBase string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cfg := executor.NewConfig().WithStdout(f)
-	err = executor.RunWithConfig(ctx, cfg, "curl", "-fsSL", url)
+	cfg := executor.NewConfig().WithStdout(&limitWriter{w: f, left: downloadLimit})
+	err = executor.RunWithConfig(ctx, cfg, "curl",
+		"-fsSL", "--proto", "=https", "--proto-redir", "=https",
+		"--max-filesize", strconv.FormatInt(maxDownloadBytes, 10),
+		"--max-time", strconv.Itoa(int(downloadTimeout/time.Second)),
+		"--", url)
 	f.Close()
+	if errors.Is(err, errDownloadTooLarge) {
+		// Без обёртки executor: сообщение должно быть коротким и понятным.
+		return "", fmt.Errorf("download archive: %w", errDownloadTooLarge)
+	}
 	if err != nil {
 		return "", fmt.Errorf("download archive: %w", err)
 	}

@@ -91,6 +91,9 @@ func parseInstallArgs(args []string) (*installArgs, error) {
 		return nil, fmt.Errorf("expected one source argument, got %d", len(positional))
 	}
 	cfg.source = positional[0]
+	if strings.HasPrefix(cfg.ref, "-") {
+		return nil, fmt.Errorf("ref %q must not start with \"-\"", cfg.ref)
+	}
 
 	if cfg.namespace != "" {
 		if err := validateModuleName(cfg.namespace); err != nil {
