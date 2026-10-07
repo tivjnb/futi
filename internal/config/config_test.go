@@ -281,3 +281,114 @@ func writeFile(t *testing.T, path, content string) {
 		t.Fatalf("write file %q: %v", path, err)
 	}
 }
+
+func loadString(t *testing.T, content string) (*Config, error) {
+	t.Helper()
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, cfgPath, content)
+	return Load(cfgPath)
+}
+
+func TestLoadUnknownKeyTopLevel(t *testing.T) {
+	_, err := loadString(t, "sorces:\n  - path: /foo\n")
+	if err == nil || !strings.Contains(err.Error(), `line 1: unknown key "sorces"`) {
+		t.Fatalf("err = %v, want unknown key sorces at line 1", err)
+	}
+}
+
+func TestLoadUnknownKeyInSource(t *testing.T) {
+	_, err := loadString(t, "sources:\n  - path: /foo\n    mountpont: dev\n")
+	if err == nil || !strings.Contains(err.Error(), `unknown key "mountpont" in sources[0]`) {
+		t.Fatalf("err = %v, want unknown key mountpont in sources[0]", err)
+	}
+}
+
+func TestLoadUnknownKeyInCache(t *testing.T) {
+	_, err := loadString(t, "cache:\n  refrsh: force_only\n")
+	if err == nil || !strings.Contains(err.Error(), `line 2: unknown key "refrsh" in cache`) {
+		t.Fatalf("err = %v, want unknown key refrsh in cache", err)
+	}
+}
+
+func TestLoadReportsAllUnknownKeys(t *testing.T) {
+	_, err := loadString(t, "sorces: []\ncache:\n  refrsh: x\n")
+	if err == nil || !strings.Contains(err.Error(), `unknown key "sorces"; line 3: unknown key "refrsh" in cache`) {
+		t.Fatalf("err = %v, want both errors joined by %q", err, "; ")
+	}
+}
+
+func TestLoadAllowsXKeys(t *testing.T) {
+	cfg, err := loadString(t, `
+x-common: &c {mountpoint: dev}
+sources:
+  - path: /foo
+    x-note: hello
+  - <<: *c
+    path: /bar
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Sources) != 2 || cfg.Sources[1].Mountpoint != "dev" {
+		t.Fatalf("unexpected sources: %+v", cfg.Sources)
+	}
+}
+
+func TestLoadEmptyFile(t *testing.T) {
+	for name, content := range map[string]string{
+		"empty":        "",
+		"comment only": "# nothing here\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := loadString(t, content)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg == nil || len(cfg.Sources) != 0 || cfg.Cache != (CacheConfig{}) {
+				t.Fatalf("cfg = %+v, want empty Config", cfg)
+			}
+		})
+	}
+}
+
+func TestLoadInvalidMountpoint(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		value string
+		want  string // "" — ошибки быть не должно
+	}{
+		{"mountpoint double dot", "mountpoint", `".."`, `source[0]: invalid mountpoint ".."`},
+		{"mountpoint single dot", "mountpoint", `"."`, `source[0]: invalid mountpoint "."`},
+		{"mountpoint empty segment", "mountpoint", `"a..b"`, `source[0]: invalid mountpoint "a..b"`},
+		{"mountpoint slash", "mountpoint", `"a/b"`, `source[0]: invalid mountpoint "a/b"`},
+		{"mountpoint backslash", "mountpoint", `'a\b'`, `source[0]: invalid mountpoint "a\\b"`},
+		{"mountpoint space", "mountpoint", `"a b"`, `source[0]: invalid mountpoint "a b"`},
+		{"mountpoint control", "mountpoint", `"a\tb"`, `source[0]: invalid mountpoint "a\tb"`},
+		{"namespace double dot", "mount_as_namespace", `".."`, `source[0]: invalid mount_as_namespace ".."`},
+		{"namespace single dot", "mount_as_namespace", `"."`, `source[0]: invalid mount_as_namespace "."`},
+		{"namespace empty segment", "mount_as_namespace", `"a..b"`, `source[0]: invalid mount_as_namespace "a..b"`},
+		{"namespace slash", "mount_as_namespace", `"a/b"`, `source[0]: invalid mount_as_namespace "a/b"`},
+		{"namespace space", "mount_as_namespace", `"a b"`, `source[0]: invalid mount_as_namespace "a b"`},
+		{"mountpoint outer dots ok", "mountpoint", `".dev."`, ""},
+		{"namespace outer dots ok", "mount_as_namespace", `".dev."`, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := loadString(t, "sources:\n  - path: /foo\n    "+tc.field+": "+tc.value+"\n")
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				got := cfg.Sources[0].Mountpoint + cfg.Sources[0].MountAsNamespace
+				if got != "dev" {
+					t.Fatalf("trimmed value = %q, want %q", got, "dev")
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}

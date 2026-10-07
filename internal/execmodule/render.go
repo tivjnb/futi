@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"text/template"
@@ -11,8 +12,10 @@ import (
 
 // Validate проверяет переданные параметры против схемы команды.
 // Применяет defaults. Для параметров с Type=="bool" нормализует значения
-// (см. normalizeBool), чтобы {{if .bool}} в text/template работало корректно:
-// falsy-строки приводятся к "", остальные — к "true".
+// (см. parseBool), чтобы {{if .bool}} в text/template работало корректно:
+// falsy-строки приводятся к "", truthy — к "true", всё остальное (включая
+// пустое переданное значение) — ошибка. required для string/int отвергает
+// и пустое значение, не только непереданное.
 // Возвращает map с итоговыми значениями (включая defaults) или ошибку
 // с понятным сообщением.
 func (c *Command) Validate(provided map[string]string) (map[string]string, error) {
@@ -28,7 +31,16 @@ func (c *Command) Validate(provided map[string]string) (map[string]string, error
 			}
 		}
 		if p.Type == "bool" {
-			val = normalizeBool(val)
+			// Непереданный bool без default — false, не ошибка.
+			if ok || val != "" {
+				norm, valid := parseBool(val)
+				if !valid {
+					return nil, fmt.Errorf("execmodule: param %q must be a boolean (true/false, 1/0, yes/no, on/off), got %q", p.Name, val)
+				}
+				val = norm
+			}
+		} else if p.Required && val == "" {
+			return nil, fmt.Errorf("execmodule: required param %q missing", p.Name)
 		}
 		if p.Type == "int" && val != "" {
 			if _, err := strconv.Atoi(val); err != nil {
@@ -38,7 +50,13 @@ func (c *Command) Validate(provided map[string]string) (map[string]string, error
 		resolved[p.Name] = val
 	}
 
+	// Имена сортируем: при нескольких неизвестных ошибка детерминирована.
+	names := make([]string, 0, len(provided))
 	for name := range provided {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
 		known := false
 		for _, p := range c.Params {
 			if p.Name == name {
@@ -115,7 +133,7 @@ func (e *TemplateError) Unwrap() error { return e.Cause }
 // Ошибки парсинга и выполнения шаблона возвращаются как *TemplateError.
 func (c *Command) Render(params map[string]string, args string, argsList []string, module ModuleRef) (string, error) {
 	tmpl, err := template.New("cmd").
-		Funcs(template.FuncMap{"quote": quoteShlex}).
+		Funcs(TemplateFuncs()).
 		Option("missingkey=error").
 		Parse(c.Cmd)
 	if err != nil {
@@ -146,6 +164,12 @@ func (c *Command) Render(params map[string]string, args string, argsList []strin
 	}
 
 	return buf.String(), nil
+}
+
+// TemplateFuncs — единый набор функций cmd-шаблонов (quote): им рендерятся
+// команды, хуки attach/detach, и по нему же Validate проверяет синтаксис.
+func TemplateFuncs() template.FuncMap {
+	return template.FuncMap{"quote": quoteShlex}
 }
 
 // quoteShlex возвращает s в форме, которую shlex.Split интерпретирует как
@@ -191,15 +215,18 @@ func defaultEnvMap() map[string]string {
 	return m
 }
 
-// normalizeBool приводит строковое значение bool-параметра к каноническому
-// виду для корректной работы с {{if .bool}} в text/template, где любая
-// непустая строка считается truthy. falsy-значения ("false", "0", "no", "")
-// приводятся к "" (falsy), остальные — к "true". Сравнение регистронезависимое.
-func normalizeBool(val string) string {
-	switch strings.ToLower(val) {
-	case "false", "0", "no", "":
-		return ""
+// parseBool приводит значение bool-параметра к каноническому виду для
+// {{if .bool}} в text/template, где любая непустая строка считается truthy:
+// true/1/yes/on -> "true", false/0/no/off -> "" (falsy). Регистр и пробелы по
+// краям игнорируются. Второй результат false — значение не булево (в том
+// числе пустое).
+func parseBool(val string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(val)) {
+	case "true", "1", "yes", "on":
+		return "true", true
+	case "false", "0", "no", "off":
+		return "", true
 	default:
-		return "true"
+		return "", false
 	}
 }

@@ -139,7 +139,16 @@ func runModulesUninstall(w io.Writer, stdin io.Reader, source discovery.Source, 
 	// detach перед удалением (§5.2 шаг 4). cwd = moduleRoot и для одиночного
 	// yaml — это каталог с ним (корректно).
 	if metaErr == nil && !cfg.skipDetach {
-		if mod, err := execmodule.LoadModule(manifestPath, moduleRoot); err == nil && mod.Detach != "" {
+		// ParseModule без Validate: модуль с ошибкой схемы (опечатка ключа,
+		// required+default) всё равно должен отработать detach; синтаксис
+		// шаблона проверит рендер хука.
+		mod, err := execmodule.ParseModule(manifestPath, moduleRoot)
+		if err != nil {
+			if cfg.strictDetach {
+				return fmt.Errorf("cannot load manifest (strict), nothing deleted: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "Warning: cannot load manifest, detach skipped: %v\n", err)
+		} else if mod.Detach != "" {
 			if err := modulerunner.RunHook(context.Background(), mod.Detach, moduleRoot, cfg.name, os.Stdout, os.Stderr); err != nil {
 				if _, interrupted := interruptSignal(err); interrupted {
 					return fmt.Errorf("detach interrupted, nothing deleted: %w", err)

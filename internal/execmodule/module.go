@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 
+	"github.com/tivjnb/futi/internal/yamlstrict"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,6 +26,10 @@ type Module struct {
 	Params      []Param
 	Positional  Positional
 	Commands    map[string]*Command
+
+	// schemaErrs — ошибки неизвестных ключей манифеста (с номерами строк),
+	// найденные ParseModule; Validate возвращает их первыми.
+	schemaErrs []error
 }
 
 // Command — одна команда модуля.
@@ -146,10 +152,25 @@ func ParseModule(manifestPath, moduleRoot string) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParseManifest(data, manifestPath, moduleRoot)
+}
 
-	var raw moduleYAML
-	if err := yaml.Unmarshal(data, &raw); err != nil {
+// ParseManifest разбирает манифест из байтов без Validate. manifestPath
+// используется только в сообщениях об ошибках (для ещё не записанного файла —
+// будущий путь).
+func ParseManifest(data []byte, manifestPath, moduleRoot string) (*Module, error) {
+	var node yaml.Node
+	if err := yaml.Unmarshal(data, &node); err != nil {
 		return nil, fmt.Errorf("execmodule: parse manifest %q: %w", manifestPath, err)
+	}
+	schemaErrs := yamlstrict.UnknownKeys(&node, reflect.TypeOf(moduleYAML{}))
+	// Пустой документ (Kind == 0) не декодируем: получится пустой модуль,
+	// его отвергнет Validate.
+	var raw moduleYAML
+	if node.Kind != 0 {
+		if err := node.Decode(&raw); err != nil {
+			return nil, fmt.Errorf("execmodule: parse manifest %q: %w", manifestPath, err)
+		}
 	}
 
 	commands := make(map[string]*Command, len(raw.Commands))
@@ -167,6 +188,7 @@ func ParseModule(manifestPath, moduleRoot string) (*Module, error) {
 		Params:      parseParams(raw.Params),
 		Positional:  Positional{Min: raw.Positional.Min},
 		Commands:    commands,
+		schemaErrs:  schemaErrs,
 	}, nil
 }
 

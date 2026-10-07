@@ -74,10 +74,10 @@ commands:
 	}
 }
 
-func TestLoadModuleMissingCommand(t *testing.T) {
+func TestLoadModuleUnknownCommandNotInModule(t *testing.T) {
 	dir := t.TempDir()
-	manifestPath := filepath.Join(dir, "empty.yaml")
-	writeFile(t, manifestPath, `name: empty`)
+	manifestPath := filepath.Join(dir, "one.yaml")
+	writeFile(t, manifestPath, "name: one\ncommands:\n  x:\n    cmd: echo\n")
 
 	mod, err := LoadModule(manifestPath, dir)
 	if err != nil {
@@ -471,4 +471,75 @@ func TestParseModuleRejectsFIFOAndHugeFile(t *testing.T) {
 			t.Fatalf("Name = %q, want %q", mod.Name, "ok")
 		}
 	})
+}
+
+// parseAndValidate разбирает манифест из строки и возвращает тексты ошибок Validate.
+func parseAndValidate(t *testing.T, manifest string) []string {
+	t.Helper()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "m.yaml")
+	writeFile(t, p, manifest)
+	mod, err := ParseModule(p, dir)
+	if err != nil {
+		t.Fatalf("ParseModule: %v", err)
+	}
+	errs, _ := mod.Validate()
+	out := make([]string, len(errs))
+	for i, e := range errs {
+		out[i] = e.Error()
+	}
+	return out
+}
+
+func TestParseModuleUnknownKeysReportedFirstByValidate(t *testing.T) {
+	got := parseAndValidate(t, `
+comands:
+  x: {}
+commands:
+  build:
+    cmd: echo
+    params:
+      - name: tag
+        requird: true
+`)
+	want := []string{
+		`line 2: unknown key "comands"`,
+		`line 9: unknown key "requird" in commands.build.params[0]`,
+	}
+	if len(got) < 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("errors = %q, want prefix %q", got, want)
+	}
+}
+
+func TestLoadModuleFailsOnUnknownKey(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "m.yaml")
+	writeFile(t, p, "cmd: echo\nrequird: 1\n")
+	_, err := LoadModule(p, dir)
+	if err == nil || !strings.Contains(err.Error(), `unknown key "requird"`) {
+		t.Fatalf("LoadModule err = %v, want unknown key error", err)
+	}
+}
+
+func TestParseModuleAllowsXKeysAndMerge(t *testing.T) {
+	got := parseAndValidate(t, `
+x-common: &c
+  description: shared
+  cmd: echo
+commands:
+  a:
+    <<: *c
+  x-b:
+    cmd: echo
+`)
+	if len(got) != 0 {
+		t.Fatalf("errors = %q, want none", got)
+	}
+}
+
+func TestParseModuleEmptyManifestIsEmptyModule(t *testing.T) {
+	got := parseAndValidate(t, "")
+	if len(got) != 1 || got[0] != "module has no cmd and no commands" {
+		t.Fatalf("errors = %q, want [module has no cmd and no commands]", got)
+	}
 }

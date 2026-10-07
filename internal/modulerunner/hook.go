@@ -58,7 +58,7 @@ func RunHook(ctx context.Context, hookCmd, moduleRoot, moduleName string, stdout
 // (missingkey=error — опечатка в переменной падает, а не молчит).
 func renderHook(hookCmd, moduleName, moduleRoot string) (string, error) {
 	tmpl, err := template.New("hook").
-		Funcs(template.FuncMap{"quote": execmodule.QuoteShlex}).
+		Funcs(execmodule.TemplateFuncs()).
 		Option("missingkey=error").
 		Parse(hookCmd)
 	if err != nil {

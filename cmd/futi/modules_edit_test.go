@@ -28,6 +28,8 @@ commands:
   make:
     description: Make a QR code
     cmd: "echo make"
+  keep:
+    cmd: "echo keep"
 `
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -101,6 +103,25 @@ func TestRemoveCommandMissingError(t *testing.T) {
 	err := removeCommandFromManifest(path, "nope")
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected not-found error, got %v", err)
+	}
+}
+
+// Удаление единственной команды модуля без cmd даёт невалидный манифест:
+// ошибка, файл не меняется.
+func TestRemoveOnlyCommandRestoresManifest(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m.yaml")
+	body := "name: m\ncommands:\n  only:\n    cmd: echo\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := removeCommandFromManifest(path, "only")
+	if err == nil || !strings.Contains(err.Error(), "no cmd and no commands") {
+		t.Fatalf("err = %v, want invalid-manifest error", err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != body {
+		t.Fatalf("manifest changed:\n%s\nwant:\n%s", data, body)
 	}
 }
 

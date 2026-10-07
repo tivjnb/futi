@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/tivjnb/futi/internal/config"
+	"github.com/tivjnb/futi/internal/execmodule"
 )
 
 // initConfig — параметры подкоманды futi modules init.
@@ -236,17 +237,27 @@ func runModulesInit(w io.Writer, args []string) error {
 		return err
 	}
 
+	name := filepath.Base(cfg.path)
+	name = strings.TrimSuffix(name, ".yaml")
+	name = strings.TrimSuffix(name, ".yml")
+	yaml := generateModuleYAML(name, cfg.description, cfg.defaultCmd, cfg.commands)
+
+	// Сгенерированный манифест проверяется правилами схемы до записи:
+	// иначе init сообщит об успехе, а модуль не загрузится.
+	mod, err := execmodule.ParseManifest([]byte(yaml), targetPath, filepath.Dir(targetPath))
+	if err != nil {
+		return fmt.Errorf("invalid module: %w", err)
+	}
+	if errs, _ := mod.Validate(); len(errs) > 0 {
+		return fmt.Errorf("invalid module: %w", errs[0])
+	}
+
 	dir := filepath.Dir(targetPath)
 	if dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("create directory: %w", err)
 		}
 	}
-
-	name := filepath.Base(cfg.path)
-	name = strings.TrimSuffix(name, ".yaml")
-	name = strings.TrimSuffix(name, ".yml")
-	yaml := generateModuleYAML(name, cfg.description, cfg.defaultCmd, cfg.commands)
 
 	// #44: O_EXCL — атомарная проверка существования без TOCTOU race.
 	f, err := os.OpenFile(targetPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
