@@ -570,7 +570,7 @@ futi list                                   # модули и namespaces в ко
 futi <namespace...> list                    # содержимое namespace или команды модуля
 futi <namespace...> list -v                 # то же, с колонкой PATH
 futi <namespace...> list -r                 # рекурсивный обход поддерева
-futi modules validate <namespace>            # валидация схемы модуля
+futi modules validate <namespace>           # валидация схемы модуля
 futi <namespace...> help                    # справка по модулю/команде
 futi modules init <name> [flags]            # создать модуль с шаблоном
 futi modules install <source> [flags]       # установить модуль из source (local/git/archive)
@@ -766,7 +766,7 @@ $ futi modules validate bad
 ERROR: command "empty": must have cmd or commands
 ERROR: command "build": param "tag" has invalid type "float" (valid: string, bool, int)
 ERROR: command "build": duplicate param "tag"
-validate: module "bad" has 3 error(s)
+modules: validate: module "bad" has 3 error(s)
 $ echo $?
 1
 ```
