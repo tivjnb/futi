@@ -92,7 +92,12 @@ func parseInitArgs(args []string) (*initConfig, error) {
 	cfg.path = positional[0]
 
 	// F57: зарезервированное слово запрещено в любом сегменте пути.
-	trimmed := strings.TrimSuffix(strings.TrimSuffix(cfg.path, ".yaml"), ".yml")
+	trimmed := cfg.path
+	if strings.HasSuffix(trimmed, ".yaml") {
+		trimmed = strings.TrimSuffix(trimmed, ".yaml")
+	} else {
+		trimmed = strings.TrimSuffix(trimmed, ".yml")
+	}
 	if err := checkReservedSegments(trimmed, "/"); err != nil {
 		return nil, err
 	}
