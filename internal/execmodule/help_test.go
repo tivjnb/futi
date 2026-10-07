@@ -172,3 +172,16 @@ func TestFormatCommandHelpStripsControlChars(t *testing.T) {
 		t.Fatalf("multiline description not preserved: %q", out)
 	}
 }
+
+// TestFormatHelpAlignmentUsesSanitizedWidth: ширина колонки считается по
+// очищенным именам (audit F18, review).
+func TestFormatHelpAlignmentUsesSanitizedWidth(t *testing.T) {
+	mod := &Module{Commands: map[string]*Command{
+		"a\x1b[2Jbcdef": {Description: "d1"},
+		"x":             {Description: "d2"},
+	}}
+	out := FormatModuleHelp(mod, "m")
+	if !strings.Contains(out, "  x          d2\n") || !strings.Contains(out, "  a[2Jbcdef  d1\n") {
+		t.Fatalf("misaligned: %q", out)
+	}
+}

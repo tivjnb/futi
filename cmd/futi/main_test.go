@@ -2591,3 +2591,21 @@ func TestRunListStripsControlChars(t *testing.T) {
 		}
 	}
 }
+
+// TestRunListVerboseStripsControlCharsInPath: ESC в имени каталога/файла модуля
+// не доходит до терминала через колонку PATH (audit F18, review).
+func TestRunListVerboseStripsControlCharsInPath(t *testing.T) {
+	dir := t.TempDir()
+	writeMainTestFile(t, filepath.Join(dir, "ev\x1b[2Jil.yaml"), "name: evil\ncommands:\n  run:\n    cmd: echo\n")
+	source := discovery.NewGlobalSource(dir)
+
+	for _, ns := range []string{"", "ev\x1b[2Jil"} {
+		var buf bytes.Buffer
+		if err := runList(&buf, source, ns, true, false, nil); err != nil {
+			t.Skipf("runList(%q): %v", ns, err)
+		}
+		if strings.Contains(buf.String(), "\x1b") {
+			t.Fatalf("runList(%q) -v output contains ESC: %q", ns, buf.String())
+		}
+	}
+}

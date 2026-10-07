@@ -204,16 +204,16 @@ func TestCompletionFishNoEval(t *testing.T) {
 	}
 }
 
-// TestRunCompleteSanitizesSpecialChars проверяет санитизацию кандидатов
-// (REV-010): управляющие символы в тексте/описании (\t, \n, \r) заменяются
-// на пробел — иначе \n разлагает кандидата на строки и ломает построчный
-// протокол __complete, а \t искажает формат "text\tdescription".
 func TestSanitizeCompletionTextStripsEscape(t *testing.T) {
 	if got, want := sanitizeCompletionText("a\x1b[31mb\tc"), "a[31mb c"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 
+// TestRunCompleteSanitizesSpecialChars проверяет санитизацию кандидатов
+// (REV-010): управляющие символы в тексте/описании (\t, \n, \r) заменяются
+// на пробел — иначе \n разлагает кандидата на строки и ломает построчный
+// протокол __complete, а \t искажает формат "text\tdescription".
 func TestRunCompleteSanitizesSpecialChars(t *testing.T) {
 	dir := t.TempDir()
 	// YAML double-quoted scalar разворачивает \n/\t/\r в управляющие символы.

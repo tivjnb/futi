@@ -42,7 +42,7 @@ func FormatCommandHelp(cmdPath string, cmd *Command) string {
 		// Выравнивание по ширине самого длинного "--name".
 		max := 0
 		for _, p := range cmd.Params {
-			if l := len("--" + p.Name); l > max {
+			if l := len("--" + termtext.Line(p.Name)); l > max {
 				max = l
 			}
 		}
@@ -114,7 +114,7 @@ func FormatModuleHelp(mod *Module, ns string) string {
 		b.WriteString("default params:\n")
 		max := 0
 		for _, p := range mod.Params {
-			if l := len("--" + p.Name); l > max {
+			if l := len("--" + termtext.Line(p.Name)); l > max {
 				max = l
 			}
 		}
@@ -145,14 +145,15 @@ func FormatModuleHelp(mod *Module, ns string) string {
 		sort.Strings(names)
 		max := 0
 		for _, name := range names {
-			if len(name) > max {
-				max = len(name)
+			if l := len(termtext.Line(name)); l > max {
+				max = l
 			}
 		}
 		for _, name := range names {
 			cmd := mod.Commands[name]
-			pad := strings.Repeat(" ", max-len(name))
-			line := fmt.Sprintf("  %s%s", termtext.Line(name), pad)
+			clean := termtext.Line(name)
+			pad := strings.Repeat(" ", max-len(clean))
+			line := fmt.Sprintf("  %s%s", clean, pad)
 			if cmd.Description != "" {
 				line += "  " + termtext.Line(cmd.Description)
 			}

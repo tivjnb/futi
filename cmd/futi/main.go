@@ -512,7 +512,7 @@ func renderCommandTable(w io.Writer, commands map[string]*execmodule.Command, ma
 	var rows [][]string
 	for name, cmd := range commands {
 		if verbose {
-			rows = append(rows, []string{termtext.Line(name), termtext.Line(cmd.Description), manifestPath})
+			rows = append(rows, []string{termtext.Line(name), termtext.Line(cmd.Description), termtext.Line(manifestPath)})
 		} else {
 			rows = append(rows, []string{termtext.Line(name), termtext.Line(cmd.Description)})
 		}
@@ -525,7 +525,7 @@ func renderCommandTable(w io.Writer, commands map[string]*execmodule.Command, ma
 	if defaultCmd != "" {
 		var defaultRow []string
 		if verbose {
-			defaultRow = []string{"(default)", "", manifestPath}
+			defaultRow = []string{"(default)", "", termtext.Line(manifestPath)}
 		} else {
 			defaultRow = []string{"(default)", ""}
 		}
@@ -552,16 +552,16 @@ func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader
 	for _, c := range children {
 		var desc, path string
 		if c.Type == "module" {
-			path = c.ManifestPath
+			path = termtext.Line(c.ManifestPath)
 			if c.Conflict && len(c.ConflictSources) > 0 {
 				// Модуль с одним именем в нескольких sources.
-				desc = "конфликт: модуль в нескольких sources: " + strings.Join(c.ConflictSources, ", ")
+				desc = "конфликт: модуль в нескольких sources: " + termtext.Line(strings.Join(c.ConflictSources, ", "))
 			} else if c.Conflict {
 				// Resolve для такого имени вернёт ошибку конфликта: описание не грузим.
 				// ManifestPath конфликтной записи — от x.yaml; c.Name в `list -r` —
 				// полный путь (ns.x), поэтому имена файлов берём из пути.
 				base := filepath.Base(c.ManifestPath)
-				desc = "конфликт: " + base + " и " + strings.TrimSuffix(base, ".yaml") + "/config.yaml"
+				desc = termtext.Line("конфликт: " + base + " и " + strings.TrimSuffix(base, ".yaml") + "/config.yaml")
 			} else if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err == nil {
 				desc = termtext.Line(mod.Description)
 			}
