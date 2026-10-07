@@ -2596,13 +2596,16 @@ func TestRunListStripsControlChars(t *testing.T) {
 // не доходит до терминала через колонку PATH (audit F18, review).
 func TestRunListVerboseStripsControlCharsInPath(t *testing.T) {
 	dir := t.TempDir()
-	writeMainTestFile(t, filepath.Join(dir, "ev\x1b[2Jil.yaml"), "name: evil\ncommands:\n  run:\n    cmd: echo\n")
+	// Пропуск допустим только если ФС не позволяет создать имя с ESC.
+	if err := os.WriteFile(filepath.Join(dir, "ev\x1b[2Jil.yaml"), []byte("name: evil\ncommands:\n  run:\n    cmd: echo\n"), 0o644); err != nil {
+		t.Skipf("ФС не принимает ESC в имени файла: %v", err)
+	}
 	source := discovery.NewGlobalSource(dir)
 
 	for _, ns := range []string{"", "ev\x1b[2Jil"} {
 		var buf bytes.Buffer
 		if err := runList(&buf, source, ns, true, false, nil); err != nil {
-			t.Skipf("runList(%q): %v", ns, err)
+			t.Fatalf("runList(%q): %v", ns, err)
 		}
 		if strings.Contains(buf.String(), "\x1b") {
 			t.Fatalf("runList(%q) -v output contains ESC: %q", ns, buf.String())

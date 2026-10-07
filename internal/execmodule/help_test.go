@@ -185,3 +185,24 @@ func TestFormatHelpAlignmentUsesSanitizedWidth(t *testing.T) {
 		t.Fatalf("misaligned: %q", out)
 	}
 }
+
+// TestFormatHelpParamAlignmentUsesSanitizedWidth: ESC в имени параметра не
+// сдвигает колонку описания ни в справке команды, ни в справке модуля.
+func TestFormatHelpParamAlignmentUsesSanitizedWidth(t *testing.T) {
+	params := []Param{
+		{Name: "a\x1b[2Jbcdef", Type: "string", Description: "d1"},
+		{Name: "x", Type: "string", Description: "d2"},
+	}
+	// Очищенное имя "a[2Jbcdef" — 9 символов, "x" дополняется 8 пробелами.
+	wantLong := "  --a[2Jbcdef  (string)  d1\n"
+	wantShort := "  --x          (string)  d2\n"
+
+	out := FormatCommandHelp("m c", &Command{Params: params, Cmd: "echo"})
+	if !strings.Contains(out, wantLong) || !strings.Contains(out, wantShort) {
+		t.Errorf("FormatCommandHelp misaligned: %q", out)
+	}
+	out = FormatModuleHelp(&Module{Params: params}, "m")
+	if !strings.Contains(out, wantLong) || !strings.Contains(out, wantShort) {
+		t.Errorf("FormatModuleHelp misaligned: %q", out)
+	}
+}
