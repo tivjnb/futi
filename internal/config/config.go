@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"unicode"
 
+	"github.com/tivjnb/futi/internal/yamlstrict"
 	"gopkg.in/yaml.v3"
 )
 
@@ -80,9 +83,23 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: read %q: %w", path, err)
 	}
 
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	var node yaml.Node
+	if err := yaml.Unmarshal(data, &node); err != nil {
 		return nil, fmt.Errorf("config: parse %q: %w", path, err)
+	}
+	if errs := yamlstrict.UnknownKeys(&node, reflect.TypeOf(Config{})); len(errs) > 0 {
+		msgs := make([]string, len(errs))
+		for i, e := range errs {
+			msgs[i] = e.Error()
+		}
+		return nil, fmt.Errorf("config: %q: %s", path, strings.Join(msgs, "; "))
+	}
+	// Пустой документ (Kind == 0) не декодируем: получится пустой Config.
+	var cfg Config
+	if node.Kind != 0 {
+		if err := node.Decode(&cfg); err != nil {
+			return nil, fmt.Errorf("config: parse %q: %w", path, err)
+		}
 	}
 
 	absCfgPath, err := filepath.Abs(path)
@@ -100,17 +117,44 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("config: source[%d]: %w", i, err)
 		}
 		cfg.Sources[i].Path = resolved
-		if sc.Mountpoint != "" {
-			sc.Mountpoint = strings.Trim(sc.Mountpoint, ".")
-			cfg.Sources[i].Mountpoint = sc.Mountpoint
+		mp, err := normalizeNamespace(sc.Mountpoint)
+		if err != nil {
+			return nil, fmt.Errorf("config: source[%d]: invalid mountpoint %q: %w", i, sc.Mountpoint, err)
 		}
-		if sc.MountAsNamespace != "" {
-			sc.MountAsNamespace = strings.Trim(sc.MountAsNamespace, ".")
-			cfg.Sources[i].MountAsNamespace = sc.MountAsNamespace
+		cfg.Sources[i].Mountpoint = mp
+		ns, err := normalizeNamespace(sc.MountAsNamespace)
+		if err != nil {
+			return nil, fmt.Errorf("config: source[%d]: invalid mount_as_namespace %q: %w", i, sc.MountAsNamespace, err)
 		}
+		cfg.Sources[i].MountAsNamespace = ns
 	}
 
 	return &cfg, nil
+}
+
+// normalizeNamespace обрезает внешние точки и проверяет результат: непустое
+// значение не должно превратиться в пустое (".", ".."), а каждый сегмент —
+// быть непустым и без разделителей путей, пробельных и управляющих символов.
+// Иначе источник молча смонтировался бы в корень или в недостижимый namespace.
+func normalizeNamespace(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	trimmed := strings.Trim(raw, ".")
+	if trimmed == "" {
+		return "", fmt.Errorf("no namespace name left after trimming dots")
+	}
+	for _, seg := range strings.Split(trimmed, ".") {
+		if seg == "" {
+			return "", fmt.Errorf("empty namespace segment")
+		}
+		for _, r := range seg {
+			if r == '/' || r == '\\' || unicode.IsSpace(r) || unicode.IsControl(r) {
+				return "", fmt.Errorf("segment %q contains forbidden character %q", seg, r)
+			}
+		}
+	}
+	return trimmed, nil
 }
 
 // resolveSourcePath приводит path источника к очищенному абсолютному виду:
