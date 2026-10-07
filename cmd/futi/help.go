@@ -7,9 +7,9 @@ import (
 	"io"
 	"strings"
 
-	"futi/internal/discovery"
-	"futi/internal/execmodule"
-	"futi/internal/modulerunner"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
 // runHelp обрабатывает запрос справки для позиционного пути positional

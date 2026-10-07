@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"futi/internal/config"
+	"github.com/tivjnb/futi/internal/config"
 )
 
 // CompositeSource агрегирует несколько GlobalSource с namespace-маппингом.

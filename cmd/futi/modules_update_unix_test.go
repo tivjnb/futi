@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"futi/internal/discovery"
-	"futi/internal/metayaml"
-	"futi/internal/testutil"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/testutil"
 )
 
 // Хук, перехвативший пересланный futi SIGTERM и вышедший с 0, всё равно

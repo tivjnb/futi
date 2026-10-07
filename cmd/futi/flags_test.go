@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/execmodule"
 )
 
 func TestBindFlags(t *testing.T) {

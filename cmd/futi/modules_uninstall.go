@@ -8,12 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"futi/internal/config"
-	"futi/internal/discovery"
-	"futi/internal/execmodule"
-	"futi/internal/metayaml"
-	"futi/internal/modulecache"
-	"futi/internal/modulerunner"
+	"github.com/tivjnb/futi/internal/config"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/modulecache"
+	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
 // uninstallArgs — аргументы `futi modules uninstall`.

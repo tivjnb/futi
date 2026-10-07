@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"futi/internal/testutil"
+	"github.com/tivjnb/futi/internal/testutil"
 )
 
 func TestRunWithConfigExecutesScriptWithArgs(t *testing.T) {

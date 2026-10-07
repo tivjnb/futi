@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"futi/internal/discovery"
-	"futi/internal/execmodule"
-	"futi/internal/metayaml"
-	"futi/internal/modulecache"
-	"futi/internal/modulerunner"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/modulecache"
+	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
 // writeMeta записывает lockfile при обновлении; переменная — шов для тестов.

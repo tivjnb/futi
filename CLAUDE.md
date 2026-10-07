@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**futi** — глобальный менеджер консольных утилит на Go (модуль `futi`, зависимости: `yaml.v3`, `shlex`, `tablewriter`). Пользователь описывает команды в YAML-модулях и вызывает их единым CLI: `futi docker build --tag x`. Подробная спецификация формата — в `README.md` (на русском).
+**futi** — глобальный менеджер консольных утилит на Go (модуль `github.com/tivjnb/futi`, зависимости: `yaml.v3`, `shlex`, `tablewriter`). Пользователь описывает команды в YAML-модулях и вызывает их единым CLI: `futi docker build --tag x`. Подробная спецификация формата — в `README.md` (на русском).
 
 ## Команды
 

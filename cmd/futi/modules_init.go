@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"futi/internal/config"
+	"github.com/tivjnb/futi/internal/config"
 )
 
 // initConfig — параметры подкоманды futi modules init.

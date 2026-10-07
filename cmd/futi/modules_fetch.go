@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"futi/internal/executor"
+	"github.com/tivjnb/futi/internal/executor"
 )
 
 // fetchGit клонирует репозиторий (--depth=1) в tempBase/repo, удаляет .git

@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"futi/internal/config"
-	"futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/config"
+	"github.com/tivjnb/futi/internal/metayaml"
 
 	"github.com/olekukonko/tablewriter"
 )

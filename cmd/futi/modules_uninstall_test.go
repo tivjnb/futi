@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"futi/internal/discovery"
-	"futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/metayaml"
 )
 
 func TestRunModulesUninstallPackage(t *testing.T) {

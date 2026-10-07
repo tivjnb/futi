@@ -23,8 +23,8 @@ import (
 	"sync"
 	"time"
 
-	"futi/internal/discovery"
-	"futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/execmodule"
 )
 
 // Cache — orchestrator кэша модулей.

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"futi/internal/discovery"
-	"futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/execmodule"
 
 	"gopkg.in/yaml.v3"
 )

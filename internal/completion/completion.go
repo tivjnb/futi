@@ -10,9 +10,9 @@ import (
 	"sort"
 	"strings"
 
-	"futi/internal/discovery"
-	"futi/internal/execmodule"
-	"futi/internal/modulerunner"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
 // Match — одна подсказка автодополнения. Description опционален и выводится

@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	"futi/internal/config"
-	"futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/config"
+	"github.com/tivjnb/futi/internal/discovery"
 )
 
 func writeFile(t *testing.T, path, content string) {
