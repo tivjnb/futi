@@ -78,14 +78,38 @@ func buildZip(t *testing.T, entries []zipEntry) string {
 	return path
 }
 
-func assertPerm(t *testing.T, path string, want os.FileMode) {
+// assertSafePerm проверяет независимо от umask: нет setuid/setgid/sticky и
+// владелец может читать и писать. Точное маскирование — в TestFileMode.
+func assertSafePerm(t *testing.T, path string) {
 	t.Helper()
 	fi, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fi.Mode(); got != want {
-		t.Fatalf("mode of %s = %v, want %v", filepath.Base(path), got, want)
+	m := fi.Mode()
+	if m&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		t.Fatalf("mode of %s = %v, special bits must be dropped", filepath.Base(path), m)
+	}
+	if m.Perm()&0o600 != 0o600 {
+		t.Fatalf("mode of %s = %v, owner must have rw", filepath.Base(path), m)
+	}
+}
+
+func TestFileMode(t *testing.T) {
+	cases := []struct {
+		in   os.FileMode
+		want os.FileMode
+	}{
+		{os.ModeSetuid | 0o755, 0o755},
+		{os.ModeSetgid | 0o755, 0o755},
+		{os.ModeSticky | 0o777, 0o777},
+		{0, 0o600},
+		{0o400, 0o600},
+	}
+	for _, tc := range cases {
+		if got := fileMode(tc.in); got != tc.want {
+			t.Errorf("fileMode(%v) = %v, want %v", tc.in, got, tc.want)
+		}
 	}
 }
 
@@ -95,7 +119,7 @@ func TestExtractZipDropsSetuidBits(t *testing.T) {
 	if err := extractArchive(archive, dest); err != nil {
 		t.Fatal(err)
 	}
-	assertPerm(t, filepath.Join(dest, "x"), 0o755)
+	assertSafePerm(t, filepath.Join(dest, "x"))
 }
 
 func TestExtractZeroModeBecomesOwnerReadable(t *testing.T) {
@@ -105,7 +129,7 @@ func TestExtractZeroModeBecomesOwnerReadable(t *testing.T) {
 		if err := extractArchive(archive, dest); err != nil {
 			t.Fatal(err)
 		}
-		assertPerm(t, filepath.Join(dest, "x"), 0o600)
+		assertSafePerm(t, filepath.Join(dest, "x"))
 	})
 	t.Run("tar", func(t *testing.T) {
 		archive := buildTarGz(t, []tarEntry{{"x", 0, "x"}})
@@ -113,7 +137,7 @@ func TestExtractZeroModeBecomesOwnerReadable(t *testing.T) {
 		if err := extractArchive(archive, dest); err != nil {
 			t.Fatal(err)
 		}
-		assertPerm(t, filepath.Join(dest, "x"), 0o600)
+		assertSafePerm(t, filepath.Join(dest, "x"))
 	})
 }
 
@@ -123,7 +147,7 @@ func TestExtractTarDropsSetuidBits(t *testing.T) {
 	if err := extractArchive(archive, dest); err != nil {
 		t.Fatal(err)
 	}
-	assertPerm(t, filepath.Join(dest, "x"), 0o755)
+	assertSafePerm(t, filepath.Join(dest, "x"))
 }
 
 func TestExtractZipSkipsSymlinkEntry(t *testing.T) {
@@ -190,4 +214,45 @@ func TestExtractLimits(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestExtractLimitsCountDirectories(t *testing.T) {
+	setExtractLimits(t, 1000, 2)
+	t.Run("tar", func(t *testing.T) {
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(gz)
+		for _, n := range []string{"a/", "b/", "c/"} {
+			if err := tw.WriteHeader(&tar.Header{Name: n, Typeflag: tar.TypeDir, Mode: 0o755}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		tw.Close()
+		gz.Close()
+		path := filepath.Join(t.TempDir(), "d.tar.gz")
+		if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := extractArchive(path, t.TempDir()); !errors.Is(err, errExtractTooManyFiles) {
+			t.Fatalf("err = %v, want errExtractTooManyFiles", err)
+		}
+	})
+	t.Run("zip", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "d.zip")
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		zw := zip.NewWriter(f)
+		for _, n := range []string{"a/", "b/", "c/"} {
+			if _, err := zw.Create(n); err != nil {
+				t.Fatal(err)
+			}
+		}
+		zw.Close()
+		f.Close()
+		if err := extractArchive(path, t.TempDir()); !errors.Is(err, errExtractTooManyFiles) {
+			t.Fatalf("err = %v, want errExtractTooManyFiles", err)
+		}
+	})
 }

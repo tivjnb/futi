@@ -25,7 +25,7 @@ var (
 
 var (
 	errExtractTooManyBytes = errors.New("archive exceeds limit: more than 500 MiB unpacked")
-	errExtractTooManyFiles = errors.New("archive exceeds limit: more than 10000 files")
+	errExtractTooManyFiles = errors.New("archive exceeds limit: more than 10000 files and directories")
 )
 
 // extractArchive распаковывает архив path в dest. Поддержка: .zip,
@@ -71,13 +71,21 @@ func newExtractBudget() *extractBudget {
 	return &extractBudget{bytes: extractBytesLimit, files: extractFilesLimit}
 }
 
-// writeFile создаёт regular-файл target с правами mode и копирует в него src,
-// списывая файл и фактически записанные байты из бюджета.
-func (b *extractBudget) writeFile(target string, mode os.FileMode, src io.Reader) error {
+// countEntry списывает одну запись (файл или каталог) из лимита.
+func (b *extractBudget) countEntry() error {
 	if b.files <= 0 {
 		return errExtractTooManyFiles
 	}
 	b.files--
+	return nil
+}
+
+// writeFile создаёт regular-файл target с правами mode и копирует в него src,
+// списывая файл и фактически записанные байты из бюджета.
+func (b *extractBudget) writeFile(target string, mode os.FileMode, src io.Reader) error {
+	if err := b.countEntry(); err != nil {
+		return err
+	}
 	out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return err
@@ -130,6 +138,9 @@ func extractTarGz(path, dest string) error {
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
+			if err := b.countEntry(); err != nil {
+				return err
+			}
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				return err
 			}
@@ -159,6 +170,9 @@ func extractZip(path, dest string) error {
 			return err
 		}
 		if zf.FileInfo().IsDir() {
+			if err := b.countEntry(); err != nil {
+				return err
+			}
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				return err
 			}
