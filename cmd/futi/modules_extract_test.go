@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -139,5 +140,54 @@ func TestExtractZipSkipsSymlinkEntry(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dest, "ok.txt")); err != nil {
 		t.Fatalf("regular entry must be extracted: %v", err)
+	}
+}
+
+func setExtractLimits(t *testing.T, bytes int64, files int) {
+	t.Helper()
+	oldB, oldF := extractBytesLimit, extractFilesLimit
+	extractBytesLimit, extractFilesLimit = bytes, files
+	t.Cleanup(func() { extractBytesLimit, extractFilesLimit = oldB, oldF })
+}
+
+func TestExtractLimits(t *testing.T) {
+	archives := map[string]func(t *testing.T, bodies []string) string{
+		"tar": func(t *testing.T, bodies []string) string {
+			var es []tarEntry
+			for i, b := range bodies {
+				es = append(es, tarEntry{string(rune('a'+i)) + ".txt", 0o644, b})
+			}
+			return buildTarGz(t, es)
+		},
+		"zip": func(t *testing.T, bodies []string) string {
+			var es []zipEntry
+			for i, b := range bodies {
+				es = append(es, zipEntry{string(rune('a'+i)) + ".txt", 0o644, b})
+			}
+			return buildZip(t, es)
+		},
+	}
+	cases := []struct {
+		name     string
+		bodies   []string
+		maxBytes int64
+		maxFiles int
+		wantErr  error
+	}{
+		{"total bytes over limit", []string{"123456", "123456"}, 10, 100, errExtractTooManyBytes},
+		{"total bytes at limit", []string{"12345", "12345"}, 10, 100, nil},
+		{"files over limit", []string{"1", "2", "3"}, 1000, 2, errExtractTooManyFiles},
+		{"files at limit", []string{"1", "2"}, 1000, 2, nil},
+	}
+	for format, build := range archives {
+		for _, tc := range cases {
+			t.Run(format+"/"+tc.name, func(t *testing.T) {
+				setExtractLimits(t, tc.maxBytes, tc.maxFiles)
+				err := extractArchive(build(t, tc.bodies), t.TempDir())
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("extractArchive err = %v, want %v", err, tc.wantErr)
+				}
+			})
+		}
 	}
 }

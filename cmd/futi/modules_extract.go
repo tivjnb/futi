@@ -4,11 +4,28 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+)
+
+const (
+	maxExtractBytes = 500 << 20
+	maxExtractFiles = 10000
+)
+
+// Действующие лимиты распаковки (переменные — для тестов).
+var (
+	extractBytesLimit int64 = maxExtractBytes
+	extractFilesLimit       = maxExtractFiles
+)
+
+var (
+	errExtractTooManyBytes = errors.New("archive exceeds limit: more than 500 MiB unpacked")
+	errExtractTooManyFiles = errors.New("archive exceeds limit: more than 10000 files")
 )
 
 // extractArchive распаковывает архив path в dest. Поддержка: .zip,
@@ -44,6 +61,42 @@ func fileMode(m os.FileMode) os.FileMode {
 	return m&0o777 | 0o600
 }
 
+// extractBudget — общий на архив остаток лимитов распаковки.
+type extractBudget struct {
+	bytes int64
+	files int
+}
+
+func newExtractBudget() *extractBudget {
+	return &extractBudget{bytes: extractBytesLimit, files: extractFilesLimit}
+}
+
+// writeFile создаёт regular-файл target с правами mode и копирует в него src,
+// списывая файл и фактически записанные байты из бюджета.
+func (b *extractBudget) writeFile(target string, mode os.FileMode, src io.Reader) error {
+	if b.files <= 0 {
+		return errExtractTooManyFiles
+	}
+	b.files--
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	// +1 байт сверх остатка отличает «ровно в лимит» от превышения.
+	n, err := io.Copy(out, io.LimitReader(src, b.bytes+1))
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	if n > b.bytes {
+		return errExtractTooManyBytes
+	}
+	b.bytes -= n
+	return nil
+}
+
 // extractTarGz распаковывает .tar.gz/.tgz. Символические ссылки и прочие
 // не-файлы пропускаются (MVP).
 func extractTarGz(path, dest string) error {
@@ -59,6 +112,7 @@ func extractTarGz(path, dest string) error {
 	}
 	defer gz.Close()
 
+	b := newExtractBudget()
 	tr := tar.NewReader(gz)
 	for {
 		hdr, err := tr.Next()
@@ -83,15 +137,9 @@ func extractTarGz(path, dest string) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
-			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fileMode(os.FileMode(hdr.Mode)))
-			if err != nil {
+			if err := b.writeFile(target, fileMode(os.FileMode(hdr.Mode)), tr); err != nil {
 				return err
 			}
-			if _, err := io.Copy(out, tr); err != nil {
-				out.Close()
-				return err
-			}
-			out.Close()
 		}
 	}
 }
@@ -104,6 +152,7 @@ func extractZip(path, dest string) error {
 	}
 	defer zr.Close()
 
+	b := newExtractBudget()
 	for _, zf := range zr.File {
 		target, err := safeJoin(dest, zf.Name)
 		if err != nil {
@@ -126,16 +175,10 @@ func extractZip(path, dest string) error {
 		if err != nil {
 			return err
 		}
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fileMode(zf.Mode()))
-		if err != nil {
-			rc.Close()
-			return err
-		}
-		_, copyErr := io.Copy(out, rc)
+		writeErr := b.writeFile(target, fileMode(zf.Mode()), rc)
 		rc.Close()
-		out.Close()
-		if copyErr != nil {
-			return copyErr
+		if writeErr != nil {
+			return writeErr
 		}
 	}
 	return nil
