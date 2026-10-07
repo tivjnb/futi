@@ -399,7 +399,7 @@ Bool-параметры принимают `true`/`false`, `1`/`0`, `yes`/`no`, 
 ### Валидация параметров
 
 - `required: true` и параметр не передан → ошибка; пустое значение string/int (`--tag=`) тоже ошибка (для bool явный `false` допустим)
-- `required: true` вместе с непустым `default` → ошибка схемы (`futi validate`)
+- `required: true` вместе с непустым `default` → ошибка схемы (`futi modules validate <ns>`)
 - `default` int-параметра должен быть целым числом, `default` bool — одним из значений выше, иначе ошибка схемы
 - `default` применяется, если параметр не передан
 - Неизвестный параметр (нет в схеме) → ошибка
@@ -570,7 +570,7 @@ futi list                                   # модули и namespaces в ко
 futi <namespace...> list                    # содержимое namespace или команды модуля
 futi <namespace...> list -v                 # то же, с колонкой PATH
 futi <namespace...> list -r                 # рекурсивный обход поддерева
-futi <namespace...> validate                # валидация схемы модуля
+futi modules validate <namespace>            # валидация схемы модуля
 futi <namespace...> help                    # справка по модулю/команде
 futi modules init <name> [flags]            # создать модуль с шаблоном
 futi modules install <source> [flags]       # установить модуль из source (local/git/archive)
@@ -594,7 +594,7 @@ futi -h | --help                            # справка
 Парсинг: путь — слова до первого флага (токена с `-`); последнее слово пути — команда, всё до него — namespace (сегменты через `.`); затем флаги, затем `--`. Аргументы после `--` передаются в шаблон команды как `{{.args}}` (строка) и `{{.args_list}}` (массив).
 
 **Зарезервированные имена** — нельзя использовать как имена модулей и команд:
-`list`, `validate`, `cache`, `modules`, `completion`, `__complete` (перехватываются
+`list`, `cache`, `modules`, `completion`, `__complete` (перехватываются
 CLI до резолва модулей). `help` — исключение: если в модуле определена своя
 команда `help`, вызывается она.
 
@@ -755,17 +755,17 @@ subcommand). Если в модуле определена собственна�
 
 ## Валидация
 
-`futi validate` проверяет схему модуля без вызова команды — полезно при разработке модуля, в CI или перед публикацией.
+`futi modules validate <ns>` проверяет схему модуля без вызова команды — полезно при разработке модуля, в CI или перед публикацией.
 
 ```bash
-$ futi docker validate
+$ futi modules validate docker
 OK
 ```
 
 Невалидный модуль выводит отчёт со всеми ошибками и предупреждениями за один проход:
 
 ```bash
-$ futi bad validate
+$ futi modules validate bad
 ERROR: command "empty": must have cmd or commands
 ERROR: command "build": param "tag" has invalid type "float" (valid: string, bool, int)
 ERROR: command "build": duplicate param "tag"
@@ -777,7 +777,7 @@ $ echo $?
 Предупреждения не блокируют (exit code 0):
 
 ```bash
-$ futi db validate
+$ futi modules validate db
 WARNING: command "migrate": has subcommands but no cmd (calling without subcommand will fail)
 $ echo $?
 0
@@ -803,9 +803,7 @@ $ echo $?
 
 - команда с `commands`, но без `cmd` — вызов без subcommand падает в runtime
 
-Валидация выполняется рекурсивно для всех вложенных `commands`. Порядок ошибок детерминирован: неизвестные ключи, затем `attach`/`detach` и пустой модуль, затем `(default)`, затем команды по алфавиту (родитель раньше вложенных). При обычном вызове (`futi <ns> <cmd>`) валидация запускается автоматически при загрузке модуля — `futi validate` нужен для просмотра **всех** ошибок за один проход и для warnings (которые в runtime не показываются).
-
-`validate` зарезервирован как `list` — нельзя создать команду с именем `validate` в модуле.
+Валидация выполняется рекурсивно для всех вложенных `commands`. Порядок ошибок детерминирован: неизвестные ключи, затем `attach`/`detach` и пустой модуль, затем `(default)`, затем команды по алфавиту (родитель раньше вложенных). При обычном вызове (`futi <ns> <cmd>`) валидация запускается автоматически при загрузке модуля — `futi modules validate <ns>` нужен для просмотра **всех** ошибок за один проход и для warnings (которые в runtime не показываются).
 
 ---
 
@@ -1343,7 +1341,7 @@ futi modules check                 # проверить обновления
 
 - **Module versioning** — версии модулей, совместимость
 - **Project overrides** — переопределение модулей на уровне проекта (приоритет над глобальными)
-- **Config linting** — расширение валидации схем (базовая валидация через `futi validate` уже есть): подсказки по best practices, deprecated-поля, стилистика
+- **Config linting** — расширение валидации схем (базовая валидация через `futi modules validate` уже есть): подсказки по best practices, deprecated-поля, стилистика
 - **TUI** — интерактивный просмотр и вызов модулей
 - **Module registry** — публичный реестр шаримых модулей
 

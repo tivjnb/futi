@@ -28,9 +28,8 @@ import (
 )
 
 var (
-	errListCommand     = errors.New("list command requested")
-	errValidateCommand = errors.New("validate command requested")
-	errHelp            = errors.New("help requested")
+	errListCommand = errors.New("list command requested")
+	errHelp        = errors.New("help requested")
 )
 
 // parsedArgs — результат парсинга аргументов CLI.
@@ -52,14 +51,6 @@ type listRequest struct {
 func (e *listRequest) Error() string { return "list command requested" }
 func (e *listRequest) Unwrap() error { return errListCommand }
 
-// validateRequest сигнализирует, что запрошена валидация модуля.
-type validateRequest struct {
-	namespace string
-}
-
-func (e *validateRequest) Error() string { return "validate command requested" }
-func (e *validateRequest) Unwrap() error { return errValidateCommand }
-
 // helpRequest сигнализирует, что запрошена справка (последний аргумент "help").
 // positional — все сегменты до "help" (namespace + command path). Диспетчер
 // решает: если "<positional> help" резолвится как user-defined команда —
@@ -76,8 +67,8 @@ func (e *helpRequest) Error() string { return "help requested" }
 // пути = команда, остальные = namespace через ".". Токены после пути до `--` —
 // сырые флаги: привязка к параметрам по схеме команды — в bindFlags.
 // Всё после первого `--` = args команды.
-// "list" / "validate" / "help" как последнее слово пути — системные запросы;
-// у list и validate допустимы только свои флаги.
+// "list" / "help" как последнее слово пути — системные запросы;
+// у list допустимы только свои флаги.
 func parseArgs(args []string) (*parsedArgs, error) {
 	var path, flags, argsList []string
 
@@ -107,19 +98,8 @@ func parseArgs(args []string) (*parsedArgs, error) {
 	switch path[len(path)-1] {
 	case "list":
 		return nil, parseListRequest(path[:len(path)-1], flags)
-	case "validate":
-		if hasHelpFlag(flags) {
-			return nil, errHelp
-		}
-		if len(path) < 2 {
-			return nil, errors.New("usage: futi <namespace...> validate")
-		}
-		if len(flags) > 0 {
-			return nil, fmt.Errorf("validate: unknown flag %q", flags[0])
-		}
-		return nil, &validateRequest{namespace: strings.Join(path[:len(path)-1], ".")}
 	case "help":
-		// В отличие от list/validate, help НЕ зарезервирован: диспетчер проверяет,
+		// В отличие от list, help НЕ зарезервирован: диспетчер проверяет,
 		// нет ли user-defined команды "help" (см. runHelp). Флаги игнорируются.
 		return nil, &helpRequest{positional: path[:len(path)-1]}
 	}
@@ -626,7 +606,7 @@ USAGE
   futi <namespace>                    Invoke module's default command (if defined)
   futi <namespace...> list [flags]
   futi list [flags]
-  futi <namespace...> validate        Validate module schema
+  futi modules validate <namespace>   Validate module schema
   futi modules init <name> [flags]    Create a new module from template
   futi modules <subcommand>           Manage modules (install, uninstall, ...)
   futi cache refresh                  Refresh module cache
@@ -643,8 +623,7 @@ first token starting with "-"; a word after a flag is only accepted as the
 value of the preceding string/int flag. "-h" / "--help" after the path shows
 help for that path.
 
-"list" and "validate" are reserved words — they cannot be used as command
-names in a module.
+"list" is a reserved word — it cannot be used as a command name in a module.
 
 Arguments after "--" are passed to the command's template as {{.args}}
 (space-joined string) and {{.args_list}} (array). Example:
@@ -715,7 +694,7 @@ COMPLETION
                                    boolean values (true/false).
 
 VALIDATION
-  futi <ns> validate               Validate module schema (all commands and
+  futi modules validate <ns>       Validate module schema (all commands and
                                    params, recursively). Prints a report with
                                    ERROR and WARNING lines, or "OK" if clean.
                                    Exit code: 0 if no errors, 1 otherwise.
@@ -959,6 +938,25 @@ func formatRunError(err error) string {
 	return fmt.Sprintf("run: %v", err)
 }
 
+// withValidateHint дописывает к ошибке резолва подсказку о переезде validate
+// (`futi <ns> validate` → `futi modules validate <ns>`), если путь оканчивается
+// словом validate и команда/модуль не найдены. Прочие ошибки (в том числе
+// исполнения пользовательской команды validate) возвращаются как есть.
+func withValidateHint(msg string, err error, pa *parsedArgs) string {
+	if !errors.Is(err, modulerunner.ErrModuleNotFound) && !errors.Is(err, execmodule.ErrCommandNotFound) {
+		return msg
+	}
+	path := commandPath(pa)
+	if path[len(path)-1] != "validate" {
+		return msg
+	}
+	ns := "<namespace>"
+	if len(path) > 1 {
+		ns = strings.Join(path[:len(path)-1], ".")
+	}
+	return msg + "\nhint: use 'futi modules validate " + ns + "'"
+}
+
 // commandPath восстанавливает позиционный путь (сегменты namespace + команда)
 // разобранной команды — тот же, что Run получает как positional.
 func commandPath(pa *parsedArgs) []string {
@@ -1122,7 +1120,6 @@ func main() {
 	pa, err := parseArgs(os.Args[1:])
 	if err != nil {
 		var listReq *listRequest
-		var valReq *validateRequest
 		var helpReq *helpRequest
 		switch {
 		case errors.As(err, &listReq):
@@ -1133,17 +1130,6 @@ func main() {
 			}
 			if listErr := runList(os.Stdout, source, listReq.namespace, listReq.verbose, listReq.recurse, cache); listErr != nil && !printPartialWarnings(os.Stderr, listErr) {
 				fmt.Fprintln(os.Stderr, listErr)
-				os.Exit(1)
-			}
-			return
-		case errors.As(err, &valReq):
-			source, err := createSource(cache, globalSource)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "source: %v\n", err)
-				os.Exit(1)
-			}
-			if valErr := runValidate(os.Stdout, source, valReq.namespace); valErr != nil {
-				fmt.Fprintf(os.Stderr, "%v\n", valErr)
 				os.Exit(1)
 			}
 			return
@@ -1181,7 +1167,7 @@ func main() {
 			exitAfterHelp(source, cache, helpPath)
 			return
 		}
-		fmt.Fprintf(os.Stderr, "%s\n", withPathHint(formatRunError(err), pa.flags))
+		fmt.Fprintf(os.Stderr, "%s\n", withPathHint(withValidateHint(formatRunError(err), err, pa), pa.flags))
 		exitAfterRunError(err)
 	}
 	params, help, err := bindFlags(cmd, pa.flags)
