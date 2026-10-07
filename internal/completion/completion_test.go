@@ -1,6 +1,7 @@
 package completion
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -822,5 +823,29 @@ func TestCompleteModulesValidate(t *testing.T) {
 				t.Fatalf("directive = %v, want NoFileComp", directive)
 			}
 		})
+	}
+}
+
+// partialSource — источник, чей List возвращает валидный результат вместе
+// с *discovery.PartialError (часть источников не читается).
+type partialSource struct{ discovery.Source }
+
+func (p partialSource) List() ([]discovery.ModuleInfo, error) {
+	mods, err := p.Source.List()
+	if err != nil {
+		return nil, err
+	}
+	return mods, &discovery.PartialError{Errs: []error{errors.New("unreadable source")}}
+}
+
+func TestCompleteModulesValidatePartialListing(t *testing.T) {
+	src := partialSource{newTestSource(t)}
+	matches, directive := Complete(src, nil, []string{"modules", "validate"}, "d")
+	want := []string{"dev.deploy", "docker"}
+	if got := text(matches); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Complete with PartialError = %v, want %v", got, want)
+	}
+	if directive != ShellCompDirectiveNoFileComp {
+		t.Fatalf("directive = %v, want NoFileComp", directive)
 	}
 }
