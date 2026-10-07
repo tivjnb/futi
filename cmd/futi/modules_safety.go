@@ -187,12 +187,20 @@ func (g attachGate) allow(attach, name, dir string) (bool, error) {
 	// Показываем сырой шаблон: в отрендеренном могли бы оказаться значения
 	// {{.env.X}}. Управляющие символы из чужого манифеста — вырезаем.
 	fmt.Fprintf(os.Stderr, "Module %s runs an attach hook (in %s):\n", termtext.Line(name), termtext.Line(dir))
-	for _, line := range strings.Split(strings.TrimRight(termtext.Block(attach), "\n"), "\n") {
-		fmt.Fprintf(os.Stderr, "  %s\n", line)
+	for _, line := range strings.Split(termtext.Block(attach), "\n") {
+		if strings.TrimSpace(line) != "" {
+			fmt.Fprintf(os.Stderr, "  %s\n", line)
+		}
 	}
 	fmt.Fprint(os.Stderr, "Run it? [y/N] ")
 
 	line, err := g.in.ReadString('\n')
+	if errors.Is(err, io.EOF) && line == "" {
+		// Пустой stdin при char device (/dev/null: docker run без -i,
+		// systemd StandardInput=null) — подсказываем флаги, как без TTY.
+		fmt.Fprintln(os.Stderr)
+		return false, fmt.Errorf("%w (no answer on stdin): rerun with --yes to run it or --skip-attach to skip it", errAttachNotConfirmed)
+	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, fmt.Errorf("read confirmation: %w", err)
 	}

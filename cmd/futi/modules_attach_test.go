@@ -44,23 +44,75 @@ func exists(path string) bool {
 }
 
 func TestInstallAttachConfirmed(t *testing.T) {
-	global := attachEnv(t)
-	setStdinTerminal(t, true)
-	src := makeSourceModule(t, t.TempDir(), "qr", attachTouch)
+	for _, answer := range []string{"Y\n", "yes\n", " YES \n", "y"} {
+		t.Run(strings.TrimSpace(answer), func(t *testing.T) {
+			global := attachEnv(t)
+			setStdinTerminal(t, true)
+			src := makeSourceModule(t, t.TempDir(), "qr", attachTouch)
 
-	var err error
-	prompt := captureStderr(t, func() {
-		err = runModulesInstall(&bytes.Buffer{}, strings.NewReader("Y\n"), newTestCache(), []string{src})
+			var err error
+			prompt := captureStderr(t, func() {
+				err = runModulesInstall(&bytes.Buffer{}, strings.NewReader(answer), newTestCache(), []string{src})
+			})
+			if err != nil {
+				t.Fatalf("install: %v", err)
+			}
+			if !exists(filepath.Join(global, "qr", "attached")) {
+				t.Fatal("attach hook must run after confirmation")
+			}
+			want := "Module qr runs an attach hook (in " + filepath.Join(global, "qr") + "):\n" +
+				"  touch {{.module_root}}/attached\n" +
+				"Run it? [y/N]"
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("prompt = %q, want it to contain %q", prompt, want)
+			}
+		})
+	}
+}
+
+// Пустой stdin на «терминале» (/dev/null — тоже char device: docker run без
+// -i, systemd StandardInput=null) — отказ с подсказкой про --yes.
+func TestAttachNoAnswerHintsYes(t *testing.T) {
+	t.Run("install", func(t *testing.T) {
+		global := attachEnv(t)
+		setStdinTerminal(t, true)
+		src := makeSourceModule(t, t.TempDir(), "qr", attachTouch)
+
+		var err error
+		captureStderr(t, func() {
+			err = runModulesInstall(&bytes.Buffer{}, strings.NewReader(""), newTestCache(), []string{src})
+		})
+		if err == nil || !strings.Contains(err.Error(), "--yes") || !strings.Contains(err.Error(), "module not installed") {
+			t.Fatalf("err = %v, want hint about --yes and module not installed", err)
+		}
+		if exists(filepath.Join(global, "qr")) {
+			t.Fatal("module must not be installed")
+		}
 	})
-	if err != nil {
-		t.Fatalf("install: %v", err)
-	}
-	if !exists(filepath.Join(global, "qr", "attached")) {
-		t.Fatal("attach hook must run after confirmation")
-	}
-	want := "Module qr runs an attach hook (in " + filepath.Join(global, "qr") + "):\n" +
-		"  touch {{.module_root}}/attached\n" +
-		"Run it? [y/N]"
+	t.Run("update", func(t *testing.T) {
+		global := attachEnv(t)
+		setStdinTerminal(t, true)
+		installThenChange(t, global, "qr")
+
+		var err error
+		captureStderr(t, func() {
+			err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader(""), discovery.NewGlobalSource(global), newTestCache(), []string{"qr"})
+		})
+		if err == nil || !strings.Contains(err.Error(), "--yes") || !strings.Contains(err.Error(), "module not updated") {
+			t.Fatalf("err = %v, want hint about --yes and module not updated", err)
+		}
+	})
+}
+
+func TestAttachPromptSkipsBlankLines(t *testing.T) {
+	attachEnv(t)
+	setStdinTerminal(t, true)
+	src := makeSourceModule(t, t.TempDir(), "qr", "attach: \"echo a\\n   \\n\\techo b\\n\"\n")
+
+	prompt := captureStderr(t, func() {
+		_ = runModulesInstall(&bytes.Buffer{}, strings.NewReader("n\n"), newTestCache(), []string{src})
+	})
+	want := "):\n  echo a\n  \techo b\nRun it?"
 	if !strings.Contains(prompt, want) {
 		t.Fatalf("prompt = %q, want it to contain %q", prompt, want)
 	}
