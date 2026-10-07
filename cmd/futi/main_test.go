@@ -1140,8 +1140,11 @@ func TestOldValidateSyntaxHint(t *testing.T) {
 	}{
 		{[]string{"m", "validate"}, "hint: use 'futi modules validate m'"},
 		{[]string{"validate"}, "hint: use 'futi modules validate <namespace>'"},
-		{[]string{"nomod", "validate"}, "hint: use 'futi modules validate nomod'"},
-		{[]string{"m", "ps", "validate"}, "hint: use 'futi modules validate m.ps'"},
+		{[]string{"nomod", "validate"}, "hint: use 'futi modules validate <namespace>'"},
+		{[]string{"m", "ps", "validate"}, "hint: use 'futi modules validate <namespace>'"},
+		{[]string{"m", "validate", "-h"}, "hint: use 'futi modules validate m'"},
+		{[]string{"m", "validate", "help"}, "hint: use 'futi modules validate m'"},
+		{[]string{"validate", "-h"}, "hint: use 'futi modules validate <namespace>'"},
 	}
 	for _, c := range cases {
 		_, stderr, code := runFutiBin(t, validateHintManifest, c.args...)
@@ -1153,6 +1156,18 @@ func TestOldValidateSyntaxHint(t *testing.T) {
 	_, stderr, _ := runFutiBin(t, validateHintManifest, "m", "nope")
 	if strings.Contains(stderr, "hint:") {
 		t.Errorf("m nope: unexpected hint in %q", stderr)
+	}
+}
+
+// TestOldValidateSyntaxHintNamespaceDir: каталог-namespace не модуль, поэтому
+// подсказка общая, без несуществующего модуля.
+func TestOldValidateSyntaxHintNamespaceDir(t *testing.T) {
+	mods := t.TempDir()
+	writeFile(t, filepath.Join(mods, "dev", "x.yaml"), "name: x\ncmd: \"echo x\"\n")
+	_, stderr, code := runFutiBinary(t, mods, "dev", "validate")
+	want := "hint: use 'futi modules validate <namespace>'"
+	if code == 0 || !strings.Contains(stderr, want) {
+		t.Errorf("code=%d stderr=%q, want hint %q", code, stderr, want)
 	}
 }
 

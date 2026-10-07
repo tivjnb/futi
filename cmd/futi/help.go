@@ -74,6 +74,16 @@ func runPositional(w io.Writer, source discovery.Source, loader modulerunner.Mod
 	return modulerunner.Run(context.Background(), source, ns, cmd, map[string]string{}, "", nil, w, w, loader)
 }
 
+// helpModuleNotFoundError — модуль для справки не найден; Unwrap отдаёт
+// sentinel modulerunner.ErrModuleNotFound (для подсказки про validate).
+type helpModuleNotFoundError struct{ path string }
+
+func (e *helpModuleNotFoundError) Error() string {
+	return fmt.Sprintf("help: module not found for %q", e.path)
+}
+
+func (e *helpModuleNotFoundError) Unwrap() error { return modulerunner.ErrModuleNotFound }
+
 // runSystemHelp показывает системную справку для positional:
 // модульную (описание + команды) или командную (описание + параметры + cmd).
 // Пустой positional (корень) — printUsage.
@@ -101,7 +111,7 @@ func runSystemHelp(w io.Writer, source discovery.Source, loader modulerunner.Mod
 			}
 			return err
 		}
-		return fmt.Errorf("help: module not found for %q", strings.Join(positional, " "))
+		return &helpModuleNotFoundError{path: strings.Join(positional, " ")}
 	}
 
 	mod, err := modulerunner.LoadModule(loader, manifest, root)

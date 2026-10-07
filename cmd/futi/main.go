@@ -939,19 +939,23 @@ func formatRunError(err error) string {
 
 // withValidateHint дописывает к ошибке резолва подсказку о переезде validate
 // (`futi <ns> validate` → `futi modules validate <ns>`), если путь оканчивается
-// словом validate и команда/модуль не найдены. Прочие ошибки (в том числе
-// исполнения пользовательской команды validate) возвращаются как есть.
-func withValidateHint(msg string, err error, pa *parsedArgs) string {
+// словом validate и команда/модуль не найдены. Конкретный <ns> подставляется,
+// только если он резолвится в существующий модуль; иначе — общая форма.
+// Прочие ошибки (в том числе исполнения пользовательской команды validate)
+// возвращаются как есть.
+func withValidateHint(msg string, err error, path []string, source discovery.Source) string {
 	if !errors.Is(err, modulerunner.ErrModuleNotFound) && !errors.Is(err, execmodule.ErrCommandNotFound) {
 		return msg
 	}
-	path := commandPath(pa)
-	if path[len(path)-1] != "validate" {
+	if len(path) == 0 || path[len(path)-1] != "validate" {
 		return msg
 	}
 	ns := "<namespace>"
 	if len(path) > 1 {
-		ns = strings.Join(path[:len(path)-1], ".")
+		cand := strings.Join(path[:len(path)-1], ".")
+		if _, _, rerr := source.Resolve(cand); rerr == nil {
+			ns = cand
+		}
 	}
 	return msg + "\nhint: use 'futi modules validate " + ns + "'"
 }
@@ -972,7 +976,7 @@ func exitAfterHelp(source discovery.Source, loader modulerunner.ModuleLoader, pa
 		if printPartialWarnings(os.Stderr, err) {
 			return
 		}
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		fmt.Fprintf(os.Stderr, "%s\n", withValidateHint(err.Error(), err, path, source))
 		os.Exit(1)
 	}
 }
@@ -1139,7 +1143,7 @@ func main() {
 				os.Exit(1)
 			}
 			if helpErr := runHelp(os.Stdout, source, cache, helpReq.positional); helpErr != nil && !printPartialWarnings(os.Stderr, helpErr) {
-				fmt.Fprintf(os.Stderr, "%v\n", helpErr)
+				fmt.Fprintf(os.Stderr, "%s\n", withValidateHint(helpErr.Error(), helpErr, helpReq.positional, source))
 				os.Exit(1)
 			}
 			return
@@ -1166,7 +1170,7 @@ func main() {
 			exitAfterHelp(source, cache, helpPath)
 			return
 		}
-		fmt.Fprintf(os.Stderr, "%s\n", withPathHint(withValidateHint(formatRunError(err), err, pa), pa.flags))
+		fmt.Fprintf(os.Stderr, "%s\n", withPathHint(withValidateHint(formatRunError(err), err, helpPath, source), pa.flags))
 		exitAfterRunError(err)
 	}
 	params, help, err := bindFlags(cmd, pa.flags)
