@@ -375,6 +375,14 @@ func TestValidateSchemaRules(t *testing.T) {
 		{"name with dot", "commands:\n  a.b:\n    cmd: echo\n", `command "a.b": invalid command name`},
 		{"name with space", "commands:\n  \"a b\":\n    cmd: echo\n", `command "a b": invalid command name`},
 		{"empty name", "commands:\n  \"\":\n    cmd: echo\n", `command "": invalid command name`},
+		{"required with default", "commands:\n  b:\n    cmd: echo\n    params:\n      - name: x\n        required: true\n        default: v\n", `command "b": param "x": required and default are mutually exclusive`},
+		{"required without default", "commands:\n  b:\n    cmd: echo\n    params:\n      - name: x\n        required: true\n", ""},
+		{"int default not int", "commands:\n  b:\n    cmd: echo\n    params:\n      - name: x\n        type: int\n        default: abc\n", `command "b": param "x": default "abc" is not an int`},
+		{"int default ok", "commands:\n  b:\n    cmd: echo\n    params:\n      - name: x\n        type: int\n        default: \"10\"\n", ""},
+		{"bool default maybe", "commands:\n  b:\n    cmd: echo\n    params:\n      - name: x\n        type: bool\n        default: maybe\n", `command "b": param "x": default "maybe" is not a boolean (true/false, 1/0, yes/no, on/off)`},
+		{"bool default false", "commands:\n  b:\n    cmd: echo\n    params:\n      - name: x\n        type: bool\n        default: \"false\"\n", ""},
+		{"bool default off", "commands:\n  b:\n    cmd: echo\n    params:\n      - name: x\n        type: bool\n        default: \"off\"\n", ""},
+		{"default cmd int default bad", "cmd: echo\nparams:\n  - name: x\n    type: int\n    default: abc\n", `command "(default)": param "x": default "abc" is not an int`},
 		{"nested bad name", "commands:\n  p:\n    cmd: echo\n    commands:\n      \"q r\":\n        cmd: echo\n", `command "p.q r": invalid command name`},
 	}
 	for _, tc := range tests {

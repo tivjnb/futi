@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 	"unicode"
@@ -183,6 +184,22 @@ func checkCommand(path string, cmd *Command, errors *[]error, warnings *[]string
 
 		if !validParamTypes[p.Type] {
 			*errors = append(*errors, fmt.Errorf("command %q: param %q has invalid type %q (valid: string, bool, int)", path, p.Name, p.Type))
+		}
+
+		if p.Required && p.Default != "" {
+			*errors = append(*errors, fmt.Errorf("command %q: param %q: required and default are mutually exclusive", path, p.Name))
+		}
+		if p.Default != "" {
+			switch p.Type {
+			case "int":
+				if _, err := strconv.Atoi(p.Default); err != nil {
+					*errors = append(*errors, fmt.Errorf("command %q: param %q: default %q is not an int", path, p.Name, p.Default))
+				}
+			case "bool":
+				if _, ok := parseBool(p.Default); !ok {
+					*errors = append(*errors, fmt.Errorf("command %q: param %q: default %q is not a boolean (true/false, 1/0, yes/no, on/off)", path, p.Name, p.Default))
+				}
+			}
 		}
 	}
 }

@@ -784,8 +784,8 @@ PARAMETERS
                                    the next word as its value)
   --bool-flag=false                Explicit false
 
-  Boolean values are normalized: "false", "0", "no", "" are falsy;
-  "true", "1", "yes" are truthy. Use {{if .flag}}...{{end}} in templates.
+  Boolean values: true/false, 1/0, yes/no, on/off (case-insensitive); anything
+  else is an error. Use {{if .flag}}...{{end}} in templates.
 
 MODULE SCHEMA (YAML)
   name: docker                     Optional, defaults to file/dir name

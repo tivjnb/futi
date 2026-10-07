@@ -2,6 +2,7 @@ package execmodule
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -120,14 +121,16 @@ func TestValidateNormalizesBoolParams(t *testing.T) {
 	}{
 		{"default false", "false", nil, ""},
 		{"default true", "true", nil, "true"},
+		{"no value no default", "", nil, ""},
 		{"provided false", "", map[string]string{"follow": "false"}, ""},
 		{"provided 0", "", map[string]string{"follow": "0"}, ""},
 		{"provided no", "", map[string]string{"follow": "no"}, ""},
-		{"provided empty", "", map[string]string{"follow": ""}, ""},
+		{"provided Off", "", map[string]string{"follow": "Off"}, ""},
 		{"provided true", "", map[string]string{"follow": "true"}, "true"},
 		{"provided 1", "", map[string]string{"follow": "1"}, "true"},
 		{"provided yes", "", map[string]string{"follow": "yes"}, "true"},
-		{"provided other is truthy", "", map[string]string{"follow": "anything"}, "true"},
+		{"provided on", "", map[string]string{"follow": "on"}, "true"},
+		{"provided padded YES", "", map[string]string{"follow": " YES "}, "true"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -140,6 +143,49 @@ func TestValidateNormalizesBoolParams(t *testing.T) {
 			}
 			if resolved["follow"] != tc.want {
 				t.Fatalf("got %q, want %q", resolved["follow"], tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalidBool(t *testing.T) {
+	for _, in := range []string{"maybe", "flase", "", "anything"} {
+		t.Run(in, func(t *testing.T) {
+			cmd := &Command{Params: []Param{{Name: "follow", Type: "bool"}}}
+			_, err := cmd.Validate(map[string]string{"follow": in})
+			want := fmt.Sprintf("execmodule: param %q must be a boolean (true/false, 1/0, yes/no, on/off), got %q", "follow", in)
+			if err == nil || err.Error() != want {
+				t.Fatalf("Validate(%q) err = %v, want %q", in, err, want)
+			}
+		})
+	}
+}
+
+func TestValidateRequiredRejectsEmptyValue(t *testing.T) {
+	cases := []struct {
+		name    string
+		param   Param
+		value   string
+		wantErr bool
+	}{
+		{"required string empty", Param{Name: "tag", Type: "string", Required: true}, "", true},
+		{"required int empty", Param{Name: "tag", Type: "int", Required: true}, "", true},
+		{"required string set", Param{Name: "tag", Type: "string", Required: true}, "x", false},
+		{"required bool false", Param{Name: "tag", Type: "bool", Required: true}, "false", false},
+		{"optional string empty", Param{Name: "tag", Type: "string"}, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := &Command{Params: []Param{tc.param}}
+			_, err := cmd.Validate(map[string]string{"tag": tc.value})
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != `execmodule: required param "tag" missing` {
+				t.Fatalf("err = %v, want required param \"tag\" missing", err)
 			}
 		})
 	}
