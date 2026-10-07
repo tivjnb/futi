@@ -23,9 +23,28 @@ type Match struct {
 }
 
 // builtinNames — встроенные команды корневого уровня (до резолва модулей).
-// list/validate зарезервированы и не могут быть командами модуля; cache/
-// modules/completion имеют приоритет над одноимёнными модулями на корне.
+// list зарезервирован и не может быть командой модуля; cache/modules/
+// completion имеют приоритет над одноимёнными модулями на корне.
 var builtinNames = []string{"cache", "completion", "list", "modules", "validate"}
+
+// ReservedNames — единый canonical-список слов корня, которые нельзя
+// использовать ни в одном сегменте пути модуля: main.go перехватывает их
+// до резолва модулей (cache/modules/completion/__complete — по первому
+// аргументу, list — по последнему позиционному), поэтому модуль с таким
+// сегментом никогда не будет вызван. При добавлении новой builtin-команды
+// в main.go — добавить имя сюда. help не зарезервирован: диспетчер сначала
+// пробует его как пользовательскую команду.
+var ReservedNames = []string{"list", "cache", "modules", "completion", "__complete"}
+
+// IsReservedName сообщает, входит ли name в ReservedNames.
+func IsReservedName(name string) bool {
+	for _, r := range ReservedNames {
+		if r == name {
+			return true
+		}
+	}
+	return false
+}
 
 // cacheSubcommands — подкоманды `futi cache`.
 var cacheSubcommands = []string{"clear", "refresh", "status"}

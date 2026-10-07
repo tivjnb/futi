@@ -96,6 +96,9 @@ func parseInstallArgs(args []string) (*installArgs, error) {
 		if err := validateModuleName(cfg.namespace); err != nil {
 			return nil, fmt.Errorf("--namespace: %w", err)
 		}
+		if err := checkReservedSegments(cfg.namespace, "."); err != nil {
+			return nil, fmt.Errorf("--namespace: %w", err)
+		}
 	}
 	return cfg, nil
 }
@@ -168,6 +171,9 @@ func runModulesInstall(w io.Writer, cache *modulecache.Cache, args []string) err
 		name = fallbackName(cfg.source)
 	}
 	if err := validateModuleName(name); err != nil {
+		return fmt.Errorf("modules install: %w", err)
+	}
+	if err := checkReservedSegments(name, "/"); err != nil {
 		return fmt.Errorf("modules install: %w", err)
 	}
 	if err := validateSegmentsNoDot(name); err != nil {

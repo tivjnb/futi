@@ -20,30 +20,6 @@ type initConfig struct {
 	commands    []string // имена команд для шаблона
 }
 
-// reservedModuleNames — имена, которые нельзя давать модулям: все они
-// перехватываются в main.go ДО резолва модулей (cache/modules/completion/
-// __complete — fast-path по первому аргументу; list/validate — builtin
-// subcommands по последнему позиционному), поэтому модуль с таким именем
-// никогда не будет вызван. При добавлении новой builtin-команды в main.go —
-// добавить имя сюда.
-// REV-008: раньше completion/__complete отсутствовали в списке —
-// futi modules init completion молча создавал нерабочий модуль.
-// init больше не зарезервирован: `futi init` удалён (миграция в
-// `futi modules init`), имя отдано модулям.
-var reservedModuleNames = map[string]bool{
-	"list":       true,
-	"validate":   true,
-	"cache":      true,
-	"modules":    true,
-	"completion": true,
-	"__complete": true,
-}
-
-// isReservedModuleName проверяет имя модуля по canonical-списку.
-func isReservedModuleName(name string) bool {
-	return reservedModuleNames[name]
-}
-
 // parseInitArgs разбирает аргументы подкоманды futi modules init.
 // Позиционный аргумент — path (обязательный). Флаги:
 // --global, --desc <value>, --default-cmd <value>, --command <name> (repeatable).
@@ -115,17 +91,10 @@ func parseInitArgs(args []string) (*initConfig, error) {
 	}
 	cfg.path = positional[0]
 
-	// #49: проверка конфликта с зарезервированными именами.
-	// REV-008: единый canonical-список. completion и __complete тоже
-	// перехватываются fast-path'ами в main.go ДО резолва модулей —
-	// модуль с таким именем был бы создан, но никогда не вызван.
-	// ROADMAP (README): в будущем имя completion может быть отдано
-	// модулям через smart-роутинг.
-	name := filepath.Base(cfg.path)
-	name = strings.TrimSuffix(name, ".yaml")
-	name = strings.TrimSuffix(name, ".yml")
-	if isReservedModuleName(name) {
-		return nil, fmt.Errorf("%q is a reserved name, choose a different module name", name)
+	// F57: зарезервированное слово запрещено в любом сегменте пути.
+	trimmed := strings.TrimSuffix(strings.TrimSuffix(cfg.path, ".yaml"), ".yml")
+	if err := checkReservedSegments(trimmed, "/"); err != nil {
+		return nil, err
 	}
 
 	if cfg.description == "" {

@@ -716,3 +716,28 @@ func TestCompletePartialListingSuggestsReadableSources(t *testing.T) {
 		t.Errorf("подсказки %v не содержат x", text(matches))
 	}
 }
+
+func TestIsReservedName(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"list", true},
+		{"cache", true},
+		{"modules", true},
+		{"completion", true},
+		{"__complete", true},
+		{"validate", false},
+		{"help", false},
+		{"init", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := IsReservedName(tt.name); got != tt.want {
+			t.Errorf("IsReservedName(%q) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+	if len(ReservedNames) != 5 {
+		t.Errorf("ReservedNames = %v, want 5 names", ReservedNames)
+	}
+}
