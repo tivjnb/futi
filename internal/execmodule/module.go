@@ -152,7 +152,13 @@ func ParseModule(manifestPath, moduleRoot string) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParseManifest(data, manifestPath, moduleRoot)
+}
 
+// ParseManifest разбирает манифест из байтов без Validate. manifestPath
+// используется только в сообщениях об ошибках (для ещё не записанного файла —
+// будущий путь).
+func ParseManifest(data []byte, manifestPath, moduleRoot string) (*Module, error) {
 	var node yaml.Node
 	if err := yaml.Unmarshal(data, &node); err != nil {
 		return nil, fmt.Errorf("execmodule: parse manifest %q: %w", manifestPath, err)
