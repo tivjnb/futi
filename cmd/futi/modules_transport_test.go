@@ -137,6 +137,32 @@ func TestFetchSourceRejectsHTTP(t *testing.T) {
 	}
 }
 
+// Локальный архив install не принимает, поэтому для архива подсказка — распаковать
+// и установить каталог; для git — прежняя (audit F50).
+func TestCheckTransportSourceHint(t *testing.T) {
+	tests := []struct {
+		name     string
+		src      string
+		kind     sourceKind
+		contains string
+		absent   string
+	}{
+		{"archive", "http://e.com/m.tar.gz", kindArchive, "download and unpack it, then install the directory", "install from a local path"},
+		{"git", "git://e.com/r.git", kindGit, "install from a local path", "unpack"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkTransportSource(tc.src, tc.kind, "")
+			if err == nil {
+				t.Fatal("want error")
+			}
+			if !strings.Contains(err.Error(), tc.contains) || strings.Contains(err.Error(), tc.absent) {
+				t.Fatalf("err = %q, want containing %q and not %q", err, tc.contains, tc.absent)
+			}
+		})
+	}
+}
+
 func TestDetectSourceTypeHTTPArchiveStillArchive(t *testing.T) {
 	kind, err := detectSourceType("http://e.com/m.tar.gz", false, false, false)
 	if err != nil || kind != kindArchive {

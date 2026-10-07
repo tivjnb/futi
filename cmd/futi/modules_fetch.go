@@ -56,6 +56,10 @@ func checkTransportSource(src string, kind sourceKind, ref string) error {
 		lower := strings.ToLower(src)
 		for _, scheme := range []string{"http://", "git://"} {
 			if strings.HasPrefix(lower, scheme) {
+				if kind == kindArchive {
+					// Локальный .tar.gz/.zip install не принимает (fetchLocalSource).
+					return fmt.Errorf("insecure %s source %q: only https:// is supported; download and unpack it, then install the directory", scheme, src)
+				}
 				return fmt.Errorf("insecure %s source %q: only https:// is supported; download it manually and install from a local path", scheme, src)
 			}
 		}
