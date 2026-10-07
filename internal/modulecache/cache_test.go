@@ -101,8 +101,8 @@ func TestCacheReturnsDifferentPointersForDifferentPaths(t *testing.T) {
 	dir := t.TempDir()
 	path1 := filepath.Join(dir, "a.yaml")
 	path2 := filepath.Join(dir, "b.yaml")
-	writeFile(t, path1, `name: a`)
-	writeFile(t, path2, `name: b`)
+	writeFile(t, path1, "name: a\ncmd: echo\n")
+	writeFile(t, path2, "name: b\ncmd: echo\n")
 
 	cache := newTestCache()
 	mod1, err := cache.LoadModule(path1, dir)
@@ -146,7 +146,7 @@ func TestCacheDoesNotCacheError(t *testing.T) {
 		t.Fatal("expected first load to fail for missing file")
 	}
 
-	writeFile(t, missingPath, `name: created_later`)
+	writeFile(t, missingPath, "name: created_later\ncmd: echo\n")
 
 	mod, err := cache.LoadModule(missingPath, dir)
 	if err != nil {
@@ -165,7 +165,7 @@ func TestCacheDoesNotCacheError(t *testing.T) {
 func TestCacheLoadModuleDoesNotAddToPersistentPaths(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "local.yaml")
-	writeFile(t, path, `name: local_mod`)
+	writeFile(t, path, "name: local_mod\ncmd: echo\n")
 
 	cache := newTestCache()
 	if _, err := cache.LoadModule(path, dir); err != nil {
@@ -191,14 +191,14 @@ func TestCacheBuildCacheFileOnlyPersistsGlobalModules(t *testing.T) {
 	// Локальный модуль (через LoadModule — не persistent)
 	dir := t.TempDir()
 	localPath := filepath.Join(dir, "local.yaml")
-	writeFile(t, localPath, `name: local_mod`)
+	writeFile(t, localPath, "name: local_mod\ncmd: echo\n")
 	if _, err := cache.LoadModule(localPath, dir); err != nil {
 		t.Fatalf("LoadModule local: %v", err)
 	}
 
 	// Глобальный модуль (добавляем в persistentPaths вручную для теста)
 	globalPath := filepath.Join(dir, "global.yaml")
-	writeFile(t, globalPath, `name: global_mod`)
+	writeFile(t, globalPath, "name: global_mod\ncmd: echo\n")
 	cache.mu.Lock()
 	cache.entries[globalPath] = entry{
 		Module:  &execmodule.Module{Name: "global_mod"},
@@ -303,7 +303,7 @@ cmd: "echo docker"`)
 func TestCacheStartWithForceOnlyDoesNotRefresh(t *testing.T) {
 	dir := t.TempDir()
 	modPath := filepath.Join(dir, "docker.yaml")
-	writeFile(t, modPath, `name: docker`)
+	writeFile(t, modPath, "name: docker\ncmd: echo\n")
 
 	src := discovery.NewGlobalSource(dir)
 	storage := &fakeStorage{}
@@ -325,7 +325,7 @@ func TestCacheStartWithForceOnlyDoesNotRefresh(t *testing.T) {
 func TestCacheStartRebuildsOnCorruptedStorage(t *testing.T) {
 	dir := t.TempDir()
 	modPath := filepath.Join(dir, "app.yaml")
-	writeFile(t, modPath, `name: app`)
+	writeFile(t, modPath, "name: app\ncmd: echo\n")
 
 	src := discovery.NewGlobalSource(dir)
 	storage := &fakeStorage{
@@ -387,7 +387,7 @@ cmd: "echo deploy"`)
 func TestCacheRefreshSkipsUnchangedModules(t *testing.T) {
 	dir := t.TempDir()
 	modPath := filepath.Join(dir, "app.yaml")
-	writeFile(t, modPath, `name: app`)
+	writeFile(t, modPath, "name: app\ncmd: echo\n")
 
 	info, _ := os.Stat(modPath)
 
@@ -462,7 +462,7 @@ cmd: "echo v1"`)
 // TestCacheRefreshUpdatesLastRefreshTime проверяет, что Refresh обновляет lastRefresh.
 func TestCacheRefreshUpdatesLastRefreshTime(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "app.yaml"), `name: app`)
+	writeFile(t, filepath.Join(dir, "app.yaml"), "name: app\ncmd: echo\n")
 
 	src := discovery.NewGlobalSource(dir)
 	cache := newTestCache()
@@ -482,7 +482,7 @@ func TestCacheRefreshUpdatesLastRefreshTime(t *testing.T) {
 // TestCacheRefreshSavesToStorage проверяет, что Refresh сохраняет кэш на диск.
 func TestCacheRefreshSavesToStorage(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "app.yaml"), `name: app`)
+	writeFile(t, filepath.Join(dir, "app.yaml"), "name: app\ncmd: echo\n")
 
 	src := discovery.NewGlobalSource(dir)
 	storage := &fakeStorage{}
@@ -522,7 +522,7 @@ func TestCacheRefreshEmptySource(t *testing.T) {
 func TestCacheRefreshSaveErrorIsNonFatal(t *testing.T) {
 	dir := t.TempDir()
 	modPath := filepath.Join(dir, "app.yaml")
-	writeFile(t, modPath, `name: app`)
+	writeFile(t, modPath, "name: app\ncmd: echo\n")
 
 	src := discovery.NewGlobalSource(dir)
 	storage := &fakeStorage{saveErr: errSaveForTest}
@@ -555,7 +555,7 @@ func TestCacheRefreshSaveErrorIsNonFatal(t *testing.T) {
 func TestCacheRefreshLogsSaveError(t *testing.T) {
 	dir := t.TempDir()
 	modPath := filepath.Join(dir, "app.yaml")
-	writeFile(t, modPath, `name: app`)
+	writeFile(t, modPath, "name: app\ncmd: echo\n")
 
 	src := discovery.NewGlobalSource(dir)
 	storage := &fakeStorage{saveErr: errSaveForTest}
@@ -586,7 +586,7 @@ func TestCacheRefreshLogsSaveError(t *testing.T) {
 func TestCacheStartLogsSaveError(t *testing.T) {
 	dir := t.TempDir()
 	modPath := filepath.Join(dir, "app.yaml")
-	writeFile(t, modPath, `name: app`)
+	writeFile(t, modPath, "name: app\ncmd: echo\n")
 
 	src := discovery.NewGlobalSource(dir)
 	storage := &fakeStorage{saveErr: errSaveForTest}
@@ -623,7 +623,7 @@ func TestCacheStartRebuildsAndOverwritesCorruptedDiskFile(t *testing.T) {
 
 	// Source с одним модулем.
 	modPath := filepath.Join(dir, "app.yaml")
-	writeFile(t, modPath, `name: app`)
+	writeFile(t, modPath, "name: app\ncmd: echo\n")
 	src := discovery.NewGlobalSource(dir)
 
 	storage := NewDiskStorage(cachePath)
@@ -666,7 +666,7 @@ func suppressLog(t *testing.T) func() {
 func TestCacheRefreshCountsSkippedModules(t *testing.T) {
 	dir := t.TempDir()
 	// Валидный модуль
-	writeFile(t, filepath.Join(dir, "good.yaml"), `name: good`)
+	writeFile(t, filepath.Join(dir, "good.yaml"), "name: good\ncmd: echo\n")
 	// Невалидный модуль (команда без cmd и commands → Validate error → LoadModule fails)
 	writeFile(t, filepath.Join(dir, "bad.yaml"), `name: bad
 commands:
@@ -733,7 +733,7 @@ commands:
 // ошибках). Это не даёт одному битому модулю ломать throttling every_t_min.
 func TestCacheRefreshUpdatesLastRefreshOnPartialSuccess(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "good.yaml"), `name: good`)
+	writeFile(t, filepath.Join(dir, "good.yaml"), "name: good\ncmd: echo\n")
 	writeFile(t, filepath.Join(dir, "bad.yaml"), `name: bad
 commands:
   empty: {}`)
@@ -775,7 +775,7 @@ func TestCacheRefreshCleansUpStaleEntries(t *testing.T) {
 	dir := t.TempDir()
 	// Только good.yaml существует в source
 	goodPath := filepath.Join(dir, "good.yaml")
-	writeFile(t, goodPath, `name: good`)
+	writeFile(t, goodPath, "name: good\ncmd: echo\n")
 
 	src := discovery.NewGlobalSource(dir)
 	cache := newTestCache()
@@ -827,7 +827,7 @@ func TestCacheRefreshDoesNotRemoveEntriesWithReadErrors(t *testing.T) {
 	}
 	dir := t.TempDir()
 	unreadable := filepath.Join(dir, "unreadable.yaml")
-	writeFile(t, unreadable, "name: unreadable\n")
+	writeFile(t, unreadable, "name: unreadable\ncmd: echo\n")
 	if err := os.Chmod(unreadable, 0); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
@@ -914,7 +914,7 @@ func TestCacheRefreshRemovesBrokenSymlinkEntry(t *testing.T) {
 // не листится, и Refresh не зависает на его чтении (hashFile/LoadModule).
 func TestCacheRefreshFIFOInTreeDoesNotHang(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "ok.yaml"), "name: ok\n")
+	writeFile(t, filepath.Join(dir, "ok.yaml"), "name: ok\ncmd: echo\n")
 	fifo := filepath.Join(dir, "fifo.yaml")
 	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
 		t.Fatalf("mkfifo: %v", err)
@@ -1175,7 +1175,7 @@ func TestCacheLoadOnCorruptedStorageReturnsEmpty(t *testing.T) {
 func TestCacheLoadDoesNotRefresh(t *testing.T) {
 	dir := t.TempDir()
 	modPath := filepath.Join(dir, "app.yaml")
-	writeFile(t, modPath, `name: app`)
+	writeFile(t, modPath, "name: app\ncmd: echo\n")
 
 	storage := &fakeStorage{}
 	cache := New(storage, ForceOnlyPolicy{})
@@ -1225,7 +1225,7 @@ func TestCacheLoadLogsStorageError(t *testing.T) {
 func TestCacheRefreshResultContainsUpdatedModules(t *testing.T) {
 	dir := t.TempDir()
 	modPath := filepath.Join(dir, "app.yaml")
-	writeFile(t, modPath, `name: app`)
+	writeFile(t, modPath, "name: app\ncmd: echo\n")
 
 	src := discovery.NewGlobalSource(dir)
 	cache := newTestCache()
@@ -1246,7 +1246,7 @@ func TestCacheRefreshResultContainsUpdatedModules(t *testing.T) {
 // содержит список пропущенных модулей с причиной (для --verbose).
 func TestCacheRefreshResultContainsSkippedModules(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "good.yaml"), `name: good`)
+	writeFile(t, filepath.Join(dir, "good.yaml"), "name: good\ncmd: echo\n")
 	writeFile(t, filepath.Join(dir, "bad.yaml"), `name: bad
 commands:
   empty: {}`)
@@ -1278,7 +1278,7 @@ commands:
 // обновления (для futi cache status).
 func TestCacheLastRefresh(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "app.yaml"), `name: app`)
+	writeFile(t, filepath.Join(dir, "app.yaml"), "name: app\ncmd: echo\n")
 
 	src := discovery.NewGlobalSource(dir)
 	cache := newTestCache()
@@ -1301,8 +1301,8 @@ func TestCacheLastRefresh(t *testing.T) {
 // модулей в in-memory кэше (для futi cache status).
 func TestCacheModuleCount(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "a.yaml"), `name: a`)
-	writeFile(t, filepath.Join(dir, "b.yaml"), `name: b`)
+	writeFile(t, filepath.Join(dir, "a.yaml"), "name: a\ncmd: echo\n")
+	writeFile(t, filepath.Join(dir, "b.yaml"), "name: b\ncmd: echo\n")
 
 	src := discovery.NewGlobalSource(dir)
 	cache := newTestCache()
@@ -1715,8 +1715,8 @@ func TestRefreshPartialKeepsEntries(t *testing.T) {
 	dir := t.TempDir()
 	xPath := filepath.Join(dir, "x.yaml")
 	yPath := filepath.Join(dir, "y.yaml")
-	writeFile(t, xPath, "name: x\n")
-	writeFile(t, yPath, "name: y\n")
+	writeFile(t, xPath, "name: x\ncmd: echo\n")
+	writeFile(t, yPath, "name: y\ncmd: echo\n")
 	childX := discovery.Child{Name: "x", Type: "module", ManifestPath: xPath, ModuleRoot: dir}
 	childY := discovery.Child{Name: "y", Type: "module", ManifestPath: yPath, ModuleRoot: dir}
 
@@ -1782,7 +1782,7 @@ func TestRefreshKeepsModulesOfUnsearchableDir(t *testing.T) {
 	if err := os.Mkdir(nsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, yPath, "name: y\n")
+	writeFile(t, yPath, "name: y\ncmd: echo\n")
 	src := discovery.NewGlobalSource(dir)
 	cache := newTestCache()
 	restore := suppressLog(t)

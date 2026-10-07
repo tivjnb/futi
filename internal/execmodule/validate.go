@@ -3,7 +3,10 @@ package execmodule
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
+	"text/template"
+	"unicode"
 )
 
 // Допустимые типы параметров. Пустой тип означает string (по умолчанию).
@@ -28,10 +31,18 @@ var reservedParamNames = map[string]bool{
 // с цифры или дефиса.
 var paramNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 
+// defaultPath — путь схемы default-команды модуля в сообщениях.
+const defaultPath = "(default)"
+
 // Validate проверяет схему модуля и возвращает все найденные ошибки и предупреждения.
 //
 // Errors (блокируют загрузку модуля в LoadModule):
-//   - команда без cmd и без commands (бесполезная команда)
+//   - неизвестный ключ манифеста (с номером строки)
+//   - модуль без cmd и без commands
+//   - команда без cmd и без commands (бесполезная команда); cmd из одних пробелов — пустой
+//   - params/positional без cmd (на любом уровне)
+//   - синтаксическая ошибка шаблона в cmd, attach, detach
+//   - недопустимое имя команды (пустое, с "-" в начале, с точкой, пробелами, управляющими символами)
 //   - дубликаты имён params в команде
 //   - type параметра ∉ {"", "string", "bool", "int"}
 //   - имя параметра зарезервировано (args, args_list, env, module_name, module_root)
@@ -44,25 +55,90 @@ var paramNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 // проверяется теми же правилами с путём "(default)".
 // Рекурсивно обходит все команды и subcommands. Возвращает ВСЕ ошибки за один
 // проход — автор модуля исправляет всё за итерацию, а не по одной ошибке.
+//
+// Порядок детерминирован: ошибки неизвестных ключей (порядок документа),
+// attach/detach и пустой модуль, "(default)", затем команды по имени
+// (на каждом уровне родитель раньше детей).
 func (m *Module) Validate() (errors []error, warnings []string) {
-	if m.Cmd != "" {
-		validateCommand("(default)", &Command{
+	errors = append(errors, m.schemaErrs...)
+
+	validateHook("attach", m.Attach, &errors)
+	validateHook("detach", m.Detach, &errors)
+
+	if strings.TrimSpace(m.Cmd) == "" && len(m.Commands) == 0 {
+		errors = append(errors, fmt.Errorf("module has no cmd and no commands"))
+	}
+
+	// Схема default-команды проверяется, когда у модуля есть cmd или params/positional.
+	// Commands передаём, чтобы пустой cmd не давал «must have cmd or commands»
+	// (это отдельное правило модуля выше).
+	hasDefaultSchema := strings.TrimSpace(m.Cmd) != "" || len(m.Params) > 0 || m.Positional.Min != 0
+	if hasDefaultSchema {
+		checkCommand(defaultPath, &Command{
 			Cmd:        m.Cmd,
 			Params:     m.Params,
 			Positional: m.Positional,
+			Commands:   m.Commands,
 		}, &errors, &warnings)
 	}
-	for name, cmd := range m.Commands {
-		validateCommand(name, cmd, &errors, &warnings)
-	}
+	validateSubcommands("", m.Commands, &errors, &warnings)
 	return errors, warnings
 }
 
-// validateCommand рекурсивно проверяет команду и её subcommands.
+// validateHook проверяет синтаксис шаблона хука (attach/detach).
+func validateHook(name, tmpl string, errors *[]error) {
+	if _, err := template.New(name).Funcs(TemplateFuncs()).Parse(tmpl); err != nil {
+		*errors = append(*errors, fmt.Errorf("%s: invalid template: %w", name, err))
+	}
+}
+
+// validateSubcommands обходит команды в порядке отсортированных имён:
+// проверяет имя, саму команду и рекурсивно её subcommands.
+// parent — полный путь родителя ("" на верхнем уровне).
+func validateSubcommands(parent string, cmds map[string]*Command, errors *[]error, warnings *[]string) {
+	names := make([]string, 0, len(cmds))
+	for name := range cmds {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		path := name
+		if parent != "" {
+			path = parent + "." + name
+		}
+		if !validCommandName(name) {
+			*errors = append(*errors, fmt.Errorf("command %q: invalid command name (must be non-empty, not start with \"-\", no dots, whitespace or control characters)", path))
+		}
+		validateCommand(path, cmds[name], errors, warnings)
+	}
+}
+
+// validCommandName — имя команды допустимо: непустое, не начинается с "-",
+// без точки (разделитель пути), пробельных и управляющих символов.
+func validCommandName(name string) bool {
+	if name == "" || strings.HasPrefix(name, "-") {
+		return false
+	}
+	for _, r := range name {
+		if r == '.' || unicode.IsSpace(r) || unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// validateCommand проверяет команду и рекурсивно её subcommands.
 // path — имя команды (для сообщений об ошибках).
 func validateCommand(path string, cmd *Command, errors *[]error, warnings *[]string) {
+	checkCommand(path, cmd, errors, warnings)
+	validateSubcommands(path, cmd.Commands, errors, warnings)
+}
+
+// checkCommand проверяет одну команду без спуска в subcommands.
+// Сюда добавляются правила уровня команды.
+func checkCommand(path string, cmd *Command, errors *[]error, warnings *[]string) {
 	// Проверка: команда должна иметь cmd или commands (или оба).
-	hasCmd := cmd.Cmd != ""
+	hasCmd := strings.TrimSpace(cmd.Cmd) != ""
 	hasCommands := len(cmd.Commands) > 0
 
 	if !hasCmd && !hasCommands {
@@ -70,8 +146,20 @@ func validateCommand(path string, cmd *Command, errors *[]error, warnings *[]str
 	}
 
 	// Предупреждение: команда с commands, но без cmd — вызов без subcommand падает.
-	if hasCommands && !hasCmd {
+	// Для (default) не выдаётся: модуль без default-cmd — обычный случай.
+	if hasCommands && !hasCmd && path != defaultPath {
 		*warnings = append(*warnings, fmt.Sprintf("command %q: has subcommands but no cmd (calling without subcommand will fail)", path))
+	}
+
+	// params/positional не наследуются подкомандами: без cmd они бессмысленны.
+	if !hasCmd && (len(cmd.Params) > 0 || cmd.Positional.Min != 0) {
+		*errors = append(*errors, fmt.Errorf("command %q: params/positional require cmd", path))
+	}
+
+	if hasCmd {
+		if _, err := template.New(path).Funcs(TemplateFuncs()).Parse(cmd.Cmd); err != nil {
+			*errors = append(*errors, fmt.Errorf("command %q: invalid cmd template: %w", path, err))
+		}
 	}
 
 	// Проверка positional: min не может быть отрицательным.
@@ -97,11 +185,6 @@ func validateCommand(path string, cmd *Command, errors *[]error, warnings *[]str
 		if !validParamTypes[p.Type] {
 			*errors = append(*errors, fmt.Errorf("command %q: param %q has invalid type %q (valid: string, bool, int)", path, p.Name, p.Type))
 		}
-	}
-
-	// Рекурсивная проверка subcommands.
-	for subName, subCmd := range cmd.Commands {
-		validateCommand(path+"."+subName, subCmd, errors, warnings)
 	}
 }
 

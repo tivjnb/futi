@@ -354,3 +354,95 @@ commands:
 		t.Fatalf("err = %v, want 'is reserved'", err)
 	}
 }
+
+func TestValidateSchemaRules(t *testing.T) {
+	tests := []struct {
+		name     string
+		manifest string
+		want     string // подстрока ожидаемой ошибки; пусто — ошибок быть не должно
+	}{
+		{"module params without cmd", "params:\n  - name: a\ncommands:\n  x:\n    cmd: echo\n", `command "(default)": params/positional require cmd`},
+		{"module positional without cmd", "positional:\n  min: 1\ncommands:\n  x:\n    cmd: echo\n", `command "(default)": params/positional require cmd`},
+		{"branch params without cmd", "commands:\n  b:\n    params:\n      - name: a\n    commands:\n      c:\n        cmd: echo\n", `command "b": params/positional require cmd`},
+		{"blank cmd", "commands:\n  b:\n    cmd: \"  \"\n", `command "b": must have cmd or commands`},
+		{"blank default cmd with params", "cmd: \"  \"\nparams:\n  - name: a\ncommands:\n  x:\n    cmd: echo\n", `command "(default)": params/positional require cmd`},
+		{"broken cmd template", "commands:\n  b:\n    cmd: 'echo {{.msg'\n", `command "b": invalid cmd template:`},
+		{"broken default template", "cmd: 'echo {{.msg'\n", `command "(default)": invalid cmd template:`},
+		{"quote func ok", "commands:\n  b:\n    cmd: '{{quote .x}}'\n    params:\n      - name: x\n", ""},
+		{"broken attach", "attach: '{{.x'\ncmd: echo\n", `attach: invalid template:`},
+		{"broken detach", "detach: '{{.x'\ncmd: echo\n", `detach: invalid template:`},
+		{"name starts with dash", "commands:\n  -x:\n    cmd: echo\n", `command "-x": invalid command name`},
+		{"name with dot", "commands:\n  a.b:\n    cmd: echo\n", `command "a.b": invalid command name`},
+		{"name with space", "commands:\n  \"a b\":\n    cmd: echo\n", `command "a b": invalid command name`},
+		{"empty name", "commands:\n  \"\":\n    cmd: echo\n", `command "": invalid command name`},
+		{"nested bad name", "commands:\n  p:\n    cmd: echo\n    commands:\n      \"q r\":\n        cmd: echo\n", `command "p.q r": invalid command name`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseAndValidate(t, tc.manifest)
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Fatalf("errors = %q, want none", got)
+				}
+				return
+			}
+			for _, e := range got {
+				if strings.Contains(e, tc.want) {
+					return
+				}
+			}
+			t.Fatalf("errors = %q, want one containing %q", got, tc.want)
+		})
+	}
+}
+
+func TestValidateOrderIsDeterministic(t *testing.T) {
+	mod := &Module{Commands: map[string]*Command{
+		"d": {}, "c": {}, "b": {}, "a": {},
+	}}
+	first, _ := mod.Validate()
+	if len(first) != 4 || first[0].Error() != `command "a": must have cmd or commands` {
+		t.Fatalf("first = %v, want 4 errors starting with command a", first)
+	}
+	for i := 0; i < 20; i++ {
+		got, _ := mod.Validate()
+		for j := range first {
+			if got[j].Error() != first[j].Error() {
+				t.Fatalf("run %d: errors differ at %d: %v vs %v", i, j, got, first)
+			}
+		}
+	}
+}
+
+func TestValidateOrderSectionsAndParentBeforeChildren(t *testing.T) {
+	mod := &Module{
+		Attach:   "{{.x",
+		Cmd:      "echo",
+		Params:   []Param{{Name: "p", Type: "float"}},
+		Commands: map[string]*Command{"b": {Cmd: "echo", Commands: map[string]*Command{"z": {}, "y": {}}}, "a": {}},
+	}
+	errs, _ := mod.Validate()
+	var got []string
+	for _, e := range errs {
+		got = append(got, e.Error())
+	}
+	prefixes := []string{`attach:`, `command "(default)"`, `command "a"`, `command "b.y"`, `command "b.z"`}
+	if len(got) != len(prefixes) {
+		t.Fatalf("errors = %q, want %d", got, len(prefixes))
+	}
+	for i, p := range prefixes {
+		if !strings.HasPrefix(got[i], p) {
+			t.Fatalf("errors[%d] = %q, want prefix %q (all: %q)", i, got[i], p, got)
+		}
+	}
+}
+
+func TestCommandValidateUnknownParamIsLexicographicallyFirst(t *testing.T) {
+	c := &Command{}
+	for i := 0; i < 20; i++ {
+		_, err := c.Validate(map[string]string{"z": "1", "a": "2", "m": "3"})
+		if err == nil || !strings.Contains(err.Error(), `"a"`) {
+			t.Fatalf("err = %v, want error about \"a\"", err)
+		}
+	}
+}

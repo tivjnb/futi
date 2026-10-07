@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"text/template"
@@ -38,7 +39,13 @@ func (c *Command) Validate(provided map[string]string) (map[string]string, error
 		resolved[p.Name] = val
 	}
 
+	// Имена сортируем: при нескольких неизвестных ошибка детерминирована.
+	names := make([]string, 0, len(provided))
 	for name := range provided {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
 		known := false
 		for _, p := range c.Params {
 			if p.Name == name {
@@ -115,7 +122,7 @@ func (e *TemplateError) Unwrap() error { return e.Cause }
 // Ошибки парсинга и выполнения шаблона возвращаются как *TemplateError.
 func (c *Command) Render(params map[string]string, args string, argsList []string, module ModuleRef) (string, error) {
 	tmpl, err := template.New("cmd").
-		Funcs(template.FuncMap{"quote": quoteShlex}).
+		Funcs(TemplateFuncs()).
 		Option("missingkey=error").
 		Parse(c.Cmd)
 	if err != nil {
@@ -146,6 +153,12 @@ func (c *Command) Render(params map[string]string, args string, argsList []strin
 	}
 
 	return buf.String(), nil
+}
+
+// TemplateFuncs — единый набор функций cmd-шаблонов (quote): им рендерятся
+// команды, хуки attach/detach, и по нему же Validate проверяет синтаксис.
+func TemplateFuncs() template.FuncMap {
+	return template.FuncMap{"quote": quoteShlex}
 }
 
 // quoteShlex возвращает s в форме, которую shlex.Split интерпретирует как

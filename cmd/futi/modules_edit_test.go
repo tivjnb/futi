@@ -28,6 +28,8 @@ commands:
   make:
     description: Make a QR code
     cmd: "echo make"
+  keep:
+    cmd: "echo keep"
 `
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)

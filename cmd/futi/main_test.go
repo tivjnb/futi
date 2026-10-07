@@ -438,7 +438,7 @@ func TestLocalSourceFutiDir(t *testing.T) {
 	if err := os.Mkdir(futiDir, 0o755); err != nil {
 		t.Fatalf("mkdir .futi: %v", err)
 	}
-	writeMainTestFile(t, filepath.Join(futiDir, "local.yaml"), "name: local\n")
+	writeMainTestFile(t, filepath.Join(futiDir, "local.yaml"), "name: local\ncmd: echo\n")
 
 	src, err := localSource(nil)
 	if err != nil {
@@ -475,14 +475,14 @@ func TestLocalSourceBothFutiYamlAndDir(t *testing.T) {
 	t.Chdir(dir)
 
 	// ./futi.yaml with module "yamlmod"
-	writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), "name: yamlmod\n")
+	writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), "name: yamlmod\ncmd: echo\n")
 
 	// ./.futi/local.yaml with module "local"
 	futiDir := filepath.Join(dir, ".futi")
 	if err := os.Mkdir(futiDir, 0o755); err != nil {
 		t.Fatalf("mkdir .futi: %v", err)
 	}
-	writeMainTestFile(t, filepath.Join(futiDir, "local.yaml"), "name: local\n")
+	writeMainTestFile(t, filepath.Join(futiDir, "local.yaml"), "name: local\ncmd: echo\n")
 
 	src, err := localSource(nil)
 	if err != nil {
@@ -769,7 +769,7 @@ func TestLocalSourceUsesLoader(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	// Файл нужен, чтобы localSource вообще вызвал loader.
-	writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), "name: real\n")
+	writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), "name: real\ncmd: echo\n")
 
 	spy := &stubLoader{
 		mod: &execmodule.Module{Name: "spy_name", Root: dir},
@@ -911,7 +911,7 @@ commands:
 func TestLocalSourceWithCache(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), "name: cached\n")
+	writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), "name: cached\ncmd: echo\n")
 
 	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
 	src, err := localSource(cache)
@@ -1045,7 +1045,7 @@ func TestCreateSourceReturnsLayeredSourceWhenLocalPresent(t *testing.T) {
 	t.Setenv("HOME", "/nonexistent-home-no-config-here")
 	t.Setenv("FUTI_MODULES_DIR", dir)
 
-	writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), "name: local\n")
+	writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), "name: local\ncmd: echo\n")
 
 	_, global, err := createGlobalSource()
 	if err != nil {
@@ -1253,7 +1253,7 @@ func TestParseArgsVerboseStillWorksForList(t *testing.T) {
 func TestRunCacheRefreshVerboseShowsUpdatedModules(t *testing.T) {
 	dir := t.TempDir()
 	modPath := filepath.Join(dir, "app.yaml")
-	writeMainTestFile(t, modPath, `name: app`)
+	writeMainTestFile(t, modPath, "name: app\ncmd: echo\n")
 
 	src := discovery.NewGlobalSource(dir)
 	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
@@ -1276,7 +1276,7 @@ func TestRunCacheRefreshVerboseShowsUpdatedModules(t *testing.T) {
 // runCacheRefresh выводит пропущенные модули с причиной.
 func TestRunCacheRefreshVerboseShowsSkippedModules(t *testing.T) {
 	dir := t.TempDir()
-	writeMainTestFile(t, filepath.Join(dir, "good.yaml"), `name: good`)
+	writeMainTestFile(t, filepath.Join(dir, "good.yaml"), "name: good\ncmd: echo\n")
 	writeMainTestFile(t, filepath.Join(dir, "bad.yaml"), "name: bad\ncommands:\n  empty: {}\n")
 
 	src := discovery.NewGlobalSource(dir)
@@ -1306,7 +1306,7 @@ func TestRunCacheRefreshVerboseShowsSkippedModules(t *testing.T) {
 func TestRunCacheRefreshNonVerboseHidesDetails(t *testing.T) {
 	dir := t.TempDir()
 	modPath := filepath.Join(dir, "app.yaml")
-	writeMainTestFile(t, modPath, `name: app`)
+	writeMainTestFile(t, modPath, "name: app\ncmd: echo\n")
 
 	src := discovery.NewGlobalSource(dir)
 	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
@@ -1331,7 +1331,7 @@ func TestRunCacheRefreshNonVerboseHidesDetails(t *testing.T) {
 // last refresh, количество модулей и путь к gob-файлу.
 func TestRunCacheStatusOutput(t *testing.T) {
 	dir := t.TempDir()
-	writeMainTestFile(t, filepath.Join(dir, "app.yaml"), `name: app`)
+	writeMainTestFile(t, filepath.Join(dir, "app.yaml"), "name: app\ncmd: echo\n")
 
 	src := discovery.NewGlobalSource(dir)
 	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
@@ -1463,7 +1463,7 @@ func TestCacheSubcommandEmpty(t *testing.T) {
 // Спека, раздел 8: "выводит статистику; exit 0".
 func TestRunCacheRefreshOutputFormat(t *testing.T) {
 	dir := t.TempDir()
-	writeMainTestFile(t, filepath.Join(dir, "app.yaml"), `name: app`)
+	writeMainTestFile(t, filepath.Join(dir, "app.yaml"), "name: app\ncmd: echo\n")
 
 	src := discovery.NewGlobalSource(dir)
 	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
@@ -1489,7 +1489,7 @@ func TestRunCacheRefreshOutputFormat(t *testing.T) {
 // в выводе runCacheRefresh (часть #7 — observable counter).
 func TestRunCacheRefreshShowsSkipped(t *testing.T) {
 	dir := t.TempDir()
-	writeMainTestFile(t, filepath.Join(dir, "good.yaml"), `name: good`)
+	writeMainTestFile(t, filepath.Join(dir, "good.yaml"), "name: good\ncmd: echo\n")
 	writeMainTestFile(t, filepath.Join(dir, "bad.yaml"), "name: bad\ncommands:\n  empty: {}\n")
 
 	src := discovery.NewGlobalSource(dir)
@@ -1633,7 +1633,7 @@ func TestNewCacheFromConfigNilCfgUsesAlwaysPolicy(t *testing.T) {
 	// AlwaysPolicy → Start должен запустить Refresh. Создаём source с модулем
 	// и проверяем, что модуль попал в кэш (Refresh отработал).
 	modDir := t.TempDir()
-	writeMainTestFile(t, filepath.Join(modDir, "app.yaml"), `name: app`)
+	writeMainTestFile(t, filepath.Join(modDir, "app.yaml"), "name: app\ncmd: echo\n")
 	src := discovery.NewGlobalSource(modDir)
 	if err := cache.Start(src); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -1659,7 +1659,7 @@ func TestNewCacheFromConfigWithForceOnly(t *testing.T) {
 	}
 	// ForceOnly → Start НЕ должен Refresh. Модуль не должен попасть в кэш.
 	modDir := t.TempDir()
-	writeMainTestFile(t, filepath.Join(modDir, "app.yaml"), `name: app`)
+	writeMainTestFile(t, filepath.Join(modDir, "app.yaml"), "name: app\ncmd: echo\n")
 	src := discovery.NewGlobalSource(modDir)
 	if err := cache.Start(src); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -1799,8 +1799,8 @@ func TestRunListConflictInSubnamespaceReturnsError(t *testing.T) {
 	}
 	for path, content := range map[string]string{
 		"a.yaml":          "name: a\ncommands:\n  b:\n    commands:\n      c:\n        cmd: \"echo c\"\n",
-		"a/b.yaml":        "name: b\n",
-		"a/b/config.yaml": "name: b\n",
+		"a/b.yaml":        "name: b\ncmd: echo\n",
+		"a/b/config.yaml": "name: b\ncmd: echo\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, path), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
@@ -1825,8 +1825,8 @@ func TestRunListConflictInProgressiveResolveReturnsError(t *testing.T) {
 	}
 	for path, content := range map[string]string{
 		"a.yaml":          "name: a\ncommands:\n  b:\n    commands:\n      c:\n        commands:\n          d:\n            cmd: \"echo d\"\n",
-		"a/b.yaml":        "name: b\n",
-		"a/b/config.yaml": "name: b\n",
+		"a/b.yaml":        "name: b\ncmd: echo\n",
+		"a/b/config.yaml": "name: b\ncmd: echo\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, path), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
@@ -2474,11 +2474,11 @@ func TestRunCompleteMainPartialListingIsSilent(t *testing.T) {
 func TestRunListErrorsHaveSingleListPrefix(t *testing.T) {
 	dir := t.TempDir()
 	writeMainTestFile(t, filepath.Join(dir, "a.yaml"), "name: a\ncmd: echo a\n")
-	writeMainTestFile(t, filepath.Join(dir, "c.yaml"), "name: c\n")
+	writeMainTestFile(t, filepath.Join(dir, "c.yaml"), "name: c\ncmd: echo\n")
 	if err := os.Mkdir(filepath.Join(dir, "c"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeMainTestFile(t, filepath.Join(dir, "c", "config.yaml"), "name: c\n")
+	writeMainTestFile(t, filepath.Join(dir, "c", "config.yaml"), "name: c\ncmd: echo\n")
 
 	for _, ns := range []string{"nope", "a.nope", "c"} {
 		var buf bytes.Buffer
