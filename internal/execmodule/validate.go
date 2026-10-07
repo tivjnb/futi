@@ -74,7 +74,7 @@ func (m *Module) Validate() (errors []error, warnings []string) {
 	// Отсутствие cmd и commands у модуля сообщает отдельное правило выше.
 	hasDefaultSchema := strings.TrimSpace(m.Cmd) != "" || len(m.Params) > 0 || m.Positional.Min != 0
 	if hasDefaultSchema {
-		checkCommand(defaultPath, &Command{
+		checkCommand(defaultPath, true, &Command{
 			Cmd:        m.Cmd,
 			Params:     m.Params,
 			Positional: m.Positional,
@@ -129,25 +129,25 @@ func validCommandName(name string) bool {
 // validateCommand проверяет команду и рекурсивно её subcommands.
 // path — имя команды (для сообщений об ошибках).
 func validateCommand(path string, cmd *Command, errors *[]error, warnings *[]string) {
-	checkCommand(path, cmd, errors, warnings)
+	checkCommand(path, false, cmd, errors, warnings)
 	validateSubcommands(path, cmd.Commands, errors, warnings)
 }
 
 // checkCommand проверяет одну команду без спуска в subcommands.
 // Сюда добавляются правила уровня команды.
-func checkCommand(path string, cmd *Command, errors *[]error, warnings *[]string) {
+func checkCommand(path string, isDefault bool, cmd *Command, errors *[]error, warnings *[]string) {
 	// Проверка: команда должна иметь cmd или commands (или оба).
 	hasCmd := strings.TrimSpace(cmd.Cmd) != ""
 	hasCommands := len(cmd.Commands) > 0
 
 	// Для (default) это правило не применяется: его покрывает ошибка модуля.
-	if !hasCmd && !hasCommands && path != defaultPath {
+	if !hasCmd && !hasCommands && !isDefault {
 		*errors = append(*errors, fmt.Errorf("command %q: must have cmd or commands", path))
 	}
 
 	// Предупреждение: команда с commands, но без cmd — вызов без subcommand падает.
 	// Для (default) не выдаётся: модуль без default-cmd — обычный случай.
-	if hasCommands && !hasCmd && path != defaultPath {
+	if hasCommands && !hasCmd && !isDefault {
 		*warnings = append(*warnings, fmt.Sprintf("command %q: has subcommands but no cmd (calling without subcommand will fail)", path))
 	}
 

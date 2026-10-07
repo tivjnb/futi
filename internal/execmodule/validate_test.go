@@ -365,6 +365,7 @@ func TestValidateSchemaRules(t *testing.T) {
 		{"module positional without cmd", "positional:\n  min: 1\ncommands:\n  x:\n    cmd: echo\n", `command "(default)": params/positional require cmd`},
 		{"branch params without cmd", "commands:\n  b:\n    params:\n      - name: a\n    commands:\n      c:\n        cmd: echo\n", `command "b": params/positional require cmd`},
 		{"blank cmd", "commands:\n  b:\n    cmd: \"  \"\n", `command "b": must have cmd or commands`},
+		{"user command named (default)", "commands:\n  \"(default)\": {}\n", `command "(default)": must have cmd or commands`},
 		{"blank default cmd with params", "cmd: \"  \"\nparams:\n  - name: a\ncommands:\n  x:\n    cmd: echo\n", `command "(default)": params/positional require cmd`},
 		{"broken cmd template", "commands:\n  b:\n    cmd: 'echo {{.msg'\n", `command "b": invalid cmd template:`},
 		{"broken default template", "cmd: 'echo {{.msg'\n", `command "(default)": invalid cmd template:`},
