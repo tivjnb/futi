@@ -44,6 +44,7 @@ const defaultPath = "(default)"
 //   - params/positional без cmd (на любом уровне)
 //   - синтаксическая ошибка шаблона в cmd, attach, detach
 //   - недопустимое имя команды (пустое, с "-" в начале, с точкой, пробелами, управляющими символами)
+//   - команда с именем list (на любом уровне): недостижима, list — системный запрос
 //   - дубликаты имён params в команде
 //   - type параметра ∉ {"", "string", "bool", "int"}
 //   - имя параметра зарезервировано (args, args_list, env, module_name, module_root)
@@ -107,6 +108,11 @@ func validateSubcommands(parent string, cmds map[string]*Command, errors *[]erro
 		}
 		if !validCommandName(name) {
 			*errors = append(*errors, fmt.Errorf("command %q: invalid command name (must be non-empty, not start with \"-\", no dots, whitespace or control characters)", path))
+		}
+		// list последним словом пути CLI перехватывает как системный запрос,
+		// поэтому команда с таким именем была бы недостижима.
+		if name == "list" {
+			*errors = append(*errors, fmt.Errorf("command %q: \"list\" is reserved (use a different command name)", path))
 		}
 		validateCommand(path, cmds[name], errors, warnings)
 	}
