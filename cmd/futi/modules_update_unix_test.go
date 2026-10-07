@@ -34,7 +34,7 @@ func TestRunModulesUpdateStopsWhenHookCatchesSIGTERM(t *testing.T) {
 	srcB := makeSourceModule(t, parent, "b", "")
 	cache := newTestCache()
 	for _, src := range []string{srcA, srcB} {
-		if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src, "--skip-attach"}); err != nil {
+		if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src, "--skip-attach"}); err != nil {
 			t.Fatalf("install: %v", err)
 		}
 	}
@@ -47,7 +47,7 @@ func TestRunModulesUpdateStopsWhenHookCatchesSIGTERM(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, nil)
+		done <- runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"--yes"})
 	}()
 	testutil.WaitForFile(t, ready, 5*time.Second)
 	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
@@ -73,7 +73,7 @@ func TestRunModulesUpdateStopsWhenHookCatchesSIGTERM(t *testing.T) {
 func TestFutiModulesInstallFailedAttachExitsWithOne(t *testing.T) {
 	tmp := t.TempDir()
 	src := makeSourceModule(t, t.TempDir(), "a", "attach: \"exit 3\"\n")
-	cmd := exec.Command(builtFutiBinary(t), "modules", "install", src)
+	cmd := exec.Command(builtFutiBinary(t), "modules", "install", src, "--yes")
 	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(),
 		"FUTI_MODULES_DIR="+filepath.Join(tmp, "mods"),
@@ -129,7 +129,7 @@ func TestRunModulesUpdateCopyFailureRestoresOld(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	dest := filepath.Join(global, "qr")
@@ -148,7 +148,7 @@ func TestRunModulesUpdateCopyFailureRestoresOld(t *testing.T) {
 	fix := failingCopyRename(t)
 
 	source := discovery.NewGlobalSource(global)
-	if err := runModulesUpdate(&bytes.Buffer{}, source, cache, []string{"qr"}); err == nil {
+	if err := runModulesUpdate(&bytes.Buffer{}, nil, source, cache, []string{"qr"}); err == nil {
 		t.Fatal("update must fail when the copy fails")
 	}
 
@@ -170,7 +170,7 @@ func TestRunModulesUpdateCopyFailureRestoresOld(t *testing.T) {
 	// Повторный update после «исправления» (перенос работает) проходит.
 	fix()
 	var b bytes.Buffer
-	if err := runModulesUpdate(&b, source, cache, []string{"qr"}); err != nil {
+	if err := runModulesUpdate(&b, nil, source, cache, []string{"qr"}); err != nil {
 		t.Fatalf("repeated update: %v", err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dest, "config.yaml"))
@@ -202,7 +202,7 @@ func TestRunModulesUpdateRollbackFailureNamesBackup(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	dest := filepath.Join(global, "qr")
@@ -219,7 +219,7 @@ func TestRunModulesUpdateRollbackFailureNamesBackup(t *testing.T) {
 		return base(src, dst)
 	}
 
-	err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, []string{"qr"})
+	err := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"qr"})
 	if err == nil || !strings.Contains(err.Error(), "rollback failed") || !strings.Contains(err.Error(), dest+".futi-backup") {
 		t.Fatalf("want rollback failure naming backup path, got %v", err)
 	}

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +28,7 @@ var removeBackup = os.RemoveAll
 type updateArgs struct {
 	name       string
 	skipAttach bool
+	yes        bool
 }
 
 // parseUpdateArgs разбирает аргументы update.
@@ -39,6 +42,8 @@ func parseUpdateArgs(args []string) (*updateArgs, error) {
 		switch {
 		case arg == "--skip-attach":
 			cfg.skipAttach = true
+		case arg == "--yes" || arg == "-y":
+			cfg.yes = true
 		case strings.HasPrefix(arg, "--"):
 			return nil, fmt.Errorf("unknown flag: %s", arg)
 		default:
@@ -61,14 +66,16 @@ func parseUpdateArgs(args []string) (*updateArgs, error) {
 
 // runModulesUpdate переустанавливает модуль(ы) из источника (спека §5.3).
 // Без имени — обновляет все установленные модули (serial, MVP).
-func runModulesUpdate(w io.Writer, source discovery.Source, cache *modulecache.Cache, args []string) error {
+// stdin — для подтверждения attach-хуков (os.Stdin из main).
+func runModulesUpdate(w io.Writer, stdin io.Reader, source discovery.Source, cache *modulecache.Cache, args []string) error {
 	cfg, err := parseUpdateArgs(args)
 	if err != nil {
 		return err
 	}
 
+	gate := attachGate{in: bufio.NewReader(stdin), skip: cfg.skipAttach, yes: cfg.yes}
 	if cfg.name != "" {
-		return updateOne(w, source, cache, cfg.name, cfg.skipAttach)
+		return updateOne(w, gate, source, cache, cfg.name)
 	}
 
 	roots, err := moduleRoots()
@@ -98,7 +105,7 @@ func runModulesUpdate(w io.Writer, source discovery.Source, cache *modulecache.C
 		}
 		// Обновляем именно найденный каталог, а не то, что отдаст Resolve по имени.
 		manifestPath := filepath.Join(e.Dir, "config.yaml")
-		if err := updateAt(w, cache, e.Name, label, e.Dir, manifestPath, cfg.skipAttach); err != nil {
+		if err := updateAt(w, gate, cache, e.Name, label, e.Dir, manifestPath); err != nil {
 			// Прерывание печатает main возвращённой ошибкой — здесь не дублируем.
 			if _, interrupted := interruptSignal(err); interrupted {
 				return fmt.Errorf("update %s interrupted: %w", label, err)
@@ -114,12 +121,12 @@ func runModulesUpdate(w io.Writer, source discovery.Source, cache *modulecache.C
 }
 
 // updateOne обновляет один модуль (спека §5.3).
-func updateOne(w io.Writer, source discovery.Source, cache *modulecache.Cache, name string, skipAttach bool) error {
+func updateOne(w io.Writer, gate attachGate, source discovery.Source, cache *modulecache.Cache, name string) error {
 	manifestPath, moduleRoot, err := source.Resolve(name)
 	if err != nil {
 		return fmt.Errorf("resolve: %w%s", err, backupHint(name))
 	}
-	return updateAt(w, cache, name, name, moduleRoot, manifestPath, skipAttach)
+	return updateAt(w, gate, cache, name, name, moduleRoot, manifestPath)
 }
 
 // backupHint возвращает подсказку про оставшийся backup модуля name в одном из
@@ -140,8 +147,9 @@ func backupHint(name string) string {
 }
 
 // updateAt обновляет модуль в конкретном каталоге moduleRoot. name — имя для
-// хука attach, label — подпись в сообщениях (имя или имя с путём).
-func updateAt(w io.Writer, cache *modulecache.Cache, name, label, moduleRoot, manifestPath string, skipAttach bool) error {
+// хука attach, label — подпись в сообщениях (имя или имя с путём); gate
+// решает, запускать ли хук.
+func updateAt(w io.Writer, gate attachGate, cache *modulecache.Cache, name, label, moduleRoot, manifestPath string) error {
 	if filepath.Base(manifestPath) != "config.yaml" {
 		return fmt.Errorf("not a package module (updates require config.yaml packages)")
 	}
@@ -202,6 +210,15 @@ func updateAt(w io.Writer, cache *modulecache.Cache, name, label, moduleRoot, ma
 		return nil
 	}
 
+	// Подтверждение attach — до замены дерева: отказ оставляет модуль как был.
+	runAttach, err := gate.allow(mod.Attach, name, moduleRoot)
+	if errors.Is(err, errAttachNotConfirmed) {
+		return fmt.Errorf("%w; module not updated", err)
+	}
+	if err != nil {
+		return err
+	}
+
 	// Замена дерева: dest → backup, new → dest; при провале — восстановление.
 	if err := os.Rename(moduleRoot, backup); err != nil {
 		return fmt.Errorf("backup old tree: %w", err)
@@ -239,7 +256,7 @@ func updateAt(w io.Writer, cache *modulecache.Cache, name, label, moduleRoot, ma
 	// attach: провал → warn, НЕ rollback (§3.1, §5.3 шаг 7).
 	// Прерывание сигналом возвращаем после Invalidate: дерево уже заменено.
 	var interruptErr error
-	if mod.Attach != "" && !skipAttach {
+	if runAttach {
 		if err := modulerunner.RunHook(context.Background(), mod.Attach, moduleRoot, name, os.Stdout, os.Stderr); err != nil {
 			if _, interrupted := interruptSignal(err); interrupted {
 				interruptErr = fmt.Errorf("attach interrupted: %w", err)

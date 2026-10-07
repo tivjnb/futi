@@ -164,7 +164,7 @@ func TestRunModulesUpdateRejectsHTTPSource(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	metaPath := filepath.Join(global, "qr", metayaml.FileName)
@@ -178,7 +178,7 @@ func TestRunModulesUpdateRejectsHTTPSource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, []string{"qr"})
+	err = runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"qr"})
 	if err == nil || !strings.Contains(err.Error(), "only https:// is supported") {
 		t.Fatalf("err = %v, want https error", err)
 	}

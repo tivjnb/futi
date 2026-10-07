@@ -362,7 +362,17 @@ func TestCompleteModulesInstallFlags(t *testing.T) {
 	src := newTestSource(t)
 	matches, _ := Complete(src, nil, []string{"modules", "install"}, "--")
 	got := text(matches)
-	want := []string{"--from-archive", "--from-git", "--from-local", "--local", "--namespace", "--ref", "--skip-attach"}
+	want := []string{"--from-archive", "--from-git", "--from-local", "--local", "--namespace", "--ref", "--skip-attach", "--yes"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected matches: %v, want %v", got, want)
+	}
+}
+
+func TestCompleteModulesUpdateFlags(t *testing.T) {
+	src := newTestSource(t)
+	matches, _ := Complete(src, nil, []string{"modules", "update"}, "--")
+	got := text(matches)
+	want := []string{"--skip-attach", "--yes"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected matches: %v, want %v", got, want)
 	}
@@ -662,7 +672,7 @@ func TestCompleteModulesFlagsAfterPositional(t *testing.T) {
 	// Случай 1: modules install с URL
 	matches, _ := Complete(src, nil, []string{"modules", "install", "https://x/repo.git"}, "--")
 	got := text(matches)
-	want := []string{"--from-archive", "--from-git", "--from-local", "--local", "--namespace", "--ref", "--skip-attach"}
+	want := []string{"--from-archive", "--from-git", "--from-local", "--local", "--namespace", "--ref", "--skip-attach", "--yes"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("install with URL: got %v, want %v", got, want)
 	}
@@ -678,7 +688,7 @@ func TestCompleteModulesFlagsAfterPositional(t *testing.T) {
 	// Случай 3: modules install с --ref перед URL (флаг уже введён)
 	matches, _ = Complete(src, nil, []string{"modules", "install", "--ref", "v1", "https://x/repo.git"}, "--")
 	got = text(matches)
-	want = []string{"--from-archive", "--from-git", "--from-local", "--local", "--namespace", "--skip-attach"}
+	want = []string{"--from-archive", "--from-git", "--from-local", "--local", "--namespace", "--skip-attach", "--yes"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("install with --ref before URL: got %v, want %v", got, want)
 	}
@@ -686,7 +696,7 @@ func TestCompleteModulesFlagsAfterPositional(t *testing.T) {
 	// Случай 4: modules install с URL и --ref после (флаг уже введён)
 	matches, _ = Complete(src, nil, []string{"modules", "install", "https://x/repo.git", "--ref", "v1"}, "--")
 	got = text(matches)
-	want = []string{"--from-archive", "--from-git", "--from-local", "--local", "--namespace", "--skip-attach"}
+	want = []string{"--from-archive", "--from-git", "--from-local", "--local", "--namespace", "--skip-attach", "--yes"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("install with --ref after URL: got %v, want %v", got, want)
 	}

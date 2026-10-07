@@ -748,6 +748,12 @@ MODULES
   --from-local/--from-git/--from-archive
                                    Force source type detection
   --skip-attach                    Skip the attach: hook
+  --yes, -y                        Run the attach: hook without asking
+                                   (it asks for confirmation otherwise)
+
+  update flags:
+  --skip-attach                    Skip the attach: hook
+  --yes, -y                        Run the attach: hook without asking
 
   uninstall flags:
   --force                          Allow removing modules without __futi_meta.yaml

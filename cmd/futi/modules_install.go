@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,6 +25,7 @@ type installArgs struct {
 	namespace   string
 	ref         string
 	skipAttach  bool
+	yes         bool
 	fromLocal   bool
 	fromGit     bool
 	fromArchive bool
@@ -52,6 +55,8 @@ func parseInstallArgs(args []string) (*installArgs, error) {
 			cfg.local = true
 		case arg == "--skip-attach":
 			cfg.skipAttach = true
+		case arg == "--yes" || arg == "-y":
+			cfg.yes = true
 		case arg == "--from-local":
 			cfg.fromLocal = true
 		case arg == "--from-git":
@@ -126,7 +131,8 @@ func installRoot(local bool) (string, error) {
 }
 
 // runModulesInstall устанавливает модуль из источника (спека §5.1).
-func runModulesInstall(w io.Writer, cache *modulecache.Cache, args []string) error {
+// stdin — для подтверждения attach-хука (os.Stdin из main).
+func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, args []string) error {
 	cfg, err := parseInstallArgs(args)
 	if err != nil {
 		return err
@@ -203,6 +209,16 @@ func runModulesInstall(w io.Writer, cache *modulecache.Cache, args []string) err
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("modules install: destination %s escapes modules directory %s", dest, root)
 	}
+	// Подтверждение attach — до любых изменений в каталоге модулей:
+	// отказ ничего не оставляет на диске.
+	gate := attachGate{in: bufio.NewReader(stdin), skip: cfg.skipAttach, yes: cfg.yes}
+	runAttach, err := gate.allow(mod.Attach, name, dest)
+	if errors.Is(err, errAttachNotConfirmed) {
+		return fmt.Errorf("%w; module not installed", err)
+	}
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return fmt.Errorf("modules install: %w", err)
 	}
@@ -233,7 +249,7 @@ func runModulesInstall(w io.Writer, cache *modulecache.Cache, args []string) err
 	}
 
 	// attach: провал → rollback (rm dest) + error (§3.1, §8 #6).
-	if mod.Attach != "" && !cfg.skipAttach {
+	if runAttach {
 		if err := modulerunner.RunHook(context.Background(), mod.Attach, dest, name, os.Stdout, os.Stderr); err != nil {
 			os.RemoveAll(dest)
 			return fmt.Errorf("attach failed, module removed: %w", err)

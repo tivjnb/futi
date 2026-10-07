@@ -70,13 +70,13 @@ var modulesSubcommands = []string{"add_command", "info", "init", "install", "lis
 var modulesInitFlags = []string{"--command", "--default-cmd", "--desc", "--global"}
 
 // modulesInstallFlags — флаги `futi modules install`.
-var modulesInstallFlags = []string{"--from-archive", "--from-git", "--from-local", "--local", "--namespace", "--ref", "--skip-attach"}
+var modulesInstallFlags = []string{"--from-archive", "--from-git", "--from-local", "--local", "--namespace", "--ref", "--skip-attach", "--yes"}
 
 // modulesUninstallFlags — флаги `futi modules uninstall`.
 var modulesUninstallFlags = []string{"--force", "--skip-detach", "--strict-detach", "--yes"}
 
 // modulesUpdateFlags — флаги `futi modules update`.
-var modulesUpdateFlags = []string{"--skip-attach"}
+var modulesUpdateFlags = []string{"--skip-attach", "--yes"}
 
 // helpKeyword — системная команда справки, подсказывается на уровнях
 // модуля/команды/subcommand. help НЕ зарезервирован: если в модуле есть
