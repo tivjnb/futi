@@ -271,9 +271,15 @@ func TestRunModulesUninstallInterruptedDetachKeepsModule(t *testing.T) {
 func installRawModule(t *testing.T, global, body string) string {
 	t.Helper()
 	moduleDir := filepath.Join(global, "qr")
-	os.MkdirAll(moduleDir, 0o755)
-	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644)
-	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{}); err != nil {
+		t.Fatal(err)
+	}
 	return moduleDir
 }
 
