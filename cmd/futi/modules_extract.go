@@ -80,6 +80,21 @@ func (b *extractBudget) countEntry() error {
 	return nil
 }
 
+// mkdirAll создаёт каталог target и недостающие родители внутри dest,
+// списывая из бюджета каждый реально созданный каталог. Уже существующие
+// не списываются повторно.
+func (b *extractBudget) mkdirAll(dest, target string) error {
+	for d := target; d != dest && d != filepath.Dir(d); d = filepath.Dir(d) {
+		if _, err := os.Lstat(d); err == nil {
+			break
+		}
+		if err := b.countEntry(); err != nil {
+			return err
+		}
+	}
+	return os.MkdirAll(target, 0o755)
+}
+
 // writeFile создаёт regular-файл target с правами mode и копирует в него src,
 // списывая файл и фактически записанные байты из бюджета.
 func (b *extractBudget) writeFile(target string, mode os.FileMode, src io.Reader) error {
@@ -138,14 +153,11 @@ func extractTarGz(path, dest string) error {
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := b.countEntry(); err != nil {
-				return err
-			}
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := b.mkdirAll(dest, target); err != nil {
 				return err
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			if err := b.mkdirAll(dest, filepath.Dir(target)); err != nil {
 				return err
 			}
 			if err := b.writeFile(target, fileMode(os.FileMode(hdr.Mode)), tr); err != nil {
@@ -170,10 +182,7 @@ func extractZip(path, dest string) error {
 			return err
 		}
 		if zf.FileInfo().IsDir() {
-			if err := b.countEntry(); err != nil {
-				return err
-			}
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := b.mkdirAll(dest, target); err != nil {
 				return err
 			}
 			continue
@@ -182,7 +191,7 @@ func extractZip(path, dest string) error {
 		if zf.Mode().Type() != 0 {
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		if err := b.mkdirAll(dest, filepath.Dir(target)); err != nil {
 			return err
 		}
 		rc, err := zf.Open()

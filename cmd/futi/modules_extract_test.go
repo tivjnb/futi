@@ -256,3 +256,31 @@ func TestExtractLimitsCountDirectories(t *testing.T) {
 		}
 	})
 }
+
+// TestExtractLimitsCountIntermediateDirs: промежуточные каталоги пути входят в лимит
+// записей (audit F50): a/b/c/d/f = 4 каталога + файл = 5 записей.
+func TestExtractLimitsCountIntermediateDirs(t *testing.T) {
+	builders := map[string]func(t *testing.T) string{
+		"tar": func(t *testing.T) string { return buildTarGz(t, []tarEntry{{"a/b/c/d/f", 0o644, "x"}}) },
+		"zip": func(t *testing.T) string { return buildZip(t, []zipEntry{{"a/b/c/d/f", 0o644, "x"}}) },
+	}
+	cases := []struct {
+		name     string
+		maxFiles int
+		wantErr  error
+	}{
+		{"over limit", 4, errExtractTooManyFiles},
+		{"at limit", 5, nil},
+	}
+	for format, build := range builders {
+		for _, tc := range cases {
+			t.Run(format+"/"+tc.name, func(t *testing.T) {
+				setExtractLimits(t, 1000, tc.maxFiles)
+				err := extractArchive(build(t), t.TempDir())
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("extractArchive err = %v, want %v", err, tc.wantErr)
+				}
+			})
+		}
+	}
+}
