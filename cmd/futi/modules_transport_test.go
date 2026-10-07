@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -95,6 +94,9 @@ func TestFetchSourceRejectsLeadingDash(t *testing.T) {
 	if a := readArgv(t, bin, "git"); a != nil {
 		t.Errorf("git must not run, argv = %q", a)
 	}
+	if a := readArgv(t, bin, "curl"); a != nil {
+		t.Errorf("curl must not run, argv = %q", a)
+	}
 }
 
 func TestFetchSourceRejectsHTTP(t *testing.T) {
@@ -106,6 +108,8 @@ func TestFetchSourceRejectsHTTP(t *testing.T) {
 		{"http://e.com/m.tar.gz", kindArchive},
 		{"http://e.com/r.git", kindGit},
 		{"HTTP://e.com/r.git", kindGit},
+		{"git://e.com/r.git", kindGit},
+		{"GIT://e.com/r.git", kindGit},
 	}
 	for _, tc := range cases {
 		_, _, err := fetchSource(context.Background(), tc.src, tc.kind, "", t.TempDir())
@@ -141,17 +145,14 @@ func TestParseInstallArgsRejectsRefWithLeadingDash(t *testing.T) {
 }
 
 func TestFetchArchiveEnforcesSizeLimit(t *testing.T) {
-	fakeBin(t, map[string]string{"curl": "head -c 100 /dev/zero"})
+	fakeBin(t, map[string]string{"curl": "head -c 1000000 /dev/zero"})
 	old := downloadLimit
 	downloadLimit = 10
 	t.Cleanup(func() { downloadLimit = old })
 
 	_, err := fetchArchive(context.Background(), "https://example.com/m.tar.gz", t.TempDir())
-	if !errors.Is(err, errDownloadTooLarge) {
-		t.Fatalf("err = %v, want errDownloadTooLarge", err)
-	}
-	if !strings.HasPrefix(err.Error(), "download archive: exceeds 100 MiB limit") {
-		t.Fatalf("err = %q, want prefix \"download archive: exceeds 100 MiB limit\"", err)
+	if err == nil || err.Error() != "download archive: exceeds 100 MiB limit" {
+		t.Fatalf("err = %v, want \"download archive: exceeds 100 MiB limit\"", err)
 	}
 }
 

@@ -29,12 +29,14 @@ var errDownloadTooLarge = errors.New("exceeds 100 MiB limit")
 // limitWriter пишет в w не больше left байт, дальше возвращает errDownloadTooLarge
 // (curl --max-filesize не срабатывает на ответ без Content-Length).
 type limitWriter struct {
-	w    io.Writer
-	left int64
+	w        io.Writer
+	left     int64
+	exceeded bool // exec.Cmd.Wait отбрасывает ошибку копирования при ненулевом выходе curl
 }
 
 func (l *limitWriter) Write(p []byte) (int, error) {
 	if int64(len(p)) > l.left {
+		l.exceeded = true
 		return 0, errDownloadTooLarge
 	}
 	l.left -= int64(len(p))
@@ -42,7 +44,7 @@ func (l *limitWriter) Write(p []byte) (int, error) {
 }
 
 // checkTransportSource отвергает опасные значения source/ref до запуска
-// git/curl: ведущий "-" (читался бы как опция) и незащищённый http://.
+// git/curl: ведущий "-" (читался бы как опция) и незащищённые http://, git://.
 func checkTransportSource(src string, kind sourceKind, ref string) error {
 	if strings.HasPrefix(src, "-") {
 		return fmt.Errorf("source %q must not start with \"-\"", src)
@@ -50,8 +52,13 @@ func checkTransportSource(src string, kind sourceKind, ref string) error {
 	if strings.HasPrefix(ref, "-") {
 		return fmt.Errorf("ref %q must not start with \"-\"", ref)
 	}
-	if (kind == kindGit || kind == kindArchive) && strings.HasPrefix(strings.ToLower(src), "http://") {
-		return fmt.Errorf("insecure http:// source %q: only https:// is supported; download it manually and install from a local path", src)
+	if kind == kindGit || kind == kindArchive {
+		lower := strings.ToLower(src)
+		for _, scheme := range []string{"http://", "git://"} {
+			if strings.HasPrefix(lower, scheme) {
+				return fmt.Errorf("insecure %s source %q: only https:// is supported; download it manually and install from a local path", scheme, src)
+			}
+		}
 	}
 	return nil
 }
@@ -103,14 +110,15 @@ func fetchArchive(ctx context.Context, url, tempBase string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cfg := executor.NewConfig().WithStdout(&limitWriter{w: f, left: downloadLimit})
+	lw := &limitWriter{w: f, left: downloadLimit}
+	cfg := executor.NewConfig().WithStdout(lw)
 	err = executor.RunWithConfig(ctx, cfg, "curl",
 		"-fsSL", "--proto", "=https", "--proto-redir", "=https",
 		"--max-filesize", strconv.FormatInt(maxDownloadBytes, 10),
 		"--max-time", strconv.Itoa(int(downloadTimeout/time.Second)),
 		"--", url)
 	f.Close()
-	if errors.Is(err, errDownloadTooLarge) {
+	if lw.exceeded {
 		// Без обёртки executor: сообщение должно быть коротким и понятным.
 		return "", fmt.Errorf("download archive: %w", errDownloadTooLarge)
 	}
