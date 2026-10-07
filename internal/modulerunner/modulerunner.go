@@ -8,9 +8,9 @@ import (
 	"os"
 	"strings"
 
-	"futi/internal/discovery"
-	"futi/internal/execmodule"
-	"futi/internal/executor"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/executor"
 
 	"github.com/google/shlex"
 )

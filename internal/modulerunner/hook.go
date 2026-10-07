@@ -10,8 +10,8 @@ import (
 	"strings"
 	"text/template"
 
-	"futi/internal/execmodule"
-	"futi/internal/executor"
+	"github.com/tivjnb/futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/executor"
 )
 
 // RunHook рендерит и выполняет hook-команду модуля (attach:/detach:,

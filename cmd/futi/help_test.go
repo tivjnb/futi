@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/discovery"
 )
 
 // helpTestSource создаёт GlobalSource с модулями для тестов help:

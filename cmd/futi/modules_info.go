@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"futi/internal/discovery"
-	"futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/metayaml"
 )
 
 // runModulesPath выводит каталог модуля (для скриптов).

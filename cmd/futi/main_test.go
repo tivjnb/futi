@@ -17,11 +17,11 @@ import (
 	"syscall"
 	"testing"
 
-	"futi/internal/config"
-	"futi/internal/discovery"
-	"futi/internal/execmodule"
-	"futi/internal/executor"
-	"futi/internal/modulecache"
+	"github.com/tivjnb/futi/internal/config"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/executor"
+	"github.com/tivjnb/futi/internal/modulecache"
 )
 
 var (

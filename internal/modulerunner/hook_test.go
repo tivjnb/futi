@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"futi/internal/testutil"
+	"github.com/tivjnb/futi/internal/testutil"
 )
 
 func TestRunHookRunsInModuleRoot(t *testing.T) {

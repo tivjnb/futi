@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"futi/internal/config"
+	"github.com/tivjnb/futi/internal/config"
 )
 
 func TestCompositeResolveFromMountpoint(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"futi/internal/executor"
+	"github.com/tivjnb/futi/internal/executor"
 )
 
 // makeTarGz собирает .tar.gz из map rel→content. Возвращает путь.

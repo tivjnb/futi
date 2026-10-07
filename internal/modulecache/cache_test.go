@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"futi/internal/discovery"
-	"futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/execmodule"
 )
 
 // Сентинельные ошибки для тестов обработки ошибок.

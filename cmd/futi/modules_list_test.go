@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/metayaml"
 )
 
 func TestScanInstalledFindsModulesWithMeta(t *testing.T) {

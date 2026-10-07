@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"futi/internal/discovery"
-	"futi/internal/modulecache"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/modulecache"
 )
 
 func writeFile(t *testing.T, path, content string) {

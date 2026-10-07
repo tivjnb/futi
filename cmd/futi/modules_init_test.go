@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"futi/internal/discovery"
-	"futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/execmodule"
 )
 
 // TestRunInitCreatesLocalFile проверяет, что futi init mytool создаёт

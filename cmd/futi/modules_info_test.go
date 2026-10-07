@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"futi/internal/discovery"
-	"futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/metayaml"
 )
 
 // installFixtureModule создаёт в dir пакет модуля name с config.yaml и

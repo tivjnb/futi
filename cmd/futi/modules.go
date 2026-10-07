@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"io"
 
-	"futi/internal/discovery"
-	"futi/internal/modulecache"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/modulecache"
 )
 
 // runModules — диспетчер `futi modules <subcommand> [...]`.

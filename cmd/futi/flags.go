@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/execmodule"
 )
 
 // bindFlags привязывает сырые флаги (всё между путём и `--`) к параметрам

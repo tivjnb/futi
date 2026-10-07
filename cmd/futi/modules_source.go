@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/metayaml"
 )
 
 // sourceKind — тип источника модуля (спека §6).

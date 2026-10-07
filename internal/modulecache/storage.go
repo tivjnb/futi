@@ -6,7 +6,7 @@ package modulecache
 import (
 	"time"
 
-	"futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/execmodule"
 )
 
 // entry — одна запись кэша: модуль + метаданные для инвалидации.

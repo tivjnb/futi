@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"futi/internal/discovery"
-	"futi/internal/execmodule"
-	"futi/internal/modulecache"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/modulecache"
 )
 
 // stubLoader — тестовый загрузчик модулей, который возвращает

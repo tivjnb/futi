@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"futi/internal/discovery"
-	"futi/internal/metayaml"
-	"futi/internal/modulecache"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/modulecache"
 )
 
 // makeSourceModule создаёт каталог модуля-источника в temp-каталоге.

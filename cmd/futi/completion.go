@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"futi/internal/completion"
-	"futi/internal/config"
-	"futi/internal/discovery"
-	"futi/internal/modulecache"
-	"futi/internal/modulerunner"
+	"github.com/tivjnb/futi/internal/completion"
+	"github.com/tivjnb/futi/internal/config"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/modulecache"
+	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
 const (

@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"futi/internal/testutil"
+	"github.com/tivjnb/futi/internal/testutil"
 )
 
 // signalChildEnv возвращает окружение с путями маркеров MARK и READY.

@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"futi/internal/config"
-	"futi/internal/execmodule"
-	"futi/internal/metayaml"
-	"futi/internal/modulecache"
-	"futi/internal/modulerunner"
+	"github.com/tivjnb/futi/internal/config"
+	"github.com/tivjnb/futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/modulecache"
+	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
 // installArgs — аргументы `futi modules install`.
