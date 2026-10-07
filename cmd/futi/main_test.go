@@ -1062,45 +1062,125 @@ func TestCreateSourceReturnsLayeredSourceWhenLocalPresent(t *testing.T) {
 
 // --- Шаг 4: futi validate ---
 
-// TestParseArgsValidateReserved проверяет, что "validate" как последний
-// позиционный аргумент резолвится как *validateRequest.
-func TestParseArgsValidateReserved(t *testing.T) {
-	args := []string{"docker", "validate"}
-	_, err := parseArgs(args)
-	var req *validateRequest
-	if !errors.As(err, &req) {
-		t.Fatalf("expected *validateRequest, got: %v", err)
+// TestParseArgsValidateIsOrdinaryCommand проверяет, что "validate" больше не
+// системное слово: путь разбирается как обычная команда (audit F81).
+func TestParseArgsValidateIsOrdinaryCommand(t *testing.T) {
+	cases := []struct {
+		args        []string
+		ns, command string
+	}{
+		{[]string{"dev", "validate"}, "dev", "validate"},
+		{[]string{"dev", "deploy", "validate"}, "dev.deploy", "validate"},
+		{[]string{"validate"}, "validate", ""},
 	}
-	if req.namespace != "docker" {
-		t.Fatalf("unexpected namespace: %q", req.namespace)
+	for _, c := range cases {
+		pa, err := parseArgs(c.args)
+		if err != nil {
+			t.Fatalf("parseArgs(%v): %v", c.args, err)
+		}
+		if pa.namespace != c.ns || pa.command != c.command {
+			t.Errorf("parseArgs(%v) = ns %q cmd %q, want ns %q cmd %q", c.args, pa.namespace, pa.command, c.ns, c.command)
+		}
 	}
-}
-
-// TestParseArgsValidateWithNestedNamespace проверяет, что "validate"
-// работает с вложенными namespace.
-func TestParseArgsValidateWithNestedNamespace(t *testing.T) {
-	args := []string{"dev", "deploy", "validate"}
-	_, err := parseArgs(args)
-	var req *validateRequest
-	if !errors.As(err, &req) {
-		t.Fatalf("expected *validateRequest, got: %v", err)
-	}
-	if req.namespace != "dev.deploy" {
-		t.Fatalf("unexpected namespace: %q", req.namespace)
+	pa, err := parseArgs([]string{"docker", "validate", "--verbose"})
+	if err != nil || len(pa.flags) != 1 || pa.flags[0] != "--verbose" {
+		t.Fatalf("validate с флагом: pa=%+v err=%v, want обычный флаг", pa, err)
 	}
 }
 
-// TestParseArgsValidateWithoutNamespace проверяет, что "validate" без
-// namespace возвращает ошибку (validate требует модуль).
-func TestParseArgsValidateWithoutNamespace(t *testing.T) {
-	args := []string{"validate"}
-	_, err := parseArgs(args)
-	if err == nil {
-		t.Fatal("expected error for validate without namespace, got nil")
+// TestModulesValidate проверяет подкоманду `modules validate <ns>`.
+func TestModulesValidate(t *testing.T) {
+	dir := t.TempDir()
+	writeMainTestFile(t, filepath.Join(dir, "good.yaml"), "name: good\ncommands:\n  ps:\n    cmd: \"echo ps\"\n")
+	writeMainTestFile(t, filepath.Join(dir, "bad.yaml"), "name: bad\ncommands:\n  empty: {}\n")
+	source := discovery.NewGlobalSource(dir)
+
+	var buf bytes.Buffer
+	if err := runModules(&buf, nil, source, nil, []string{"validate", "good"}); err != nil {
+		t.Fatalf("good: %v", err)
 	}
-	var req *validateRequest
-	if errors.As(err, &req) {
-		t.Fatalf("expected plain error (not validateRequest) for validate without namespace, got: %v", err)
+	if !strings.Contains(buf.String(), "OK") {
+		t.Errorf("good: want OK, got %q", buf.String())
+	}
+
+	buf.Reset()
+	err := runModules(&buf, nil, source, nil, []string{"validate", "bad"})
+	if err == nil || !strings.Contains(buf.String(), "ERROR") {
+		t.Errorf("bad: err=%v out=%q, want ERROR report and error", err, buf.String())
+	}
+
+	const usage = "usage: futi modules validate <namespace>"
+	for _, args := range [][]string{
+		{"validate"}, {"validate", "a", "b"}, {"validate", "-h"}, {"validate", "--help"}, {"validate", "good", "--x"},
+	} {
+		err := runModules(io.Discard, nil, source, nil, args)
+		if err == nil || err.Error() != usage {
+			t.Errorf("%v: err = %v, want %q", args, err, usage)
+		}
+	}
+
+	if err := runModules(io.Discard, nil, source, nil, []string{"validate", "a/b"}); err == nil || !strings.Contains(err.Error(), "invalid module name") {
+		t.Errorf("a/b: err = %v, want invalid module name", err)
+	}
+}
+
+const validateHintManifest = `
+name: m
+commands:
+  ps:
+    cmd: "echo ps"
+`
+
+// TestOldValidateSyntaxHint: старый синтаксис не находит команду validate и
+// получает подсказку про `modules validate`.
+func TestOldValidateSyntaxHint(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"m", "validate"}, "hint: use 'futi modules validate m'"},
+		{[]string{"validate"}, "hint: use 'futi modules validate <namespace>'"},
+		{[]string{"nomod", "validate"}, "hint: use 'futi modules validate <namespace>'"},
+		{[]string{"m", "ps", "validate"}, "hint: use 'futi modules validate <namespace>'"},
+		{[]string{"m", "validate", "-h"}, "hint: use 'futi modules validate m'"},
+		{[]string{"m", "validate", "help"}, "hint: use 'futi modules validate m'"},
+		{[]string{"validate", "-h"}, "hint: use 'futi modules validate <namespace>'"},
+	}
+	for _, c := range cases {
+		_, stderr, code := runFutiBin(t, validateHintManifest, c.args...)
+		if code == 0 || !strings.Contains(stderr, c.want) {
+			t.Errorf("%v: code=%d stderr=%q, want hint %q", c.args, code, stderr, c.want)
+		}
+	}
+	// Обычная ошибка без validate подсказки не получает.
+	_, stderr, _ := runFutiBin(t, validateHintManifest, "m", "nope")
+	if strings.Contains(stderr, "hint:") {
+		t.Errorf("m nope: unexpected hint in %q", stderr)
+	}
+}
+
+// TestOldValidateSyntaxHintNamespaceDir: каталог-namespace не модуль, поэтому
+// подсказка общая, без несуществующего модуля.
+func TestOldValidateSyntaxHintNamespaceDir(t *testing.T) {
+	mods := t.TempDir()
+	writeFile(t, filepath.Join(mods, "dev", "x.yaml"), "name: x\ncmd: \"echo x\"\n")
+	_, stderr, code := runFutiBinary(t, mods, "dev", "validate")
+	want := "hint: use 'futi modules validate <namespace>'"
+	if code == 0 || !strings.Contains(stderr, want) {
+		t.Errorf("code=%d stderr=%q, want hint %q", code, stderr, want)
+	}
+}
+
+// TestUserValidateCommandRuns: пользовательская команда validate исполняется,
+// её ошибка исполнения подсказки не получает.
+func TestUserValidateCommandRuns(t *testing.T) {
+	stdout, _, code := runFutiBin(t, "name: m\ncommands:\n  validate:\n    cmd: \"echo user-validate\"\n", "m", "validate")
+	if code != 0 || !strings.Contains(stdout, "user-validate") {
+		t.Fatalf("code=%d stdout=%q, want user-validate", code, stdout)
+	}
+	_, stderr, code := runFutiBin(t, "name: m\ncommands:\n  validate:\n    cmd: \"false\"\n", "m", "validate")
+	if code == 0 || strings.Contains(stderr, "hint:") {
+		t.Fatalf("code=%d stderr=%q, want failure without hint", code, stderr)
 	}
 }
 
@@ -2057,16 +2137,6 @@ func TestParseArgsListFlags(t *testing.T) {
 	}
 }
 
-func TestParseArgsValidateFlags(t *testing.T) {
-	_, err := parseArgs([]string{"docker", "validate", "-v"})
-	if err == nil || err.Error() != `validate: unknown flag "-v"` {
-		t.Fatalf("err = %v, want validate: unknown flag", err)
-	}
-	if _, err = parseArgs([]string{"docker", "validate", "--help"}); !errors.Is(err, errHelp) {
-		t.Fatalf("validate --help err = %v, want errHelp", err)
-	}
-}
-
 func TestParseArgsHelpRequestIgnoresFlags(t *testing.T) {
 	_, err := parseArgs([]string{"docker", "help", "--x"})
 	var req *helpRequest
@@ -2197,10 +2267,13 @@ func TestFutiUnknownParamStillRejectedByValidate(t *testing.T) {
 	}
 }
 
-func TestParseArgsValidateHelpWithoutNamespace(t *testing.T) {
+// validate больше не системное слово: -h после него — обычный флаг справки
+// по пути (а не errHelp общего usage).
+func TestParseArgsValidateHelpFlagIsOrdinary(t *testing.T) {
 	for _, flag := range []string{"-h", "--help"} {
-		if _, err := parseArgs([]string{"validate", flag}); !errors.Is(err, errHelp) {
-			t.Fatalf("validate %s err = %v, want errHelp", flag, err)
+		pa, err := parseArgs([]string{"validate", flag})
+		if err != nil || pa.namespace != "validate" || len(pa.flags) != 1 || pa.flags[0] != flag {
+			t.Fatalf("validate %s: pa=%+v err=%v, want обычный путь с флагом", flag, pa, err)
 		}
 	}
 }
@@ -2217,11 +2290,10 @@ func TestFutiUnknownParamSameMessageBothForms(t *testing.T) {
 	}
 }
 
-func TestFutiValidateHelpFlag(t *testing.T) {
-	out, errOut, code := runFutiBin(t, strictOrderManifest, "validate", "-h")
-	// Общий usage печатается в stderr (как у `futi -h`).
-	if code != 0 || out != "" || !strings.Contains(errOut, "USAGE") {
-		t.Fatalf("code=%d out=%q stderr=%.80q, want 0 and usage in stderr", code, out, errOut)
+func TestFutiModulesValidateHelpFlag(t *testing.T) {
+	out, errOut, code := runFutiBin(t, strictOrderManifest, "modules", "validate", "-h")
+	if code != 1 || out != "" || !strings.Contains(errOut, "usage: futi modules validate <namespace>") {
+		t.Fatalf("code=%d out=%q stderr=%q, want 1 and modules validate usage", code, out, errOut)
 	}
 }
 

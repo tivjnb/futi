@@ -484,17 +484,6 @@ func TestRunInitReservedNameList(t *testing.T) {
 	}
 }
 
-// TestRunInitReservedNameValidate проверяет, что futi init validate возвращает ошибку.
-func TestRunInitReservedNameValidate(t *testing.T) {
-	t.Chdir(t.TempDir())
-
-	var buf bytes.Buffer
-	err := runModulesInit(&buf, []string{"validate"})
-	if err == nil {
-		t.Fatal("expected error for reserved name 'validate'")
-	}
-}
-
 // TestRunInitReservedNameCache проверяет, что futi init cache возвращает ошибку.
 func TestRunInitReservedNameCache(t *testing.T) {
 	t.Chdir(t.TempDir())
@@ -540,38 +529,28 @@ func TestRunInitThroughSymlinkShowsResolvedPath(t *testing.T) {
 	}
 }
 
-// TestRunInitReservedNames проверяет, что ВСЕ зарезервированные имена
-// отклоняются (REV-008: раньше completion/__complete отсутствовали в списке —
-// futi init completion молча создавал модуль, который никогда не вызовется:
-// fast-path main.go перехватывает completion до резолва модулей).
-func TestRunInitReservedNames(t *testing.T) {
-	reserved := []string{"list", "validate", "cache", "modules", "completion", "__complete"}
-	for _, name := range reserved {
-		t.Run(name, func(t *testing.T) {
+// F57: зарезервированное слово запрещено в любом сегменте пути, а не только
+// в basename; validate и help зарезервированными не являются.
+func TestRunInitReservedSegments(t *testing.T) {
+	for _, arg := range []string{"list", "cache", "modules", "completion", "__complete", "cache/tool", "a/list", "a/list.yaml", "a/list.yml", "a/modules/b"} {
+		t.Run("reject/"+arg, func(t *testing.T) {
 			t.Chdir(t.TempDir())
-			var buf bytes.Buffer
-			err := runModulesInit(&buf, []string{name})
-			if err == nil {
-				t.Fatalf("expected error for reserved name %q", name)
+			err := runModulesInit(&bytes.Buffer{}, []string{arg})
+			if err == nil || !strings.Contains(err.Error(), "is a reserved name") {
+				t.Fatalf("init %q: expected reserved name error, got %v", arg, err)
 			}
-			if !strings.Contains(err.Error(), "reserved") {
-				t.Fatalf("error should mention reserved: %v", err)
+			if _, statErr := os.Stat(".futi"); statErr == nil {
+				t.Fatal(".futi must not be created")
 			}
 		})
 	}
-
-	// Проверка того же через canonical-список (защита от рассинхрона
-	// теста и реализации).
-	for name := range reservedModuleNames {
-		found := false
-		for _, r := range reserved {
-			if r == name {
-				found = true
+	for _, arg := range []string{"a/validate", "tools/help", "validate"} {
+		t.Run("accept/"+arg, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			if err := runModulesInit(&bytes.Buffer{}, []string{arg}); err != nil {
+				t.Fatalf("init %q: unexpected error %v", arg, err)
 			}
-		}
-		if !found {
-			t.Fatalf("reservedModuleNames contains %q not covered by test", name)
-		}
+		})
 	}
 }
 

@@ -147,6 +147,9 @@ func ResolveCommand(source discovery.Source, loader ModuleLoader, namespace, com
 	return r.cmd, nil
 }
 
+// ErrModuleNotFound — ни один префикс пути не резолвится в модуль.
+var ErrModuleNotFound = errors.New("module not found")
+
 // resolveCommand — общий progressive resolution для Run и ResolveCommand:
 // пробует резолвить модуль от длиннейшего namespace к коротчайшему, остаток =
 // command path. Модуль грузится через LoadModuleVerified.
@@ -207,7 +210,7 @@ func resolveCommand(
 		return &resolvedCommand{cmd: cmd, mod: mod, moduleRoot: moduleRoot}, nil
 	}
 
-	return nil, fmt.Errorf("modulerunner: module not found for %v", positional)
+	return nil, fmt.Errorf("modulerunner: %w for %v", ErrModuleNotFound, positional)
 }
 
 // CommandInfo описывает команду модуля для листинга.

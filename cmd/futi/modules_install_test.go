@@ -316,3 +316,81 @@ func TestRunModulesInstallDottedFallbackNameHint(t *testing.T) {
 		t.Fatalf("expected error with name: hint, got %v", err)
 	}
 }
+
+// F57: зарезервированное слово в namespace или в имени модуля отвергается
+// до создания чего-либо в каталоге модулей.
+func TestRunModulesInstallReservedSegments(t *testing.T) {
+	cases := []struct {
+		name string
+		args func(src string) []string
+		mod  string
+	}{
+		{"namespace cache", func(src string) []string { return []string{src, "--namespace", "cache"} }, "qr"},
+		{"namespace a.list", func(src string) []string { return []string{src, "--namespace", "a.list"} }, "qr"},
+		{"namespace a/list", func(src string) []string { return []string{src, "--namespace", "a/list"} }, "qr"},
+		{"manifest name completion", func(src string) []string { return []string{src} }, "completion"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			global := t.TempDir()
+			t.Setenv("FUTI_MODULES_DIR", global)
+			t.Chdir(t.TempDir())
+			src := makeSourceModule(t, t.TempDir(), tc.mod, "")
+			err := runModulesInstall(&bytes.Buffer{}, newTestCache(), tc.args(src))
+			if err == nil || !strings.Contains(err.Error(), "is a reserved name") {
+				t.Fatalf("expected reserved name error, got %v", err)
+			}
+			entries, _ := os.ReadDir(global)
+			if len(entries) != 0 {
+				t.Fatalf("modules dir must stay empty, got %v", entries)
+			}
+		})
+	}
+}
+
+// F57: имя модуля берётся из имени каталога источника (name: нет в манифесте).
+func TestRunModulesInstallReservedFallbackName(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+	src := filepath.Join(t.TempDir(), "list")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "config.yaml"), []byte("commands:\n  run:\n    cmd: echo run\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src})
+	if err == nil || !strings.Contains(err.Error(), "is a reserved name") {
+		t.Fatalf("expected reserved name error, got %v", err)
+	}
+	if entries, _ := os.ReadDir(global); len(entries) != 0 {
+		t.Fatalf("modules dir must stay empty, got %v", entries)
+	}
+}
+
+// F57: --local с зарезервированным сегментом namespace не создаёт .futi.
+func TestRunModulesInstallLocalReservedNamespace(t *testing.T) {
+	t.Chdir(t.TempDir())
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src, "--local", "--namespace", "x.modules"})
+	if err == nil || !strings.Contains(err.Error(), "is a reserved name") {
+		t.Fatalf("expected reserved name error, got %v", err)
+	}
+	if _, statErr := os.Stat(".futi"); statErr == nil {
+		t.Fatal(".futi must not be created")
+	}
+}
+
+func TestRunModulesInstallNonReservedNamespaceOK(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	if err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src, "--namespace", "validate.help"}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(global, "validate", "help", "qr", "config.yaml")); err != nil {
+		t.Fatalf("module not installed: %v", err)
+	}
+}

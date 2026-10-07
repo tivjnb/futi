@@ -221,10 +221,10 @@ func TestRunCompleteSanitizesSpecialChars(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// 5 builtin (cache/completion/init/list/validate) + normal + weird + directive.
+	// 4 builtin (cache/completion/list/modules) + normal + weird + directive.
 	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	if len(lines) != 8 {
-		t.Fatalf("expected 8 lines (5 builtins + 2 modules + directive), got %d: %q", len(lines), out.String())
+	if len(lines) != 7 {
+		t.Fatalf("expected 7 lines (4 builtins + 2 modules + directive), got %d: %q", len(lines), out.String())
 	}
 	for _, ln := range lines {
 		if strings.Contains(ln, "\r") {

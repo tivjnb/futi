@@ -1,6 +1,7 @@
 package completion
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -106,7 +107,7 @@ func TestCompleteEmptyArgsRoot(t *testing.T) {
 	got := text(matches)
 
 	// builtins + корневые модули + namespace (отсортировано по алфавиту).
-	want := []string{"cache", "completion", "dev", "docker", "git", "list", "meta", "modules", "tools", "validate"}
+	want := []string{"cache", "completion", "dev", "docker", "git", "list", "meta", "modules", "tools"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected matches: %v, want %v", got, want)
 	}
@@ -348,7 +349,7 @@ func TestCompleteModulesSubcommands(t *testing.T) {
 	src := newTestSource(t)
 	matches, directive := Complete(src, nil, []string{"modules"}, "")
 	got := text(matches)
-	want := []string{"add_command", "info", "init", "install", "list", "path", "remove_command", "uninstall", "update"}
+	want := []string{"add_command", "info", "init", "install", "list", "path", "remove_command", "uninstall", "update", "validate"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected matches: %v, want %v", got, want)
 	}
@@ -714,5 +715,137 @@ func TestCompletePartialListingSuggestsReadableSources(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("подсказки %v не содержат x", text(matches))
+	}
+}
+
+func TestIsReservedName(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"list", true},
+		{"cache", true},
+		{"modules", true},
+		{"completion", true},
+		{"__complete", true},
+		{"validate", false},
+		{"help", false},
+		{"init", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := IsReservedName(tt.name); got != tt.want {
+			t.Errorf("IsReservedName(%q) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+	if len(ReservedNames) != 5 {
+		t.Errorf("ReservedNames = %v, want 5 names", ReservedNames)
+	}
+}
+
+// newReservedSource — источник с модулями, чьи имена совпадают с builtins корня.
+func newReservedSource(t *testing.T, names ...string) discovery.Source {
+	t.Helper()
+	dir := t.TempDir()
+	for _, n := range names {
+		writeFile(t, filepath.Join(dir, n+".yaml"), "name: "+n+"\ndescription: Module "+n+"\ncommands:\n  modcmd:\n    cmd: \"echo\"\n")
+	}
+	return discovery.NewGlobalSource(dir)
+}
+
+func TestCompleteBuiltinWinsOverModule(t *testing.T) {
+	src := newReservedSource(t, "cache", "modules", "completion")
+	tests := []struct {
+		arg  string
+		want []string
+	}{
+		{"cache", []string{"clear", "refresh", "status"}},
+		{"modules", []string{"add_command", "info", "init", "install", "list", "path", "remove_command", "uninstall", "update", "validate"}},
+		{"completion", []string{"bash", "fish", "zsh"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.arg, func(t *testing.T) {
+			matches, directive := Complete(src, nil, []string{tc.arg}, "")
+			if got := text(matches); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("Complete([%q]) = %v, want %v", tc.arg, got, tc.want)
+			}
+			if directive != ShellCompDirectiveNoFileComp {
+				t.Fatalf("directive = %v, want NoFileComp", directive)
+			}
+		})
+	}
+}
+
+func TestCompleteRootBuiltinNotDuplicatedByModule(t *testing.T) {
+	src := newReservedSource(t, "cache", "dev")
+	matches, _ := Complete(src, nil, []string{}, "")
+	want := []string{"cache", "completion", "dev", "list", "modules"}
+	if got := text(matches); !reflect.DeepEqual(got, want) {
+		t.Fatalf("root matches = %v, want %v", got, want)
+	}
+	for _, m := range matches {
+		if m.Text == "cache" && m.Description != "" {
+			t.Fatalf("builtin cache has module description %q", m.Description)
+		}
+	}
+}
+
+func TestCompleteListFirstWordIgnoresModule(t *testing.T) {
+	src := newReservedSource(t, "list")
+	matches, directive := Complete(src, nil, []string{"list"}, "")
+	if len(matches) != 0 {
+		t.Fatalf("Complete([list]) = %v, want empty", text(matches))
+	}
+	if directive != ShellCompDirectiveNoFileComp {
+		t.Fatalf("directive = %v, want NoFileComp", directive)
+	}
+}
+
+func TestCompleteModulesValidate(t *testing.T) {
+	src := newTestSource(t)
+	tests := []struct {
+		name       string
+		args       []string
+		toComplete string
+		want       []string
+	}{
+		{"all", []string{"modules", "validate"}, "", []string{"dev.deploy", "docker", "git", "meta"}},
+		{"prefix", []string{"modules", "validate"}, "de", []string{"dev.deploy"}},
+		{"after first argument", []string{"modules", "validate", "dev.deploy"}, "", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			matches, directive := Complete(src, nil, tc.args, tc.toComplete)
+			if got := text(matches); len(got) != len(tc.want) || (len(got) > 0 && !reflect.DeepEqual(got, tc.want)) {
+				t.Fatalf("Complete(%v, %q) = %v, want %v", tc.args, tc.toComplete, got, tc.want)
+			}
+			if directive != ShellCompDirectiveNoFileComp {
+				t.Fatalf("directive = %v, want NoFileComp", directive)
+			}
+		})
+	}
+}
+
+// partialSource — источник, чей List возвращает валидный результат вместе
+// с *discovery.PartialError (часть источников не читается).
+type partialSource struct{ discovery.Source }
+
+func (p partialSource) List() ([]discovery.ModuleInfo, error) {
+	mods, err := p.Source.List()
+	if err != nil {
+		return nil, err
+	}
+	return mods, &discovery.PartialError{Errs: []error{errors.New("unreadable source")}}
+}
+
+func TestCompleteModulesValidatePartialListing(t *testing.T) {
+	src := partialSource{newTestSource(t)}
+	matches, directive := Complete(src, nil, []string{"modules", "validate"}, "d")
+	want := []string{"dev.deploy", "docker"}
+	if got := text(matches); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Complete with PartialError = %v, want %v", got, want)
+	}
+	if directive != ShellCompDirectiveNoFileComp {
+		t.Fatalf("directive = %v, want NoFileComp", directive)
 	}
 }

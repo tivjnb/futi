@@ -15,7 +15,7 @@ import (
 // stdin — для интерактивного подтверждения uninstall (os.Stdin в main).
 func runModules(w io.Writer, stdin io.Reader, source discovery.Source, cache *modulecache.Cache, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: futi modules <subcommand> (subcommands: init, install, uninstall, update, info, list, add_command, remove_command, path)")
+		return fmt.Errorf("usage: futi modules <subcommand> (subcommands: init, install, uninstall, update, info, validate, list, add_command, remove_command, path)")
 	}
 
 	sub, rest := args[0], args[1:]
@@ -30,6 +30,8 @@ func runModules(w io.Writer, stdin io.Reader, source discovery.Source, cache *mo
 		return runModulesUpdate(w, source, cache, rest)
 	case "info":
 		return runModulesInfo(w, source, rest)
+	case "validate":
+		return runModulesValidate(w, source, rest)
 	case "list":
 		return runModulesList(w, rest)
 	case "add_command":
@@ -41,4 +43,16 @@ func runModules(w io.Writer, stdin io.Reader, source discovery.Source, cache *mo
 	default:
 		return fmt.Errorf("unknown modules subcommand %q", sub)
 	}
+}
+
+// runModulesValidate — `futi modules validate <namespace>`: отчёт валидации
+// схемы модуля (см. runValidate).
+func runModulesValidate(w io.Writer, source discovery.Source, args []string) error {
+	if len(args) != 1 || isFlagToken(args[0]) {
+		return fmt.Errorf("usage: futi modules validate <namespace>")
+	}
+	if err := validateResolveName(args[0]); err != nil {
+		return err
+	}
+	return runValidate(w, source, args[0])
 }

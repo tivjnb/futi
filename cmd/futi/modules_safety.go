@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/tivjnb/futi/internal/completion"
 )
 
 // validModuleNameRe — допустимые имена модулей (спека §8 #3): первый символ
@@ -25,6 +27,19 @@ func validateModuleName(name string) error {
 		// нормализуется filepath.Join непредсказуемо, отвергаем.
 		if seg == "" || seg == ".." || seg == "." {
 			return fmt.Errorf("invalid module name %q", name)
+		}
+	}
+	return nil
+}
+
+// checkReservedSegments отвергает путь, в котором любой сегмент (разделитель
+// sep) — зарезервированное слово корня: такой модуль перехватывался бы
+// builtin-командами и не был бы вызван. Проверяются только новые пути
+// (init/install); уже установленные модули не трогаются.
+func checkReservedSegments(path, sep string) error {
+	for _, seg := range strings.Split(path, sep) {
+		if completion.IsReservedName(seg) {
+			return fmt.Errorf("%q is a reserved name, choose a different module name", seg)
 		}
 	}
 	return nil

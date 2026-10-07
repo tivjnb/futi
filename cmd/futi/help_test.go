@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tivjnb/futi/internal/completion"
 	"github.com/tivjnb/futi/internal/discovery"
 )
 
@@ -142,5 +143,18 @@ func TestParseArgsHelpDetection(t *testing.T) {
 	}
 	if len(hr.positional) != 2 || hr.positional[0] != "demo" || hr.positional[1] != "greet" {
 		t.Fatalf("unexpected positional: %v", hr.positional)
+	}
+}
+
+// Usage перечисляет каждое зарезервированное слово корня в кавычках.
+func TestUsageListsAllReservedWords(t *testing.T) {
+	usage := captureStderr(t, printUsage)
+	for _, w := range completion.ReservedNames {
+		if !strings.Contains(usage, `"`+w+`"`) {
+			t.Errorf("usage does not mention reserved word %q", w)
+		}
+	}
+	if strings.Contains(usage, "hybrid mode") {
+		t.Errorf("usage still mentions hybrid mode")
 	}
 }
