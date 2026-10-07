@@ -267,3 +267,71 @@ func TestRunModulesUninstallInterruptedDetachKeepsModule(t *testing.T) {
 		t.Fatalf("модуль не должен удаляться при прерванном detach: %v", statErr)
 	}
 }
+
+func installRawModule(t *testing.T, global, body string) string {
+	t.Helper()
+	moduleDir := filepath.Join(global, "qr")
+	os.MkdirAll(moduleDir, 0o755)
+	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644)
+	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
+	return moduleDir
+}
+
+func TestRunModulesUninstallInvalidSchemaStillDetaches(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	marker := filepath.Join(t.TempDir(), "detached.marker")
+	// Неизвестный ключ делает модуль невалидным для LoadModule.
+	moduleDir := installRawModule(t, global, "name: qr\nbogus_key: 1\ndetach: \"touch "+marker+"\"\ncommands:\n  run:\n    cmd: echo\n")
+
+	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "--yes", "--strict-detach"})
+	if err != nil {
+		t.Fatalf("runModulesUninstall: %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("detach must run for schema-invalid module: %v", err)
+	}
+	if _, err := os.Stat(moduleDir); !os.IsNotExist(err) {
+		t.Fatal("module must be removed")
+	}
+}
+
+func TestRunModulesUninstallBrokenYAMLWarnsAndRemoves(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	moduleDir := installRawModule(t, global, "name: [unclosed\n")
+
+	var runErr error
+	stderr := captureStderr(t, func() {
+		runErr = runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "--yes"})
+	})
+	if runErr != nil {
+		t.Fatalf("runModulesUninstall: %v", runErr)
+	}
+	if !strings.Contains(stderr, "Warning: cannot load manifest, detach skipped:") {
+		t.Fatalf("stderr = %q, want warning about skipped detach", stderr)
+	}
+	if _, err := os.Stat(moduleDir); !os.IsNotExist(err) {
+		t.Fatal("module must be removed")
+	}
+}
+
+func TestRunModulesUninstallBrokenYAMLStrictDetachRefuses(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	moduleDir := installRawModule(t, global, "name: [unclosed\n")
+
+	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "--yes", "--strict-detach"})
+	if err == nil || !strings.Contains(err.Error(), "strict") {
+		t.Fatalf("expected strict-detach error, got %v", err)
+	}
+	if _, statErr := os.Stat(moduleDir); statErr != nil {
+		t.Fatal("module must NOT be deleted")
+	}
+}
