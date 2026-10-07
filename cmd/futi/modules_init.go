@@ -98,7 +98,7 @@ func parseInitArgs(args []string) (*initConfig, error) {
 	} else {
 		trimmed = strings.TrimSuffix(trimmed, ".yml")
 	}
-	if err := checkReservedSegments(trimmed, "/"); err != nil {
+	if err := checkReservedSegments(filepath.ToSlash(trimmed), "/"); err != nil {
 		return nil, err
 	}
 

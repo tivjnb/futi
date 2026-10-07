@@ -96,7 +96,8 @@ func parseInstallArgs(args []string) (*installArgs, error) {
 		if err := validateModuleName(cfg.namespace); err != nil {
 			return nil, fmt.Errorf("--namespace: %w", err)
 		}
-		if err := checkReservedSegments(cfg.namespace, "."); err != nil {
+		// validateModuleName допускает и "/", и "." как разделители — режем по обоим.
+		if err := checkReservedSegments(strings.ReplaceAll(cfg.namespace, "/", "."), "."); err != nil {
 			return nil, fmt.Errorf("--namespace: %w", err)
 		}
 	}

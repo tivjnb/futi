@@ -532,7 +532,7 @@ func TestRunInitThroughSymlinkShowsResolvedPath(t *testing.T) {
 // F57: зарезервированное слово запрещено в любом сегменте пути, а не только
 // в basename; validate и help зарезервированными не являются.
 func TestRunInitReservedSegments(t *testing.T) {
-	for _, arg := range []string{"list", "cache", "modules", "completion", "__complete", "cache/tool", "a/list", "a/list.yaml", "a/modules/b"} {
+	for _, arg := range []string{"list", "cache", "modules", "completion", "__complete", "cache/tool", "a/list", "a/list.yaml", "a/list.yml", "a/modules/b"} {
 		t.Run("reject/"+arg, func(t *testing.T) {
 			t.Chdir(t.TempDir())
 			err := runModulesInit(&bytes.Buffer{}, []string{arg})
