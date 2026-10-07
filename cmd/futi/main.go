@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -631,6 +632,7 @@ USAGE
   futi cache refresh                  Refresh module cache
   futi completion <bash|zsh|fish>     Generate a shell completion script
   futi -h | --help
+  futi --version                      Print version
 
 The last positional argument (without --) is the command; everything before
 it is the namespace, joined with dots. Example: "futi dev deploy staging"
@@ -987,6 +989,17 @@ func main() {
 	// Быстрый путь: -h/--help не требует config/source/cache.
 	if os.Args[1] == "-h" || os.Args[1] == "--help" {
 		printUsage()
+		return
+	}
+
+	// Быстрый путь: --version не требует config/source/cache.
+	if os.Args[1] == "--version" {
+		if len(os.Args) > 2 {
+			fmt.Fprintln(os.Stderr, "futi: --version takes no arguments")
+			os.Exit(1)
+		}
+		info, ok := debug.ReadBuildInfo()
+		fmt.Println(versionString(version, info, ok))
 		return
 	}
 
