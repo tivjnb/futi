@@ -9,6 +9,7 @@ import (
 
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/termtext"
 )
 
 // runModulesPath выводит каталог модуля (для скриптов).
@@ -41,7 +42,7 @@ func runModulesInfo(w io.Writer, source discovery.Source, args []string) error {
 		return fmt.Errorf("modules info: %w", err)
 	}
 
-	fmt.Fprintf(w, "Path: %s\n", moduleRoot)
+	fmt.Fprintf(w, "Path: %s\n", termtext.Line(moduleRoot))
 
 	metaPath := filepath.Join(filepath.Dir(manifestPath), metayaml.FileName)
 	if _, err := os.Stat(metaPath); err != nil {
@@ -55,16 +56,16 @@ func runModulesInfo(w io.Writer, source discovery.Source, args []string) error {
 	}
 
 	lf := meta.Lockfile
-	fmt.Fprintf(w, "Source: %s\n", lf.Source)
-	fmt.Fprintf(w, "Type: %s\n", lf.Type)
+	fmt.Fprintf(w, "Source: %s\n", termtext.Line(lf.Source))
+	fmt.Fprintf(w, "Type: %s\n", termtext.Line(lf.Type))
 	if lf.Ref != "" {
-		fmt.Fprintf(w, "Ref: %s\n", lf.Ref)
+		fmt.Fprintf(w, "Ref: %s\n", termtext.Line(lf.Ref))
 	}
 	if lf.Commit != "" {
-		fmt.Fprintf(w, "Commit: %s\n", lf.Commit)
+		fmt.Fprintf(w, "Commit: %s\n", termtext.Line(lf.Commit))
 	}
 	if lf.Hash != "" {
-		fmt.Fprintf(w, "Hash: %s\n", lf.Hash)
+		fmt.Fprintf(w, "Hash: %s\n", termtext.Line(lf.Hash))
 	}
 	if !lf.InstalledAt.IsZero() {
 		fmt.Fprintf(w, "Installed at: %s\n", lf.InstalledAt.Format("2006-01-02 15:04:05"))
@@ -74,16 +75,16 @@ func runModulesInfo(w io.Writer, source discovery.Source, args []string) error {
 	}
 	if meta.About != nil {
 		if meta.About.Author != "" {
-			fmt.Fprintf(w, "Author: %s\n", meta.About.Author)
+			fmt.Fprintf(w, "Author: %s\n", termtext.Line(meta.About.Author))
 		}
 		if meta.About.License != "" {
-			fmt.Fprintf(w, "License: %s\n", meta.About.License)
+			fmt.Fprintf(w, "License: %s\n", termtext.Line(meta.About.License))
 		}
 		if meta.About.Homepage != "" {
-			fmt.Fprintf(w, "Homepage: %s\n", meta.About.Homepage)
+			fmt.Fprintf(w, "Homepage: %s\n", termtext.Line(meta.About.Homepage))
 		}
 		if len(meta.About.Tags) > 0 {
-			fmt.Fprintf(w, "Tags: %s\n", strings.Join(meta.About.Tags, ", "))
+			fmt.Fprintf(w, "Tags: %s\n", termtext.Line(strings.Join(meta.About.Tags, ", ")))
 		}
 	}
 	return nil

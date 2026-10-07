@@ -2564,3 +2564,30 @@ func TestRunListErrorsHaveSingleListPrefix(t *testing.T) {
 		}
 	}
 }
+
+// TestRunListStripsControlChars: ESC в описаниях модуля и команд не доходит до
+// терминала ни в таблице модулей, ни в таблице команд (audit F18).
+func TestRunListStripsControlChars(t *testing.T) {
+	dir := t.TempDir()
+	// YAML double-quoted: \e разворачивается в ESC.
+	writeMainTestFile(t, filepath.Join(dir, "evil.yaml"), "name: evil\ndescription: \"mod\\e[2Jdesc\"\ncommands:\n  run:\n    description: \"cmd\\e]0;pwned\\adesc\"\n    cmd: echo\n")
+	source := discovery.NewGlobalSource(dir)
+
+	for _, ns := range []string{"", "evil"} {
+		var buf bytes.Buffer
+		if err := runList(&buf, source, ns, false, false, nil); err != nil {
+			t.Fatalf("runList(%q): %v", ns, err)
+		}
+		out := buf.String()
+		if strings.ContainsAny(out, "\x1b\x07") {
+			t.Fatalf("runList(%q) output contains control chars: %q", ns, out)
+		}
+		want := "mod[2Jdesc"
+		if ns == "evil" {
+			want = "cmd]0;pwneddesc"
+		}
+		if !strings.Contains(out, want) {
+			t.Fatalf("runList(%q) output missing %q:\n%s", ns, want, out)
+		}
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/modulecache"
 	"github.com/tivjnb/futi/internal/modulerunner"
+	"github.com/tivjnb/futi/internal/termtext"
 )
 
 const (
@@ -50,16 +51,13 @@ func runCompletion(w io.Writer, shell string) error {
 }
 
 // sanitizeCompletionText подготавливает текст/описание кандидата к построчному
-// выводу в __complete. Управляющие символы (\t, \n, \r) заменяются на пробел:
+// выводу в __complete. Управляющие символы (\t, \n, \r) заменяются на пробел,
+// прочие (ESC и др.) удаляются (termtext.Line):
 // таб искажает формат "text\tdescription", перевод строки разлагает кандидата
 // на несколько строк и ломает протокол (bash/zsh/fish парсят вывод построчно).
 // REV-010: значения приходят из имён файлов и YAML-полей — не доверяем им.
 func sanitizeCompletionText(s string) string {
-	s = strings.ReplaceAll(s, "\t", " ")
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
-	// Висящие пробелы после замены (например, хвостовой \r) — обрезаем.
-	return strings.TrimSpace(s)
+	return termtext.Line(s)
 }
 
 // runComplete — hidden-обработчик `futi __complete <args...>`.

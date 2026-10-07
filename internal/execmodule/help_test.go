@@ -139,3 +139,36 @@ func TestFormatModuleHelpDefaultParams(t *testing.T) {
 		t.Fatalf("expected positional hint, got:\n%s", out)
 	}
 }
+
+// TestFormatModuleHelpStripsControlChars: ESC/OSC из YAML не доходят до терминала,
+// а многострочный description сохраняет переводы строк (audit F18).
+func TestFormatModuleHelpStripsControlChars(t *testing.T) {
+	mod := &Module{
+		Description: "line1\nline2\x1b]0;pwned\x07",
+		Commands: map[string]*Command{
+			"run": {Description: "d\x1b[2J", Cmd: "echo"},
+		},
+	}
+	out := FormatModuleHelp(mod, "demo")
+	if strings.Contains(out, "\x1b") || strings.Contains(out, "\x07") {
+		t.Fatalf("output contains control chars: %q", out)
+	}
+	if !strings.Contains(out, "demo — line1\nline2]0;pwned\n") {
+		t.Fatalf("multiline description not preserved: %q", out)
+	}
+}
+
+func TestFormatCommandHelpStripsControlChars(t *testing.T) {
+	cmd := &Command{
+		Description: "a\nb\x1b[2J",
+		Params:      []Param{{Name: "x", Default: "d\x1b[31m", Description: "pd\x1b[0m"}},
+		Cmd:         "echo\x1b[1m",
+	}
+	out := FormatCommandHelp("demo run", cmd)
+	if strings.Contains(out, "\x1b") {
+		t.Fatalf("output contains ESC: %q", out)
+	}
+	if !strings.Contains(out, "demo run — a\nb[2J\n") {
+		t.Fatalf("multiline description not preserved: %q", out)
+	}
+}

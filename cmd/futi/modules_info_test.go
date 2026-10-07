@@ -84,3 +84,27 @@ func TestRunModulesPathUsageError(t *testing.T) {
 		t.Fatal("expected usage error")
 	}
 }
+
+// TestRunModulesInfoStripsControlChars: ESC в lockfile/about не доходит до терминала (audit F18).
+func TestRunModulesInfoStripsControlChars(t *testing.T) {
+	root := t.TempDir()
+	meta := &metayaml.Meta{
+		Lockfile: metayaml.Lockfile{Source: "/src\x1b]0;pwned\x07/qr", Type: "local"},
+		About:    &metayaml.About{Author: "ev\x1b[2Jil", Tags: []string{"t\x1b[1m"}},
+	}
+	installFixtureModule(t, root, "qr", meta)
+
+	var b bytes.Buffer
+	if err := runModulesInfo(&b, discovery.NewGlobalSource(root), []string{"qr"}); err != nil {
+		t.Fatalf("runModulesInfo: %v", err)
+	}
+	out := b.String()
+	if strings.Contains(out, "\x1b") || strings.Contains(out, "\x07") {
+		t.Fatalf("output contains control chars: %q", out)
+	}
+	for _, want := range []string{"Source: /src]0;pwned/qr", "Author: ev[2Jil"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}

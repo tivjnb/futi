@@ -23,6 +23,7 @@ import (
 	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/modulecache"
 	"github.com/tivjnb/futi/internal/modulerunner"
+	"github.com/tivjnb/futi/internal/termtext"
 
 	"github.com/olekukonko/tablewriter"
 )
@@ -511,9 +512,9 @@ func renderCommandTable(w io.Writer, commands map[string]*execmodule.Command, ma
 	var rows [][]string
 	for name, cmd := range commands {
 		if verbose {
-			rows = append(rows, []string{name, cmd.Description, manifestPath})
+			rows = append(rows, []string{termtext.Line(name), termtext.Line(cmd.Description), manifestPath})
 		} else {
-			rows = append(rows, []string{name, cmd.Description})
+			rows = append(rows, []string{termtext.Line(name), termtext.Line(cmd.Description)})
 		}
 	}
 
@@ -562,13 +563,13 @@ func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader
 				base := filepath.Base(c.ManifestPath)
 				desc = "конфликт: " + base + " и " + strings.TrimSuffix(base, ".yaml") + "/config.yaml"
 			} else if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err == nil {
-				desc = mod.Description
+				desc = termtext.Line(mod.Description)
 			}
 		}
 		if verbose {
-			rows = append(rows, []string{c.Type, c.Name, desc, path})
+			rows = append(rows, []string{c.Type, termtext.Line(c.Name), desc, path})
 		} else {
-			rows = append(rows, []string{c.Type, c.Name, desc})
+			rows = append(rows, []string{c.Type, termtext.Line(c.Name), desc})
 		}
 	}
 
