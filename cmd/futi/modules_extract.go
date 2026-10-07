@@ -37,6 +37,13 @@ func safeJoin(dest, name string) (string, error) {
 	return target, nil
 }
 
+// fileMode — права извлекаемого файла: только rwx для ugo (setuid/setgid/sticky
+// отбрасываются), владелец всегда может читать и писать (mode 0 в архиве не
+// должен давать нечитаемый файл).
+func fileMode(m os.FileMode) os.FileMode {
+	return m&0o777 | 0o600
+}
+
 // extractTarGz распаковывает .tar.gz/.tgz. Символические ссылки и прочие
 // не-файлы пропускаются (MVP).
 func extractTarGz(path, dest string) error {
@@ -76,7 +83,7 @@ func extractTarGz(path, dest string) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
-			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode)&0o777)
+			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fileMode(os.FileMode(hdr.Mode)))
 			if err != nil {
 				return err
 			}
@@ -108,6 +115,10 @@ func extractZip(path, dest string) error {
 			}
 			continue
 		}
+		// Не каталог и не regular-файл (symlink и т.п.) — пропуск, как в tar.
+		if zf.Mode().Type() != 0 {
+			continue
+		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
@@ -115,7 +126,7 @@ func extractZip(path, dest string) error {
 		if err != nil {
 			return err
 		}
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, zf.Mode())
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fileMode(zf.Mode()))
 		if err != nil {
 			rc.Close()
 			return err
