@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/tivjnb/futi/internal/termtext"
 )
 
 // FormatCommandHelp формирует справку по команде (листовой, с Cmd):
@@ -14,19 +16,19 @@ func FormatCommandHelp(cmdPath string, cmd *Command) string {
 	var b strings.Builder
 
 	if cmd.Description != "" {
-		fmt.Fprintf(&b, "%s — %s\n\n", cmdPath, cmd.Description)
+		fmt.Fprintf(&b, "%s — %s\n\n", termtext.Line(cmdPath), termtext.Block(cmd.Description))
 	} else {
-		fmt.Fprintf(&b, "%s\n\n", cmdPath)
+		fmt.Fprintf(&b, "%s\n\n", termtext.Line(cmdPath))
 	}
 
 	// USAGE: futi <cmdPath> [--params] [-- args]
 	b.WriteString("USAGE\n")
-	fmt.Fprintf(&b, "  futi %s", cmdPath)
+	fmt.Fprintf(&b, "  futi %s", termtext.Line(cmdPath))
 	for _, p := range cmd.Params {
 		if p.Type == "bool" {
-			fmt.Fprintf(&b, " [--%s]", p.Name)
+			fmt.Fprintf(&b, " [--%s]", termtext.Line(p.Name))
 		} else {
-			fmt.Fprintf(&b, " [--%s value]", p.Name)
+			fmt.Fprintf(&b, " [--%s value]", termtext.Line(p.Name))
 		}
 	}
 	if cmd.Cmd != "" {
@@ -40,16 +42,17 @@ func FormatCommandHelp(cmdPath string, cmd *Command) string {
 		// Выравнивание по ширине самого длинного "--name".
 		max := 0
 		for _, p := range cmd.Params {
-			if l := len("--" + p.Name); l > max {
+			if l := len("--" + termtext.Line(p.Name)); l > max {
 				max = l
 			}
 		}
 		for _, p := range cmd.Params {
-			pad := strings.Repeat(" ", max-len("--"+p.Name))
+			name := termtext.Line(p.Name)
+			pad := strings.Repeat(" ", max-len("--"+name))
 			meta := paramMeta(p)
-			line := fmt.Sprintf("  --%s%s  %s", p.Name, pad, meta)
+			line := fmt.Sprintf("  --%s%s  %s", name, pad, meta)
 			if p.Description != "" {
-				line += "  " + p.Description
+				line += "  " + termtext.Line(p.Description)
 			}
 			b.WriteString(line + "\n")
 		}
@@ -68,7 +71,7 @@ func FormatCommandHelp(cmdPath string, cmd *Command) string {
 	// CMD
 	if cmd.Cmd != "" {
 		b.WriteString("\nCMD\n")
-		fmt.Fprintf(&b, "  %s\n", cmd.Cmd)
+		fmt.Fprintf(&b, "  %s\n", termtext.Block(cmd.Cmd))
 	}
 
 	return b.String()
@@ -76,7 +79,7 @@ func FormatCommandHelp(cmdPath string, cmd *Command) string {
 
 // paramMeta возвращает "(type[, required|default])" для параметра.
 func paramMeta(p Param) string {
-	typ := p.Type
+	typ := termtext.Line(p.Type)
 	if typ == "" {
 		typ = "string"
 	}
@@ -84,7 +87,7 @@ func paramMeta(p Param) string {
 	case p.Required:
 		return fmt.Sprintf("(%s, required)", typ)
 	case p.Default != "":
-		return fmt.Sprintf("(%s, default: %s)", typ, p.Default)
+		return fmt.Sprintf("(%s, default: %s)", typ, termtext.Line(p.Default))
 	default:
 		return fmt.Sprintf("(%s)", typ)
 	}
@@ -97,13 +100,13 @@ func FormatModuleHelp(mod *Module, ns string) string {
 	var b strings.Builder
 
 	if mod.Description != "" {
-		fmt.Fprintf(&b, "%s — %s\n", ns, mod.Description)
+		fmt.Fprintf(&b, "%s — %s\n", termtext.Line(ns), termtext.Block(mod.Description))
 	} else {
-		fmt.Fprintf(&b, "%s\n", ns)
+		fmt.Fprintf(&b, "%s\n", termtext.Line(ns))
 	}
 
 	if mod.Cmd != "" {
-		fmt.Fprintf(&b, "default: %s\n", mod.Cmd)
+		fmt.Fprintf(&b, "default: %s\n", termtext.Block(mod.Cmd))
 	}
 
 	// Схема default-команды: параметры и позиционные аргументы.
@@ -111,15 +114,16 @@ func FormatModuleHelp(mod *Module, ns string) string {
 		b.WriteString("default params:\n")
 		max := 0
 		for _, p := range mod.Params {
-			if l := len("--" + p.Name); l > max {
+			if l := len("--" + termtext.Line(p.Name)); l > max {
 				max = l
 			}
 		}
 		for _, p := range mod.Params {
-			pad := strings.Repeat(" ", max-len("--"+p.Name))
-			line := fmt.Sprintf("  --%s%s  %s", p.Name, pad, paramMeta(p))
+			name := termtext.Line(p.Name)
+			pad := strings.Repeat(" ", max-len("--"+name))
+			line := fmt.Sprintf("  --%s%s  %s", name, pad, paramMeta(p))
 			if p.Description != "" {
-				line += "  " + p.Description
+				line += "  " + termtext.Line(p.Description)
 			}
 			b.WriteString(line + "\n")
 		}
@@ -141,16 +145,17 @@ func FormatModuleHelp(mod *Module, ns string) string {
 		sort.Strings(names)
 		max := 0
 		for _, name := range names {
-			if len(name) > max {
-				max = len(name)
+			if l := len(termtext.Line(name)); l > max {
+				max = l
 			}
 		}
 		for _, name := range names {
 			cmd := mod.Commands[name]
-			pad := strings.Repeat(" ", max-len(name))
-			line := fmt.Sprintf("  %s%s", name, pad)
+			clean := termtext.Line(name)
+			pad := strings.Repeat(" ", max-len(clean))
+			line := fmt.Sprintf("  %s%s", clean, pad)
 			if cmd.Description != "" {
-				line += "  " + cmd.Description
+				line += "  " + termtext.Line(cmd.Description)
 			}
 			b.WriteString(line + "\n")
 		}

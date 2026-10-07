@@ -12,7 +12,7 @@ import (
 // source — источник модулей (resolve для path/info/add_command/remove_command/
 // uninstall/update); cache — кэш (Invalidate после install/uninstall/update).
 // args — аргументы после "modules" (os.Args[2:]).
-// stdin — для интерактивного подтверждения uninstall (os.Stdin в main).
+// stdin — для интерактивных подтверждений install/update/uninstall (os.Stdin в main).
 func runModules(w io.Writer, stdin io.Reader, source discovery.Source, cache *modulecache.Cache, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: futi modules <subcommand> (subcommands: init, install, uninstall, update, info, validate, list, add_command, remove_command, path)")
@@ -23,11 +23,11 @@ func runModules(w io.Writer, stdin io.Reader, source discovery.Source, cache *mo
 	case "init":
 		return runModulesInit(w, rest)
 	case "install":
-		return runModulesInstall(w, cache, rest)
+		return runModulesInstall(w, stdin, cache, rest)
 	case "uninstall":
 		return runModulesUninstall(w, stdin, source, cache, rest)
 	case "update":
-		return runModulesUpdate(w, source, cache, rest)
+		return runModulesUpdate(w, stdin, source, cache, rest)
 	case "info":
 		return runModulesInfo(w, source, rest)
 	case "validate":

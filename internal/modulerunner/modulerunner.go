@@ -97,7 +97,9 @@ func Run(
 
 	parts, err := shlex.Split(rendered)
 	if err != nil {
-		return fmt.Errorf("modulerunner: split command %q: %w", rendered, err)
+		// Отрендеренную строку не выводим: в ней могут быть значения секретов
+		// ({{.env.X}}, параметры); причина shlex сохраняется.
+		return fmt.Errorf("modulerunner: command %q: split rendered cmd: %w", strings.TrimSpace(namespace+" "+command), err)
 	}
 	if len(parts) == 0 {
 		return fmt.Errorf("modulerunner: empty command after render")

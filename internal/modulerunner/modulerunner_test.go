@@ -1144,3 +1144,40 @@ func TestResolveCommandUsesVerifiedLoad(t *testing.T) {
 		t.Fatalf("Params = %+v, want fresh schema with param dry", cmd.Params)
 	}
 }
+
+// Ошибка shlex не должна раскрывать отрендеренную команду (в ней могут быть секреты из env).
+func TestRunSplitErrorDoesNotLeakRenderedCommand(t *testing.T) {
+	t.Setenv("FUTI_T_SECRET", "s3cr3t")
+
+	dir := t.TempDir()
+	manifest := []byte(`
+name: leak_mod
+commands:
+  deploy:
+    params:
+      - name: msg
+        type: string
+        required: true
+    cmd: "echo SECRET-{{.env.FUTI_T_SECRET}} {{.msg}}"
+`)
+	if err := os.WriteFile(filepath.Join(dir, "leak_mod.yaml"), manifest, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	source := discovery.NewGlobalSource(dir)
+	err := Run(context.Background(), source, "leak_mod", "deploy", map[string]string{"msg": "it's"}, "", nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected split error, got nil")
+	}
+	msg := err.Error()
+	for _, leaked := range []string{"s3cr3t", "SECRET-", "echo"} {
+		if strings.Contains(msg, leaked) {
+			t.Errorf("error leaks %q: %v", leaked, err)
+		}
+	}
+	for _, want := range []string{"leak_mod", "deploy", "EOF found when expecting closing quote"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q does not contain %q", msg, want)
+		}
+	}
+}

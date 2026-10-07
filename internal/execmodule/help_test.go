@@ -139,3 +139,70 @@ func TestFormatModuleHelpDefaultParams(t *testing.T) {
 		t.Fatalf("expected positional hint, got:\n%s", out)
 	}
 }
+
+// TestFormatModuleHelpStripsControlChars: ESC/OSC из YAML не доходят до терминала,
+// а многострочный description сохраняет переводы строк (audit F18).
+func TestFormatModuleHelpStripsControlChars(t *testing.T) {
+	mod := &Module{
+		Description: "line1\nline2\x1b]0;pwned\x07",
+		Commands: map[string]*Command{
+			"run": {Description: "d\x1b[2J", Cmd: "echo"},
+		},
+	}
+	out := FormatModuleHelp(mod, "demo")
+	if strings.Contains(out, "\x1b") || strings.Contains(out, "\x07") {
+		t.Fatalf("output contains control chars: %q", out)
+	}
+	if !strings.Contains(out, "demo — line1\nline2]0;pwned\n") {
+		t.Fatalf("multiline description not preserved: %q", out)
+	}
+}
+
+func TestFormatCommandHelpStripsControlChars(t *testing.T) {
+	cmd := &Command{
+		Description: "a\nb\x1b[2J",
+		Params:      []Param{{Name: "x", Default: "d\x1b[31m", Description: "pd\x1b[0m"}},
+		Cmd:         "echo\x1b[1m",
+	}
+	out := FormatCommandHelp("demo run", cmd)
+	if strings.Contains(out, "\x1b") {
+		t.Fatalf("output contains ESC: %q", out)
+	}
+	if !strings.Contains(out, "demo run — a\nb[2J\n") {
+		t.Fatalf("multiline description not preserved: %q", out)
+	}
+}
+
+// TestFormatHelpAlignmentUsesSanitizedWidth: ширина колонки считается по
+// очищенным именам (audit F18, review).
+func TestFormatHelpAlignmentUsesSanitizedWidth(t *testing.T) {
+	mod := &Module{Commands: map[string]*Command{
+		"a\x1b[2Jbcdef": {Description: "d1"},
+		"x":             {Description: "d2"},
+	}}
+	out := FormatModuleHelp(mod, "m")
+	if !strings.Contains(out, "  x          d2\n") || !strings.Contains(out, "  a[2Jbcdef  d1\n") {
+		t.Fatalf("misaligned: %q", out)
+	}
+}
+
+// TestFormatHelpParamAlignmentUsesSanitizedWidth: ESC в имени параметра не
+// сдвигает колонку описания ни в справке команды, ни в справке модуля.
+func TestFormatHelpParamAlignmentUsesSanitizedWidth(t *testing.T) {
+	params := []Param{
+		{Name: "a\x1b[2Jbcdef", Type: "string", Description: "d1"},
+		{Name: "x", Type: "string", Description: "d2"},
+	}
+	// Очищенное имя "a[2Jbcdef" — 9 символов, "x" дополняется 8 пробелами.
+	wantLong := "  --a[2Jbcdef  (string)  d1\n"
+	wantShort := "  --x          (string)  d2\n"
+
+	out := FormatCommandHelp("m c", &Command{Params: params, Cmd: "echo"})
+	if !strings.Contains(out, wantLong) || !strings.Contains(out, wantShort) {
+		t.Errorf("FormatCommandHelp misaligned: %q", out)
+	}
+	out = FormatModuleHelp(&Module{Params: params}, "m")
+	if !strings.Contains(out, wantLong) || !strings.Contains(out, wantShort) {
+		t.Errorf("FormatModuleHelp misaligned: %q", out)
+	}
+}

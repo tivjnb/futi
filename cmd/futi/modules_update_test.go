@@ -24,7 +24,7 @@ func TestRunModulesUpdateNoChange(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	// Файл, созданный ПОСЛЕ установки (локальная модификация — не источник).
@@ -32,7 +32,7 @@ func TestRunModulesUpdateNoChange(t *testing.T) {
 	writeFile(t, filepath.Join(dest, "local_mod.txt"), "keep\n")
 
 	var b bytes.Buffer
-	if err := runModulesUpdate(&b, discovery.NewGlobalSource(global), cache, []string{"qr"}); err != nil {
+	if err := runModulesUpdate(&b, nil, discovery.NewGlobalSource(global), cache, []string{"qr"}); err != nil {
 		t.Fatalf("runModulesUpdate: %v", err)
 	}
 	if !strings.Contains(b.String(), "up to date") {
@@ -56,7 +56,7 @@ func TestRunModulesUpdateSourceChanged(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
@@ -67,7 +67,7 @@ func TestRunModulesUpdateSourceChanged(t *testing.T) {
 	oldInstalledAt := oldMeta.Lockfile.InstalledAt
 
 	var b bytes.Buffer
-	if err := runModulesUpdate(&b, discovery.NewGlobalSource(global), cache, []string{"qr"}); err != nil {
+	if err := runModulesUpdate(&b, nil, discovery.NewGlobalSource(global), cache, []string{"qr"}); err != nil {
 		t.Fatalf("runModulesUpdate: %v", err)
 	}
 	if b.String() != "qr: updated\n" {
@@ -97,13 +97,13 @@ func TestRunModulesUpdateAttachFailureWarns(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src, "--skip-attach"}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src, "--skip-attach"}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	// Источник изменился: новая версия с failing attach.
 	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\nattach: \"exit 5\"\ncommands:\n  run:\n    cmd: echo v2\n")
 
-	if err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, []string{"qr"}); err != nil {
+	if err := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"qr", "--yes"}); err != nil {
 		t.Fatalf("attach failure on update must be warning, not error: %v", err)
 	}
 	// Новое дерево сохранено (НЕ rollback).
@@ -120,7 +120,7 @@ func TestRunModulesUpdateNoMetaError(t *testing.T) {
 
 	installFixtureModule(t, global, "hand", nil) // без meta
 
-	err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), newTestCache(), []string{"hand"})
+	err := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), newTestCache(), []string{"hand"})
 	if err == nil || !strings.Contains(err.Error(), "not installed") {
 		t.Fatalf("expected no-meta error, got %v", err)
 	}
@@ -138,14 +138,14 @@ func TestRunModulesUpdateAllStopsOnInterrupt(t *testing.T) {
 	srcB := makeSourceModule(t, parent, "b", "")
 	cache := newTestCache()
 	for _, src := range []string{srcA, srcB} {
-		if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src, "--skip-attach"}); err != nil {
+		if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src, "--skip-attach"}); err != nil {
 			t.Fatalf("install: %v", err)
 		}
 	}
 	writeFile(t, filepath.Join(srcA, "config.yaml"), "name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
 	writeFile(t, filepath.Join(srcB, "config.yaml"), "name: b\ncommands:\n  run:\n    cmd: echo v2\n")
 
-	err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, nil)
+	err := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"--yes"})
 	if err == nil {
 		t.Fatal("ожидалась ошибка прерывания")
 	}
@@ -164,7 +164,7 @@ func TestRunModulesUpdateInterruptedAttachInvalidatesCache(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src, "--skip-attach"}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src, "--skip-attach"}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
@@ -175,7 +175,7 @@ func TestRunModulesUpdateInterruptedAttachInvalidatesCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, []string{"qr"})
+	err := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"qr", "--yes"})
 	if err == nil {
 		t.Fatal("ожидалась ошибка прерывания")
 	}
@@ -193,7 +193,7 @@ func TestRunModulesUpdateInterruptPrintsErrorOnce(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "a", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src, "--skip-attach"}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src, "--skip-attach"}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	writeFile(t, filepath.Join(src, "config.yaml"), "name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
@@ -205,7 +205,7 @@ func TestRunModulesUpdateInterruptPrintsErrorOnce(t *testing.T) {
 	origStderr := os.Stderr
 	os.Stderr = w
 	t.Cleanup(func() { os.Stderr = origStderr })
-	updErr := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, nil)
+	updErr := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"--yes"})
 	os.Stderr = origStderr
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
@@ -253,7 +253,7 @@ func TestFutiUpdateInterruptPrintsErrorOnce(t *testing.T) {
 	writeFile(t, filepath.Join(src, "config.yaml"),
 		"name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
 
-	stderr, err := run("modules", "update")
+	stderr, err := run("modules", "update", "--yes")
 	if err == nil {
 		t.Fatal("ожидалась ошибка прерывания")
 	}
@@ -291,7 +291,7 @@ func TestFutiModulesUpdateDiesFromSignalWhenAttachInterrupted(t *testing.T) {
 	writeFile(t, filepath.Join(src, "config.yaml"),
 		"name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
 
-	cmd, err := run("modules", "update")
+	cmd, err := run("modules", "update", "--yes")
 	if err == nil {
 		t.Fatal("ожидалась ошибка прерывания")
 	}
@@ -329,10 +329,10 @@ func TestRunModulesUpdateAllUpdatesEachDir(t *testing.T) {
 	srcGlobal := makeSourceModule(t, t.TempDir(), "tool", "")
 	srcLocal := makeSourceModule(t, t.TempDir(), "tool", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{srcGlobal}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{srcGlobal}); err != nil {
 		t.Fatalf("install global: %v", err)
 	}
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{srcLocal, "--local"}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{srcLocal, "--local"}); err != nil {
 		t.Fatalf("install local: %v", err)
 	}
 
@@ -340,7 +340,7 @@ func TestRunModulesUpdateAllUpdatesEachDir(t *testing.T) {
 	writeFile(t, filepath.Join(srcLocal, "config.yaml"), "name: tool\ncommands:\n  run:\n    cmd: echo local-v2\n")
 
 	var b bytes.Buffer
-	if err := runModulesUpdate(&b, discovery.NewGlobalSource(global), cache, nil); err != nil {
+	if err := runModulesUpdate(&b, nil, discovery.NewGlobalSource(global), cache, nil); err != nil {
 		t.Fatalf("runModulesUpdate: %v", err)
 	}
 
@@ -375,10 +375,10 @@ func TestRunModulesUpdateAllSameNameErrorLabelled(t *testing.T) {
 	srcGlobal := makeSourceModule(t, t.TempDir(), "tool", "")
 	srcLocal := makeSourceModule(t, t.TempDir(), "tool", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{srcGlobal}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{srcGlobal}); err != nil {
 		t.Fatalf("install global: %v", err)
 	}
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{srcLocal, "--local"}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{srcLocal, "--local"}); err != nil {
 		t.Fatalf("install local: %v", err)
 	}
 	if err := os.RemoveAll(srcGlobal); err != nil {
@@ -393,7 +393,7 @@ func TestRunModulesUpdateAllSameNameErrorLabelled(t *testing.T) {
 	origStderr := os.Stderr
 	os.Stderr = w
 	t.Cleanup(func() { os.Stderr = origStderr })
-	updErr := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, nil)
+	updErr := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, nil)
 	os.Stderr = origStderr
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
@@ -426,7 +426,7 @@ func TestRunModulesUpdateRefusesStaleBackup(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	stale := filepath.Join(global, "qr.futi-backup")
@@ -435,7 +435,7 @@ func TestRunModulesUpdateRefusesStaleBackup(t *testing.T) {
 	oldConfig, _ := os.ReadFile(filepath.Join(global, "qr", "config.yaml"))
 
 	source := discovery.NewGlobalSource(global)
-	err := runModulesUpdate(&bytes.Buffer{}, source, cache, []string{"qr"})
+	err := runModulesUpdate(&bytes.Buffer{}, nil, source, cache, []string{"qr"})
 	if err == nil || !strings.Contains(err.Error(), stale) {
 		t.Fatalf("want error naming %s, got %v", stale, err)
 	}
@@ -450,7 +450,7 @@ func TestRunModulesUpdateRefusesStaleBackup(t *testing.T) {
 	if err := os.RemoveAll(stale); err != nil {
 		t.Fatal(err)
 	}
-	if err := runModulesUpdate(&bytes.Buffer{}, source, cache, []string{"qr"}); err != nil {
+	if err := runModulesUpdate(&bytes.Buffer{}, nil, source, cache, []string{"qr"}); err != nil {
 		t.Fatalf("update after manual removal: %v", err)
 	}
 	data, _ := os.ReadFile(filepath.Join(global, "qr", "config.yaml"))
@@ -467,7 +467,7 @@ func TestRunModulesUpdateMetaWriteFailureRollsBack(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	dest := filepath.Join(global, "qr")
@@ -482,7 +482,7 @@ func TestRunModulesUpdateMetaWriteFailureRollsBack(t *testing.T) {
 	writeMeta = func(string, *metayaml.Meta) error { return errors.New("disk full") }
 	t.Cleanup(func() { writeMeta = orig })
 
-	err = runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, []string{"qr"})
+	err = runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"qr"})
 	if err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("want disk full error, got %v", err)
 	}
@@ -531,7 +531,7 @@ func TestRunModulesUpdateAllLeavesBackupUntouched(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	// Состояние после kill между Rename и moveTree: каталога qr нет, есть backup.
@@ -545,7 +545,7 @@ func TestRunModulesUpdateAllLeavesBackupUntouched(t *testing.T) {
 
 	var out bytes.Buffer
 	stderr := captureStderr(t, func() {
-		if err := runModulesUpdate(&out, discovery.NewGlobalSource(global), cache, nil); err != nil {
+		if err := runModulesUpdate(&out, nil, discovery.NewGlobalSource(global), cache, nil); err != nil {
 			t.Errorf("runModulesUpdate: %v", err)
 		}
 	})
@@ -572,7 +572,7 @@ func TestRunModulesUpdateResolveFailureMentionsBackup(t *testing.T) {
 	backup := filepath.Join(global, "qr.futi-backup")
 	writeFile(t, filepath.Join(backup, "config.yaml"), "name: qr\n")
 
-	err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), newTestCache(), []string{"qr"})
+	err := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), newTestCache(), []string{"qr"})
 	if err == nil || !strings.Contains(err.Error(), backup) {
 		t.Fatalf("want error mentioning %s, got %v", backup, err)
 	}
@@ -586,7 +586,7 @@ func TestRunModulesUpdateStaleBackupRefusedBeforeFetch(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	stale := filepath.Join(global, "qr.futi-backup")
@@ -594,7 +594,7 @@ func TestRunModulesUpdateStaleBackupRefusedBeforeFetch(t *testing.T) {
 	if err := os.RemoveAll(src); err != nil { // fetch бы упал
 		t.Fatal(err)
 	}
-	err := runModulesUpdate(&bytes.Buffer{}, discovery.NewGlobalSource(global), cache, []string{"qr"})
+	err := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"qr"})
 	if err == nil || !strings.Contains(err.Error(), "backup") || strings.Contains(err.Error(), "fetch") {
 		t.Fatalf("want backup refusal before fetch, got %v", err)
 	}
@@ -608,7 +608,7 @@ func TestRunModulesUpdateRemoveBackupFailureWarns(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo v2\n")
@@ -619,7 +619,7 @@ func TestRunModulesUpdateRemoveBackupFailureWarns(t *testing.T) {
 
 	var out bytes.Buffer
 	stderr := captureStderr(t, func() {
-		if err := runModulesUpdate(&out, discovery.NewGlobalSource(global), cache, []string{"qr"}); err != nil {
+		if err := runModulesUpdate(&out, nil, discovery.NewGlobalSource(global), cache, []string{"qr"}); err != nil {
 			t.Errorf("update must succeed: %v", err)
 		}
 	})

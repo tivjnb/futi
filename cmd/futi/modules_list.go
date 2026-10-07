@@ -11,6 +11,7 @@ import (
 
 	"github.com/tivjnb/futi/internal/config"
 	"github.com/tivjnb/futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/termtext"
 
 	"github.com/olekukonko/tablewriter"
 )
@@ -122,7 +123,7 @@ func runModulesList(w io.Writer, args []string) error {
 		if !e.Meta.Lockfile.InstalledAt.IsZero() {
 			installed = e.Meta.Lockfile.InstalledAt.Format("2006-01-02 15:04")
 		}
-		rows = append(rows, []string{e.Name, e.Meta.Lockfile.Source, version, installed})
+		rows = append(rows, []string{termtext.Line(e.Name), termtext.Line(e.Meta.Lockfile.Source), termtext.Line(version), installed})
 	}
 
 	tw := tablewriter.NewTable(w)

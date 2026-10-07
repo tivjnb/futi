@@ -38,7 +38,7 @@ func TestRunModulesInstallLocalDir(t *testing.T) {
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 
 	var b bytes.Buffer
-	if err := runModulesInstall(&b, newTestCache(), []string{src}); err != nil {
+	if err := runModulesInstall(&b, nil, newTestCache(), []string{src}); err != nil {
 		t.Fatalf("runModulesInstall: %v", err)
 	}
 
@@ -68,7 +68,7 @@ func TestRunModulesInstallSingleYaml(t *testing.T) {
 	os.WriteFile(yamlPath, []byte("name: qr\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
 
 	var b bytes.Buffer
-	if err := runModulesInstall(&b, newTestCache(), []string{yamlPath}); err != nil {
+	if err := runModulesInstall(&b, nil, newTestCache(), []string{yamlPath}); err != nil {
 		t.Fatalf("runModulesInstall: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(global, "qr", "config.yaml")); err != nil {
@@ -82,10 +82,10 @@ func TestRunModulesInstallExistingError(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
-	if err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src}); err != nil {
 		t.Fatalf("first install: %v", err)
 	}
-	err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src})
+	err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src})
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("expected already-exists error, got %v", err)
 	}
@@ -98,7 +98,7 @@ func TestRunModulesInstallAttachRuns(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "attach: \"touch attach_marker\"\n")
 
-	if err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--yes"}); err != nil {
 		t.Fatalf("runModulesInstall: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(global, "qr", "attach_marker")); err != nil {
@@ -113,7 +113,7 @@ func TestRunModulesInstallAttachFailureRollsBack(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "attach: \"exit 3\"\n")
 
-	err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src})
+	err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--yes"})
 	if err == nil {
 		t.Fatal("expected attach failure error")
 	}
@@ -129,7 +129,7 @@ func TestRunModulesInstallSkipAttach(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "attach: \"touch attach_marker\"\n")
 
-	if err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src, "--skip-attach"}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--skip-attach"}); err != nil {
 		t.Fatalf("runModulesInstall: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(global, "qr", "attach_marker")); !os.IsNotExist(err) {
@@ -144,7 +144,7 @@ func TestRunModulesInstallNamespace(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 
-	if err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src, "--namespace", "images"}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--namespace", "images"}); err != nil {
 		t.Fatalf("runModulesInstall: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(global, "images", "qr", "config.yaml")); err != nil {
@@ -160,7 +160,7 @@ func TestRunModulesInstallLocalFlag(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 
-	if err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src, "--local"}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--local"}); err != nil {
 		t.Fatalf("runModulesInstall: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(cwd, ".futi", "qr", "config.yaml")); err != nil {
@@ -173,7 +173,7 @@ func TestRunModulesInstallNotAModule(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	empty := t.TempDir() // каталог без config.yaml
-	err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{empty})
+	err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{empty})
 	if err == nil || !strings.Contains(err.Error(), "not a futi module") {
 		t.Fatalf("expected not-a-module error, got %v", err)
 	}
@@ -192,7 +192,7 @@ func TestRunModulesInstallInvalidatesCache(t *testing.T) {
 	}
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
-	if err := runModulesInstall(&bytes.Buffer{}, cache, []string{src}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src}); err != nil {
 		t.Fatalf("runModulesInstall: %v", err)
 	}
 	if got := cache.ModuleCount(); got != 0 {
@@ -206,7 +206,7 @@ func TestRunModulesInstallLocalSourceAbsInLockfile(t *testing.T) {
 	makeSourceModule(t, cwd, "mod", "")
 	t.Chdir(cwd)
 
-	if err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{"./mod"}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{"./mod"}); err != nil {
 		t.Fatalf("runModulesInstall: %v", err)
 	}
 	meta, err := metayaml.Read(filepath.Join(os.Getenv("FUTI_MODULES_DIR"), "mod", metayaml.FileName))
@@ -227,7 +227,7 @@ func TestRunModulesInstallLocalFlagHookAbsRoot(t *testing.T) {
 	attach := "attach: \"test -d {{.module_root}} && echo {{.module_root}} $FUTI_MODULE_ROOT > $FUTI_MODULE_ROOT/roots\"\n"
 	src := makeSourceModule(t, t.TempDir(), "qr", attach)
 
-	if err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src, "--local"}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--local", "--yes"}); err != nil {
 		t.Fatalf("runModulesInstall: %v", err)
 	}
 	dest := filepath.Join(cwd, ".futi", "qr")
@@ -251,7 +251,7 @@ func TestRunModulesInstallYamlSourceName(t *testing.T) {
 	if err := os.WriteFile(yamlPath, []byte("commands:\n  hi:\n    cmd: echo hi\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{yamlPath}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{yamlPath}); err != nil {
 		t.Fatalf("runModulesInstall: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(global, "q", "config.yaml")); err != nil {
@@ -269,7 +269,7 @@ func TestRunModulesInstallDottedNameRejected(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	src := makeSourceModule(t, t.TempDir(), "my.tool", "")
-	err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src})
+	err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src})
 	if err == nil || !strings.Contains(err.Error(), "invalid module name") {
 		t.Fatalf("expected invalid module name error, got %v", err)
 	}
@@ -289,7 +289,7 @@ func TestRunModulesInstallConflictsWithYaml(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := makeSourceModule(t, t.TempDir(), "x", "")
-	err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src})
+	err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src})
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("expected already-exists error, got %v", err)
 	}
@@ -311,7 +311,7 @@ func TestRunModulesInstallDottedFallbackNameHint(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("commands:\n  run:\n    cmd: echo\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{dir})
+	err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{dir})
 	if err == nil || !strings.Contains(err.Error(), "name:") {
 		t.Fatalf("expected error with name: hint, got %v", err)
 	}
@@ -336,7 +336,7 @@ func TestRunModulesInstallReservedSegments(t *testing.T) {
 			t.Setenv("FUTI_MODULES_DIR", global)
 			t.Chdir(t.TempDir())
 			src := makeSourceModule(t, t.TempDir(), tc.mod, "")
-			err := runModulesInstall(&bytes.Buffer{}, newTestCache(), tc.args(src))
+			err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), tc.args(src))
 			if err == nil || !strings.Contains(err.Error(), "is a reserved name") {
 				t.Fatalf("expected reserved name error, got %v", err)
 			}
@@ -360,7 +360,7 @@ func TestRunModulesInstallReservedFallbackName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "config.yaml"), []byte("commands:\n  run:\n    cmd: echo run\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src})
+	err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src})
 	if err == nil || !strings.Contains(err.Error(), "is a reserved name") {
 		t.Fatalf("expected reserved name error, got %v", err)
 	}
@@ -373,7 +373,7 @@ func TestRunModulesInstallReservedFallbackName(t *testing.T) {
 func TestRunModulesInstallLocalReservedNamespace(t *testing.T) {
 	t.Chdir(t.TempDir())
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
-	err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src, "--local", "--namespace", "x.modules"})
+	err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--local", "--namespace", "x.modules"})
 	if err == nil || !strings.Contains(err.Error(), "is a reserved name") {
 		t.Fatalf("expected reserved name error, got %v", err)
 	}
@@ -387,7 +387,7 @@ func TestRunModulesInstallNonReservedNamespaceOK(t *testing.T) {
 	t.Setenv("FUTI_MODULES_DIR", global)
 	t.Chdir(t.TempDir())
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
-	if err := runModulesInstall(&bytes.Buffer{}, newTestCache(), []string{src, "--namespace", "validate.help"}); err != nil {
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--namespace", "validate.help"}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(global, "validate", "help", "qr", "config.yaml")); err != nil {

@@ -2564,3 +2564,51 @@ func TestRunListErrorsHaveSingleListPrefix(t *testing.T) {
 		}
 	}
 }
+
+// TestRunListStripsControlChars: ESC в описаниях модуля и команд не доходит до
+// терминала ни в таблице модулей, ни в таблице команд (audit F18).
+func TestRunListStripsControlChars(t *testing.T) {
+	dir := t.TempDir()
+	// YAML double-quoted: \e разворачивается в ESC.
+	writeMainTestFile(t, filepath.Join(dir, "evil.yaml"), "name: evil\ndescription: \"mod\\e[2Jdesc\"\ncommands:\n  run:\n    description: \"cmd\\e]0;pwned\\adesc\"\n    cmd: echo\n")
+	source := discovery.NewGlobalSource(dir)
+
+	for _, ns := range []string{"", "evil"} {
+		var buf bytes.Buffer
+		if err := runList(&buf, source, ns, false, false, nil); err != nil {
+			t.Fatalf("runList(%q): %v", ns, err)
+		}
+		out := buf.String()
+		if strings.ContainsAny(out, "\x1b\x07") {
+			t.Fatalf("runList(%q) output contains control chars: %q", ns, out)
+		}
+		want := "mod[2Jdesc"
+		if ns == "evil" {
+			want = "cmd]0;pwneddesc"
+		}
+		if !strings.Contains(out, want) {
+			t.Fatalf("runList(%q) output missing %q:\n%s", ns, want, out)
+		}
+	}
+}
+
+// TestRunListVerboseStripsControlCharsInPath: ESC в имени каталога/файла модуля
+// не доходит до терминала через колонку PATH (audit F18, review).
+func TestRunListVerboseStripsControlCharsInPath(t *testing.T) {
+	dir := t.TempDir()
+	// Пропуск допустим только если ФС не позволяет создать имя с ESC.
+	if err := os.WriteFile(filepath.Join(dir, "ev\x1b[2Jil.yaml"), []byte("name: evil\ncommands:\n  run:\n    cmd: echo\n"), 0o644); err != nil {
+		t.Skipf("ФС не принимает ESC в имени файла: %v", err)
+	}
+	source := discovery.NewGlobalSource(dir)
+
+	for _, ns := range []string{"", "ev\x1b[2Jil"} {
+		var buf bytes.Buffer
+		if err := runList(&buf, source, ns, true, false, nil); err != nil {
+			t.Fatalf("runList(%q): %v", ns, err)
+		}
+		if strings.Contains(buf.String(), "\x1b") {
+			t.Fatalf("runList(%q) -v output contains ESC: %q", ns, buf.String())
+		}
+	}
+}
