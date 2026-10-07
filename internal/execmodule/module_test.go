@@ -74,9 +74,9 @@ commands:
 	}
 }
 
-func TestLoadModuleMissingCommand(t *testing.T) {
+func TestLoadModuleUnknownCommandNotInModule(t *testing.T) {
 	dir := t.TempDir()
-	manifestPath := filepath.Join(dir, "empty.yaml")
+	manifestPath := filepath.Join(dir, "one.yaml")
 	writeFile(t, manifestPath, "name: one\ncommands:\n  x:\n    cmd: echo\n")
 
 	mod, err := LoadModule(manifestPath, dir)

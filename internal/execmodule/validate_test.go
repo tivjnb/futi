@@ -446,3 +446,14 @@ func TestCommandValidateUnknownParamIsLexicographicallyFirst(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateEmptyCmdWithParamsNoDuplicateErrors(t *testing.T) {
+	got := parseAndValidate(t, "params:\n  - name: a\n")
+	want := []string{
+		"module has no cmd and no commands",
+		`command "(default)": params/positional require cmd`,
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("errors = %q, want %q", got, want)
+	}
+}

@@ -70,15 +70,13 @@ func (m *Module) Validate() (errors []error, warnings []string) {
 	}
 
 	// Схема default-команды проверяется, когда у модуля есть cmd или params/positional.
-	// Commands передаём, чтобы пустой cmd не давал «must have cmd or commands»
-	// (это отдельное правило модуля выше).
+	// Отсутствие cmd и commands у модуля сообщает отдельное правило выше.
 	hasDefaultSchema := strings.TrimSpace(m.Cmd) != "" || len(m.Params) > 0 || m.Positional.Min != 0
 	if hasDefaultSchema {
 		checkCommand(defaultPath, &Command{
 			Cmd:        m.Cmd,
 			Params:     m.Params,
 			Positional: m.Positional,
-			Commands:   m.Commands,
 		}, &errors, &warnings)
 	}
 	validateSubcommands("", m.Commands, &errors, &warnings)
@@ -141,7 +139,8 @@ func checkCommand(path string, cmd *Command, errors *[]error, warnings *[]string
 	hasCmd := strings.TrimSpace(cmd.Cmd) != ""
 	hasCommands := len(cmd.Commands) > 0
 
-	if !hasCmd && !hasCommands {
+	// Для (default) это правило не применяется: его покрывает ошибка модуля.
+	if !hasCmd && !hasCommands && path != defaultPath {
 		*errors = append(*errors, fmt.Errorf("command %q: must have cmd or commands", path))
 	}
 
