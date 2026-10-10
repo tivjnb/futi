@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -67,7 +68,7 @@ func TestRunModulesUpdateSourceChanged(t *testing.T) {
 	oldInstalledAt := oldMeta.Lockfile.InstalledAt
 
 	var b bytes.Buffer
-	if err := runModulesUpdate(&b, nil, discovery.NewGlobalSource(global), cache, []string{"qr"}); err != nil {
+	if err := runModulesUpdate(&b, nil, discovery.NewGlobalSource(global), cache, []string{"qr", "--yes"}); err != nil {
 		t.Fatalf("runModulesUpdate: %v", err)
 	}
 	if b.String() != "qr: updated\n" {
@@ -356,7 +357,7 @@ func TestRunModulesUpdateAllUpdatesEachDir(t *testing.T) {
 	writeFile(t, filepath.Join(srcLocal, "config.yaml"), "name: tool\ncommands:\n  run:\n    cmd: echo local-v2\n")
 
 	var b bytes.Buffer
-	if err := runModulesUpdate(&b, nil, discovery.NewGlobalSource(global), cache, nil); err != nil {
+	if err := runModulesUpdate(&b, nil, discovery.NewGlobalSource(global), cache, []string{"--yes"}); err != nil {
 		t.Fatalf("runModulesUpdate: %v", err)
 	}
 
@@ -409,7 +410,7 @@ func TestRunModulesUpdateAllSameNameErrorLabelled(t *testing.T) {
 	origStderr := os.Stderr
 	os.Stderr = w
 	t.Cleanup(func() { os.Stderr = origStderr })
-	updErr := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, nil)
+	updErr := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"--yes"})
 	os.Stderr = origStderr
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
@@ -466,7 +467,7 @@ func TestRunModulesUpdateRefusesStaleBackup(t *testing.T) {
 	if err := os.RemoveAll(stale); err != nil {
 		t.Fatal(err)
 	}
-	if err := runModulesUpdate(&bytes.Buffer{}, nil, source, cache, []string{"qr"}); err != nil {
+	if err := runModulesUpdate(&bytes.Buffer{}, nil, source, cache, []string{"qr", "--yes"}); err != nil {
 		t.Fatalf("update after manual removal: %v", err)
 	}
 	data, _ := os.ReadFile(filepath.Join(global, "qr", "config.yaml"))
@@ -498,7 +499,7 @@ func TestRunModulesUpdateMetaWriteFailureRollsBack(t *testing.T) {
 	writeMeta = func(string, *metayaml.Meta) error { return errors.New("disk full") }
 	t.Cleanup(func() { writeMeta = orig })
 
-	err = runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"qr"})
+	err = runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"qr", "--yes"})
 	if err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("want disk full error, got %v", err)
 	}
@@ -635,12 +636,175 @@ func TestRunModulesUpdateRemoveBackupFailureWarns(t *testing.T) {
 
 	var out bytes.Buffer
 	stderr := captureStderr(t, func() {
-		if err := runModulesUpdate(&out, nil, discovery.NewGlobalSource(global), cache, []string{"qr"}); err != nil {
+		if err := runModulesUpdate(&out, nil, discovery.NewGlobalSource(global), cache, []string{"qr", "--yes"}); err != nil {
 			t.Errorf("update must succeed: %v", err)
 		}
 	})
 	want := "Warning: remove backup " + filepath.Join(global, "qr.futi-backup") + ": busy"
 	if !strings.Contains(stderr, want) {
 		t.Fatalf("stderr must contain %q, got %q", want, stderr)
+	}
+}
+
+// installForUpdate ставит модуль qr без хука в изолированный каталог модулей;
+// возвращает каталог источника и установленного модуля.
+func installForUpdate(t *testing.T) (src, dest string) {
+	t.Helper()
+	global := attachEnv(t)
+	src = makeSourceModule(t, t.TempDir(), "qr", "")
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	return src, filepath.Join(global, "qr")
+}
+
+// runUpdateQR запускает update qr и возвращает вывод, stderr и ошибку.
+func runUpdateQR(t *testing.T, stdin io.Reader, extra ...string) (string, string, error) {
+	t.Helper()
+	var out bytes.Buffer
+	var err error
+	stderr := captureStderr(t, func() {
+		err = runModulesUpdate(&out, stdin, discovery.NewGlobalSource(os.Getenv("FUTI_MODULES_DIR")), newTestCache(), append([]string{"qr"}, extra...))
+	})
+	return out.String(), stderr, err
+}
+
+const localEdit = "name: qr\ncommands:\n  run:\n    cmd: echo run\n  mine:\n    cmd: echo mine\n"
+
+// Источник не изменился — локальные правки установленного модуля не трогаем.
+func TestUpdateSourceUnchangedKeepsLocalEdits(t *testing.T) {
+	_, dest := installForUpdate(t)
+	setStdinTerminal(t, false)
+	writeFile(t, filepath.Join(dest, "config.yaml"), localEdit)
+
+	out, _, err := runUpdateQR(t, unreadableStdin{t})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if out != "qr: up to date\n" {
+		t.Fatalf("output = %q, want up to date", out)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dest, "config.yaml")); string(data) != localEdit {
+		t.Fatalf("local edit lost:\n%s", data)
+	}
+}
+
+// Хеш в lockfile другой (например, старый формат), а файлы на диске совпадают
+// с источником: lockfile переписывается молча, дерево не переустанавливается.
+func TestUpdateSameFilesRewritesLockfileSilently(t *testing.T) {
+	_, dest := installForUpdate(t)
+	setStdinTerminal(t, false)
+	metaPath := filepath.Join(dest, metayaml.FileName)
+	meta, err := metayaml.Read(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installedHash := meta.Lockfile.Hash
+	meta.Lockfile.Hash = "sha256:0000"
+	if err := metayaml.Write(metaPath, meta); err != nil {
+		t.Fatal(err)
+	}
+	// Маркер в исключённом каталоге: переустановка дерева его бы удалила.
+	marker := filepath.Join(dest, ".venv", "marker")
+	writeFile(t, marker, "x\n")
+
+	out, stderr, err := runUpdateQR(t, unreadableStdin{t})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if out != "qr: up to date\n" || stderr != "" {
+		t.Fatalf("output = %q, stderr = %q; want only up to date", out, stderr)
+	}
+	if !exists(marker) {
+		t.Fatal("tree must not be reinstalled when files are the same")
+	}
+	got, err := metayaml.Read(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Lockfile.Hash != installedHash {
+		t.Fatalf("lockfile hash = %q, want %q", got.Lockfile.Hash, installedHash)
+	}
+	if !got.Lockfile.InstalledAt.Equal(meta.Lockfile.InstalledAt) {
+		t.Fatal("InstalledAt must be preserved")
+	}
+}
+
+func TestUpdateLocalEditShownAsModified(t *testing.T) {
+	src, dest := installForUpdate(t)
+	setStdinTerminal(t, false)
+	writeFile(t, filepath.Join(dest, "config.yaml"), localEdit)
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo v2\n")
+
+	out, stderr, err := runUpdateQR(t, unreadableStdin{t}, "--yes")
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	want := "Module qr will change (" + dest + "):\n  M config.yaml\n"
+	if !strings.Contains(stderr, want) {
+		t.Fatalf("stderr = %q, want it to contain %q", stderr, want)
+	}
+	if strings.Contains(stderr, "Replace module files?") {
+		t.Fatalf("no prompt expected with --yes, got %q", stderr)
+	}
+	if out != "qr: updated\n" {
+		t.Fatalf("output = %q, want updated", out)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dest, "config.yaml")); !strings.Contains(string(data), "echo v2") {
+		t.Fatalf("new tree must be installed with --yes:\n%s", data)
+	}
+}
+
+func TestUpdateNoTTYRequiresYes(t *testing.T) {
+	src, dest := installForUpdate(t)
+	setStdinTerminal(t, false)
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo v2\n")
+
+	_, _, err := runUpdateQR(t, unreadableStdin{t})
+	if err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("err = %v, want hint about --yes", err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dest, "config.yaml")); strings.Contains(string(data), "echo v2") {
+		t.Fatal("tree must stay without confirmation")
+	}
+	if exists(dest + backupSuffix) {
+		t.Fatal("backup must not be created")
+	}
+}
+
+func TestUpdateDeclineKeepsTree(t *testing.T) {
+	src, dest := installForUpdate(t)
+	setStdinTerminal(t, true)
+	writeFile(t, filepath.Join(src, "extra.sh"), "echo extra\n")
+
+	_, stderr, err := runUpdateQR(t, strings.NewReader("n\n"))
+	if !errors.Is(err, errUpdateNotConfirmed) {
+		t.Fatalf("err = %v, want update not confirmed", err)
+	}
+	want := "):\n  A extra.sh\nReplace module files? [y/N] "
+	if !strings.Contains(stderr, want) {
+		t.Fatalf("stderr = %q, want it to contain %q", stderr, want)
+	}
+	if exists(filepath.Join(dest, "extra.sh")) || exists(dest+backupSuffix) {
+		t.Fatal("tree must stay untouched after decline")
+	}
+}
+
+func TestUpdateChangeListTruncated(t *testing.T) {
+	src, _ := installForUpdate(t)
+	setStdinTerminal(t, false)
+	for i := 0; i < 60; i++ {
+		writeFile(t, filepath.Join(src, fmt.Sprintf("f%02d.txt", i)), "x\n")
+	}
+
+	_, stderr, err := runUpdateQR(t, unreadableStdin{t}, "-y")
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if n := strings.Count(stderr, "\n  A "); n != 50 {
+		t.Fatalf("listed %d changes, want 50:\n%s", n, stderr)
+	}
+	if !strings.Contains(stderr, "  A f49.txt\n  ... and 10 more\n") {
+		t.Fatalf("stderr = %q, want truncated list ending with ... and 10 more", stderr)
 	}
 }

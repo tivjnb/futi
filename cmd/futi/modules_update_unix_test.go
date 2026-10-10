@@ -148,7 +148,7 @@ func TestRunModulesUpdateCopyFailureRestoresOld(t *testing.T) {
 	fix := failingCopyRename(t)
 
 	source := discovery.NewGlobalSource(global)
-	if err := runModulesUpdate(&bytes.Buffer{}, nil, source, cache, []string{"qr"}); err == nil {
+	if err := runModulesUpdate(&bytes.Buffer{}, nil, source, cache, []string{"qr", "--yes"}); err == nil {
 		t.Fatal("update must fail when the copy fails")
 	}
 
@@ -170,7 +170,7 @@ func TestRunModulesUpdateCopyFailureRestoresOld(t *testing.T) {
 	// Повторный update после «исправления» (перенос работает) проходит.
 	fix()
 	var b bytes.Buffer
-	if err := runModulesUpdate(&b, nil, source, cache, []string{"qr"}); err != nil {
+	if err := runModulesUpdate(&b, nil, source, cache, []string{"qr", "--yes"}); err != nil {
 		t.Fatalf("repeated update: %v", err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dest, "config.yaml"))
@@ -219,7 +219,7 @@ func TestRunModulesUpdateRollbackFailureNamesBackup(t *testing.T) {
 		return base(src, dst)
 	}
 
-	err := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"qr"})
+	err := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"qr", "--yes"})
 	if err == nil || !strings.Contains(err.Error(), "rollback failed") || !strings.Contains(err.Error(), dest+".futi-backup") {
 		t.Fatalf("want rollback failure naming backup path, got %v", err)
 	}

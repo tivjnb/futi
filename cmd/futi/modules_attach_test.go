@@ -259,7 +259,8 @@ func TestUpdateAttachDeclinedKeepsOldTree(t *testing.T) {
 
 	var err error
 	prompt := captureStderr(t, func() {
-		err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader("n\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr"})
+		// Сначала подтверждаем замену файлов, затем отказываемся от хука.
+		err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader("y\nn\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr"})
 	})
 	if err == nil || !strings.Contains(err.Error(), "not confirmed") {
 		t.Fatalf("err = %v, want attach hook not confirmed", err)
@@ -279,14 +280,22 @@ func TestUpdateAttachDeclinedKeepsOldTree(t *testing.T) {
 	}
 }
 
+// Без терминала и --yes update останавливается ещё на подтверждении замены
+// файлов — до вопроса о хуке; stdin не читается.
 func TestUpdateAttachWithoutTerminalRefuses(t *testing.T) {
 	global := attachEnv(t)
 	setStdinTerminal(t, false)
 	dest := installThenChange(t, global, "qr")
 
-	err := runModulesUpdate(&bytes.Buffer{}, unreadableStdin{t}, discovery.NewGlobalSource(global), newTestCache(), []string{"qr"})
-	if err == nil || !strings.Contains(err.Error(), "--skip-attach") {
-		t.Fatalf("err = %v, want hint about --skip-attach", err)
+	var err error
+	captureStderr(t, func() {
+		err = runModulesUpdate(&bytes.Buffer{}, unreadableStdin{t}, discovery.NewGlobalSource(global), newTestCache(), []string{"qr"})
+	})
+	if err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("err = %v, want hint about --yes", err)
+	}
+	if exists(filepath.Join(dest, "attached")) {
+		t.Fatal("attach hook must not run")
 	}
 	data, _ := os.ReadFile(filepath.Join(dest, "config.yaml"))
 	if strings.Contains(string(data), "echo v2") {
@@ -332,8 +341,9 @@ func TestUpdateAllAsksPerModule(t *testing.T) {
 		updated string
 		failed  string
 	}{
-		{"y\nn\n", "a", "b"},
-		{"n\ny\n", "b", "a"},
+		// На модуль два вопроса: замена файлов, затем attach-хук.
+		{"y\ny\ny\nn\n", "a", "b"},
+		{"y\nn\ny\ny\n", "b", "a"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.updated, func(t *testing.T) {

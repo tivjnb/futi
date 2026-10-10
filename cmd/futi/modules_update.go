@@ -67,7 +67,7 @@ func parseUpdateArgs(args []string) (*updateArgs, error) {
 
 // runModulesUpdate переустанавливает модуль(ы) из источника (спека §5.3).
 // Без имени — обновляет все установленные модули (serial, MVP).
-// stdin — для подтверждения attach-хуков (os.Stdin из main).
+// stdin — для подтверждения замены файлов и attach-хуков (os.Stdin из main).
 func runModulesUpdate(w io.Writer, stdin io.Reader, source discovery.Source, cache *modulecache.Cache, args []string) error {
 	cfg, err := parseUpdateArgs(args)
 	if err != nil {
@@ -204,6 +204,9 @@ func updateAt(w io.Writer, gate attachGate, cache *modulecache.Cache, name, labe
 		return err
 	}
 
+	// Триггер обновления — изменился источник, а не «диск отличается»: иначе
+	// файлы, созданные attach-хуком, переустанавливали бы модуль каждый раз,
+	// а локальные правки при неизменном источнике затирались бы.
 	if newHash == lf.Hash {
 		// No-op: обновляем только last_check (§5.3 шаг 6).
 		meta.Lockfile.LastCheck = time.Now()
@@ -212,6 +215,33 @@ func updateAt(w io.Writer, gate attachGate, cache *modulecache.Cache, name, labe
 		}
 		fmt.Fprintf(w, "%s: up to date\n", label)
 		return nil
+	}
+
+	// Источник изменился — сравниваем с ним то, что лежит на диске.
+	diff, err := metayaml.DiffTrees(moduleRoot, moduleDir)
+	if err != nil {
+		return err
+	}
+	if diff.Empty() {
+		// Файлы те же (например, lockfile со старым форматом хеша): только
+		// переписываем lockfile, дерево и attach не трогаем.
+		meta.Lockfile.Hash = newHash
+		meta.Lockfile.Commit = commit
+		meta.Lockfile.LastCheck = time.Now()
+		if err := writeMeta(metaPath, meta); err != nil {
+			return fmt.Errorf("write %s: %w", metayaml.FileName, err)
+		}
+		fmt.Fprintf(w, "%s: up to date\n", label)
+		return nil
+	}
+	// Подтверждение замены — до attach и до замены дерева: отказ оставляет
+	// модуль как был, включая локальные правки.
+	err = gate.allowReplace(label, moduleRoot, diff)
+	if errors.Is(err, errUpdateNotConfirmed) {
+		return fmt.Errorf("%w; module not updated", err)
+	}
+	if err != nil {
+		return err
 	}
 
 	// Подтверждение attach — до замены дерева: отказ оставляет модуль как был.
