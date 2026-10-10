@@ -135,7 +135,7 @@ var computeTreeHash = metayaml.ComputeTreeHash
 
 // runModulesInstall устанавливает модуль из источника (спека §5.1).
 // stdin — для подтверждения attach-хука (os.Stdin из main).
-func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, args []string) error {
+func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, args []string) (retErr error) {
 	cfg, err := parseInstallArgs(args)
 	if err != nil {
 		return err
@@ -226,7 +226,8 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 		return fmt.Errorf("modules install: %w", err)
 	}
 	if err := moveTree(moduleDir, dest); err != nil {
-		// moveTree сам убирает частичный dest; здесь dest ещё не наш.
+		// Ошибка moveTree означает, что перенос не состоялся: частичный dest
+		// он убрал сам, а существующий dst не трогал — откат здесь не нужен.
 		return fmt.Errorf("modules install: move to destination: %w", err)
 	}
 	// Дерево перенесено: любой выход без committed (hash, meta, attach)
@@ -235,8 +236,11 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 	// MkdirAll, не убираем: они безвредны для discovery.
 	committed := false
 	defer func() {
-		if !committed {
-			os.RemoveAll(dest)
+		if committed {
+			return
+		}
+		if rmErr := os.RemoveAll(dest); rmErr != nil {
+			retErr = fmt.Errorf("%w (rollback failed: remove %s: %v)", retErr, dest, rmErr)
 		}
 	}()
 
@@ -265,7 +269,6 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 	// attach: провал → rollback (rm dest) + error (§3.1, §8 #6).
 	if runAttach {
 		if err := modulerunner.RunHook(context.Background(), mod.Attach, dest, name, os.Stdout, os.Stderr); err != nil {
-			os.RemoveAll(dest)
 			return fmt.Errorf("attach failed, module removed: %w", err)
 		}
 	}

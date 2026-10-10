@@ -181,9 +181,14 @@ func copyTree(src, dst string, keepSymlinks bool) error {
 // (форсирует путь копирования, как при EXDEV).
 var renameDir = os.Rename
 
+// removeSrc удаляет исходный каталог после копирования в moveTree;
+// шов для тестов.
+var removeSrc = os.RemoveAll
+
 // moveTree переносит каталог src в dst: сначала os.Rename (атомарно);
 // при ошибке (разные файловые системы, например /tmp → $HOME) —
-// копирование copyTree с симлинками + удаление src. Симлинки переносим, как
+// копирование copyTree с симлинками + удаление src (best effort: src —
+// временный каталог, его чистит вызывающий). Симлинки переносим, как
 // rename: иначе хеш дерева после install разошёлся бы с хешем источника в update.
 func moveTree(src, dst string) error {
 	// Существующий dst не трогаем: иначе откат после сбоя копирования мог бы
@@ -201,7 +206,11 @@ func moveTree(src, dst string) error {
 		}
 		return fmt.Errorf("move tree: %w", err)
 	}
-	return os.RemoveAll(src)
+	// Копирование прошло — перенос состоялся. src обычно временный каталог
+	// вызывающего (он сам его чистит), поэтому неудача удаления (например,
+	// занятый файл на Windows) не ошибка: иначе dst остался бы без отката и meta.
+	_ = removeSrc(src)
+	return nil
 }
 
 // cleanupExcludedDirs удаляет excluded-каталоги из корня dest

@@ -396,6 +396,14 @@ func TestRunModulesInstallNonReservedNamespaceOK(t *testing.T) {
 	}
 }
 
+// stubSeam подменяет шов на время теста и возвращает его через t.Cleanup.
+func stubSeam[T any](t *testing.T, seam *T, v T) {
+	t.Helper()
+	orig := *seam
+	*seam = v
+	t.Cleanup(func() { *seam = orig })
+}
+
 // Сбой после переноса дерева не должен оставлять модуль без meta:
 // dest убирается, повторный install проходит.
 func TestInstallRollbackOnMetaWriteFailure(t *testing.T) {
@@ -405,15 +413,15 @@ func TestInstallRollbackOnMetaWriteFailure(t *testing.T) {
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 
 	orig := writeMeta
-	writeMeta = func(string, *metayaml.Meta) error { return errors.New("disk full") }
+	stubSeam(t, &writeMeta, func(string, *metayaml.Meta) error { return errors.New("disk full") })
 	err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--yes"})
-	writeMeta = orig
 	if err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("err = %v, want disk full", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(global, "qr")); !os.IsNotExist(statErr) {
 		t.Fatalf("dest must be removed after meta write failure, stat err = %v", statErr)
 	}
+	writeMeta = orig
 	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--yes"}); err != nil {
 		t.Fatalf("repeated install: %v", err)
 	}
@@ -426,13 +434,54 @@ func TestInstallRollbackOnHashFailure(t *testing.T) {
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 
 	orig := computeTreeHash
-	computeTreeHash = func(string) (string, error) { return "", errors.New("hash broke") }
+	stubSeam(t, &computeTreeHash, func(string) (string, error) { return "", errors.New("hash broke") })
 	err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--yes"})
-	computeTreeHash = orig
 	if err == nil || !strings.Contains(err.Error(), "hash broke") {
 		t.Fatalf("err = %v, want hash broke", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(global, "qr")); !os.IsNotExist(statErr) {
 		t.Fatalf("dest must be removed after hash failure, stat err = %v", statErr)
+	}
+	computeTreeHash = orig
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--yes"}); err != nil {
+		t.Fatalf("repeated install: %v", err)
+	}
+}
+
+// Копирование прошло, а удалить временный src не вышло (Windows: файл занят):
+// это не ошибка переноса, dst полный, install доходит до meta.
+func TestMoveTreeSrcRemoveFailureIsNotError(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "dst")
+	stubSeam(t, &renameDir, func(string, string) error { return errors.New("exdev") })
+	stubSeam(t, &removeSrc, func(string) error { return errors.New("file in use") })
+
+	if err := moveTree(src, dst); err != nil {
+		t.Fatalf("moveTree: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "a.txt")); err != nil || string(b) != "x" {
+		t.Fatalf("dst incomplete: %q, %v", b, err)
+	}
+}
+
+func TestInstallSucceedsWhenSrcRemoveFails(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	stubSeam(t, &renameDir, func(string, string) error { return errors.New("exdev") })
+	stubSeam(t, &removeSrc, func(string) error { return errors.New("file in use") })
+
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--yes"}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if _, err := metayaml.Read(filepath.Join(global, "qr", metayaml.FileName)); err != nil {
+		t.Fatalf("meta missing: %v", err)
 	}
 }
