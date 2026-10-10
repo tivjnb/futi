@@ -1819,8 +1819,8 @@ func TestRefreshKeepsModulesOfUnsearchableDir(t *testing.T) {
 // остаётся (audit F37).
 func TestRefreshRemovesEntryWhenManifestNotReread(t *testing.T) {
 	tests := []struct {
-		name   string
-		break_ func(t *testing.T, path string)
+		name    string
+		breakFn func(t *testing.T, path string)
 	}{
 		{"stat: манифест удалён после листинга", func(t *testing.T, path string) {
 			if err := os.Remove(path); err != nil {
@@ -1852,7 +1852,7 @@ func TestRefreshRemovesEntryWhenManifestNotReread(t *testing.T) {
 				t.Fatalf("после первого Refresh ModuleCount = %d, want 2", got)
 			}
 
-			tt.break_(t, xPath)
+			tt.breakFn(t, xPath)
 			// other недоступен (частичный листинг): его нет в children.
 			src.children = []discovery.Child{childX}
 			src.err = &discovery.PartialError{Errs: []error{errors.New("boom")}}
