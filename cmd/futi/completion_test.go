@@ -194,6 +194,7 @@ func TestCompletionNeedsRefreshFresh(t *testing.T) {
 // глобальных модулей первый __complete обновляет кэш, второй (новый Cache,
 // Load с диска) — уже нет, иначе каждый TAB пишет файл кэша.
 func TestCompletionNoRefreshAfterEmptyRefresh(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	src := discovery.NewGlobalSource(t.TempDir())
 

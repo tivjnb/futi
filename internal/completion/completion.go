@@ -81,15 +81,15 @@ var modulesAddCommandFlags = []string{"--cmd", "--desc"}
 func ModulesFlags(sub string) []string {
 	switch sub {
 	case "add_command":
-		return modulesAddCommandFlags
+		return append([]string(nil), modulesAddCommandFlags...)
 	case "init":
-		return modulesInitFlags
+		return append([]string(nil), modulesInitFlags...)
 	case "install":
-		return modulesInstallFlags
+		return append([]string(nil), modulesInstallFlags...)
 	case "uninstall":
-		return modulesUninstallFlags
+		return append([]string(nil), modulesUninstallFlags...)
 	case "update":
-		return modulesUpdateFlags
+		return append([]string(nil), modulesUpdateFlags...)
 	}
 	return nil
 }

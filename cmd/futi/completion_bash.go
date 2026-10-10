@@ -16,12 +16,16 @@ __futi_debug() {
 # (объявлен в вызывающей функции, dynamic scoping) и __futi_cur.
 __futi_collect_words() {
     local -a words
-    local cur cword i n w join=0
+    local cur cword i n w head join=0
     __futi_args=()
     if declare -F _get_comp_words_by_ref >/dev/null 2>&1; then
         _get_comp_words_by_ref -n =: cur words cword
         __futi_cur="$cur"
         __futi_args=("${words[@]:1:cword}")
+        # cur — часть слова до курсора; последний аргумент заменяем ею.
+        if (( cword >= 1 )); then
+            __futi_args[${#__futi_args[@]}-1]="$cur"
+        fi
         return
     fi
     # Без bash-completion: склеиваем слова, состоящие только из "=" и ":",
@@ -51,15 +55,19 @@ __futi_collect_words() {
     n=${#__futi_args[@]}
     __futi_cur=""
     if (( n )); then
+        # Курсор может быть внутри слова: берём часть до курсора.
+        head="${COMP_LINE:0:COMP_POINT}"
+        __futi_args[n-1]="${head##*[[:space:]]}"
         __futi_cur="${__futi_args[n-1]}"
     fi
 }
 
 __futi_get_completion_results() {
-    # directive и __futi_args/__futi_cur НЕ local здесь: _futi объявляет
-    # directive local и читает после вызова — bash dynamic scoping мутирует
-    # переменную вызывающего.
-    local out line cur colon_prefix i n
+    # directive НЕ local здесь: _futi объявляет её local и читает после
+    # вызова — bash dynamic scoping мутирует переменную вызывающего.
+    # __futi_args/__futi_cur объявлены local тут и заполняются в
+    # __futi_collect_words (так же dynamic scoping), в shell не утекают.
+    local out line cur colon_prefix i n __futi_cur
     local -a lines
     local -a __futi_args
     __futi_collect_words
@@ -90,7 +98,8 @@ __futi_get_completion_results() {
 
     # ":" входит в COMP_WORDBREAKS: bash заменяет только часть слова после
     # последнего ":", поэтому отрезаем префикс у кандидатов.
-    if [[ "$cur" == *:* ]]; then
+    # Только если ":" действительно в COMP_WORDBREAKS.
+    if [[ "$COMP_WORDBREAKS" == *:* && "$cur" == *:* ]]; then
         colon_prefix="${cur%"${cur##*:}"}"
         for i in "${!COMPREPLY[@]}"; do
             COMPREPLY[i]="${COMPREPLY[i]#"$colon_prefix"}"

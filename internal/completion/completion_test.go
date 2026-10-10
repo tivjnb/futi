@@ -940,3 +940,17 @@ func TestCompleteListKeywordPartialListing(t *testing.T) {
 		t.Fatalf("Complete(dev) with PartialError = %v, want %v", got, want)
 	}
 }
+
+// TestModulesFlagsReturnsCopy: изменение возвращённого среза не влияет на
+// следующий вызов.
+func TestModulesFlagsReturnsCopy(t *testing.T) {
+	first := ModulesFlags("init")
+	if len(first) == 0 {
+		t.Fatal("ModulesFlags(init) пуст")
+	}
+	want := first[0]
+	first[0] = "--mutated"
+	if got := ModulesFlags("init")[0]; got != want {
+		t.Errorf("ModulesFlags(init)[0] = %q, want %q", got, want)
+	}
+}

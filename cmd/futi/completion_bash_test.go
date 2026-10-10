@@ -15,7 +15,7 @@ const bashCompletionLib = "/usr/share/bash-completion/bash_completion"
 // shell-функцией (пишет argv в файл, печатает fakeOut) и вызывает
 // __futi_get_completion_results с заданным состоянием COMP_*.
 // Возвращает argv, с которым вызван futi, COMPREPLY и directive.
-func runBashComplete(t *testing.T, withLib bool, compWords, compLine string, compPoint, cword int, fakeOut string) (args []string, reply []string, directive string) {
+func runBashComplete(t *testing.T, withLib bool, compWords, compLine string, compPoint, cword int, fakeOut, wordbreaks string) (args []string, reply []string, directive string) {
 	t.Helper()
 	bash, err := exec.LookPath("bash")
 	if err != nil {
@@ -39,12 +39,16 @@ func runBashComplete(t *testing.T, withLib bool, compWords, compLine string, com
 	}
 
 	lib := ""
+	wb := ""
+	if wordbreaks != "" {
+		wb = "COMP_WORDBREAKS='" + wordbreaks + "'\n"
+	}
 	if withLib {
 		lib = "source " + bashCompletionLib + "\n"
 	}
 	driver := lib + `source "$SCRIPT"
 futi() { printf '%s\n' "$@" > "$ARGS"; cat "$OUT"; }
-COMP_WORDS=(` + compWords + `)
+` + wb + `COMP_WORDS=(` + compWords + `)
 COMP_CWORD=` + strconv.Itoa(cword) + `
 COMP_LINE='` + compLine + `'
 COMP_POINT=` + strconv.Itoa(compPoint) + `
@@ -86,6 +90,7 @@ func TestBashCompletionScript(t *testing.T) {
 		wantArgs  []string
 		wantReply []string
 		wantDir   string
+		wordbreak string // значение COMP_WORDBREAKS ("" — по умолчанию bash)
 	}{
 		{
 			name:  "слова после курсора не передаются",
@@ -129,6 +134,19 @@ func TestBashCompletionScript(t *testing.T) {
 			out:      "one\n:foo\n",
 			wantArgs: []string{"__complete", ""}, wantReply: []string{"one", ":foo"}, wantDir: "0",
 		},
+		{
+			name:  "двоеточие вне COMP_WORDBREAKS: префикс не режется",
+			words: `futi a:b`, line: "futi a:b", point: 8, cword: 1,
+			out:      "a:bc\n:0\n",
+			wantArgs: []string{"__complete", "a:b"}, wantReply: []string{"a:bc"}, wantDir: "0",
+			wordbreak: " ",
+		},
+		{
+			name:  "курсор внутри слова: передаётся часть до курсора",
+			words: `futi dockxr ps`, line: "futi dockxr ps", point: 9, cword: 1,
+			out:      "docker\n:0\n",
+			wantArgs: []string{"__complete", "dock"}, wantReply: []string{"docker"}, wantDir: "0",
+		},
 	}
 	for _, withLib := range []bool{false, true} {
 		mode := "без bash-completion"
@@ -137,7 +155,7 @@ func TestBashCompletionScript(t *testing.T) {
 		}
 		for _, tc := range cases {
 			t.Run(mode+"/"+tc.name, func(t *testing.T) {
-				args, reply, dir := runBashComplete(t, withLib, tc.words, tc.line, tc.point, tc.cword, tc.out)
+				args, reply, dir := runBashComplete(t, withLib, tc.words, tc.line, tc.point, tc.cword, tc.out, tc.wordbreak)
 				if strings.Join(args, "|") != strings.Join(tc.wantArgs, "|") {
 					t.Errorf("argv = %q, want %q", args, tc.wantArgs)
 				}
@@ -149,5 +167,37 @@ func TestBashCompletionScript(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestBashCompletionNoLeakedCur: __futi_cur не утекает в окружение вызывающего
+// интерактивного shell после _futi.
+func TestBashCompletionNoLeakedCur(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash не найден")
+	}
+	scriptPath := filepath.Join(t.TempDir(), "futi.bash")
+	if err := os.WriteFile(scriptPath, []byte(bashCompletionScript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	driver := `source "$SCRIPT"
+futi() { printf ':0\n'; }
+COMP_WORDS=(futi a)
+COMP_CWORD=1
+COMP_LINE='futi a'
+COMP_POINT=6
+_futi
+echo "cur=${__futi_cur+SET}"
+echo "args=${__futi_args+SET}"
+`
+	cmd := exec.Command(bash, "--norc", "--noprofile", "-c", driver)
+	cmd.Env = append(os.Environ(), "SCRIPT="+scriptPath)
+	got, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("bash: %v\n%s", err, got)
+	}
+	if string(got) != "cur=\nargs=\n" {
+		t.Errorf("переменные утекли в вызывающий shell: %q", got)
 	}
 }
