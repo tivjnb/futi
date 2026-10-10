@@ -32,7 +32,7 @@ var ExcludedDirs = []string{".venv", "__pycache__", ".git", "node_modules"}
 type Lockfile struct {
 	Source      string    `yaml:"source"`           // путь/URL источника
 	Type        string    `yaml:"type"`             // local | git | archive
-	Ref         string    `yaml:"ref,omitempty"`    // branch/tag (git), версия (archive)
+	Ref         string    `yaml:"ref,omitempty"`    // branch/tag (git)
 	Commit      string    `yaml:"commit,omitempty"` // full SHA (только git)
 	Hash        string    `yaml:"hash"`             // sha256:<hex> дерева модуля
 	InstalledAt time.Time `yaml:"installed_at"`

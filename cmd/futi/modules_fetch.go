@@ -44,7 +44,8 @@ func (l *limitWriter) Write(p []byte) (int, error) {
 }
 
 // checkTransportSource отвергает опасные значения source/ref до запуска
-// git/curl: ведущий "-" (читался бы как опция) и незащищённые http://, git://.
+// git/curl: ведущий "-" (читался бы как опция), незащищённые http://, git://
+// и неподдерживаемые форматы архивов (bz2/xz) - до скачивания.
 func checkTransportSource(src string, kind sourceKind, ref string) error {
 	if strings.HasPrefix(src, "-") {
 		return fmt.Errorf("source %q must not start with \"-\"", src)
@@ -62,6 +63,12 @@ func checkTransportSource(src string, kind sourceKind, ref string) error {
 				}
 				return fmt.Errorf("insecure %s source %q: only https:// is supported; download it manually and install from a local path", scheme, src)
 			}
+		}
+	}
+	if kind == kindArchive {
+		switch ext := archiveExt(src); ext {
+		case ".tar.bz2", ".tbz2", ".tar.xz", ".txz":
+			return errUnsupportedArchive(ext)
 		}
 	}
 	return nil
@@ -112,7 +119,8 @@ func fetchArchive(ctx context.Context, url, tempBase string) (string, error) {
 		return "", fmt.Errorf("curl not found; install curl to install from web archives")
 	}
 
-	archivePath := filepath.Join(tempBase, "archive"+archiveExt(url))
+	// Имя без расширения: формат определяется по содержимому.
+	archivePath := filepath.Join(tempBase, "archive")
 	f, err := os.Create(archivePath)
 	if err != nil {
 		return "", err

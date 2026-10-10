@@ -99,18 +99,29 @@ func strictlyInside(root, path string) bool {
 }
 
 // ensureWithinRoot проверяет, что path (после резолва симлинков) находится
-// строго внутри одного из roots (спека §8 #2, #12): сам корень не допускается.
-// Используется перед удалением.
+// строго внутри одного из roots (спека §8 #2, #12): ни один корень не
+// допускается, в том числе вложенный в другой корень (source /x и каталог
+// модулей /x/y). Используется перед удалением.
 func ensureWithinRoot(path string, roots []string) error {
 	real, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return fmt.Errorf("resolve %q: %w", path, err)
 	}
+	var realRoots []string
 	for _, root := range roots {
 		realRoot, err := filepath.EvalSymlinks(root)
 		if err != nil {
 			continue
 		}
+		if realRoot == real {
+			return fmt.Errorf("path %q is a futi modules directory itself", path)
+		}
+		if strictlyInside(real, realRoot) {
+			return fmt.Errorf("path %q contains a futi modules directory", path)
+		}
+		realRoots = append(realRoots, realRoot)
+	}
+	for _, realRoot := range realRoots {
 		if strictlyInside(realRoot, real) {
 			return nil
 		}

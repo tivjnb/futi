@@ -98,6 +98,9 @@ func parseInitArgs(args []string) (*initConfig, error) {
 	} else {
 		trimmed = strings.TrimSuffix(trimmed, ".yml")
 	}
+	if err := validateModuleName(filepath.ToSlash(trimmed)); err != nil {
+		return nil, err
+	}
 	if err := checkReservedSegments(filepath.ToSlash(trimmed), "/"); err != nil {
 		return nil, err
 	}
@@ -111,21 +114,13 @@ func parseInitArgs(args []string) (*initConfig, error) {
 
 // targetFilePath возвращает путь к файлу модуля.
 // Локально: ./.futi/<path>.yaml (доступен через auto-discovery).
-// Глобально: ~/.config/futi/modules/<path>.yaml.
+// Глобально: <globalDir>/<path>.yaml (globalDir — из globalModulesDir).
 // #40: отклоняет path с .. (path traversal за пределы base).
 // #45: не добавляет .yaml, если path уже заканчивается на .yaml/.yml.
-func targetFilePath(cfg *initConfig) (string, error) {
+func targetFilePath(cfg *initConfig, globalDir string) (string, error) {
 	base := ".futi"
 	if cfg.global {
-		modDir := os.Getenv("FUTI_MODULES_DIR")
-		if modDir == "" {
-			dir, err := config.DefaultModulesDir()
-			if err != nil {
-				return "", fmt.Errorf("modules dir: %w", err)
-			}
-			modDir = dir
-		}
-		base = modDir
+		base = globalDir
 	}
 
 	// #45: не добавляем .yaml, если уже есть расширение.
@@ -141,7 +136,7 @@ func targetFilePath(cfg *initConfig) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("path: %w", err)
 	}
-	if strings.HasPrefix(rel, "..") {
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path %q is outside the modules directory", cfg.path)
 	}
 	if err := validateSegmentsNoDot(strings.TrimSuffix(strings.TrimSuffix(rel, ".yaml"), ".yml")); err != nil {
@@ -165,12 +160,23 @@ func targetFilePath(cfg *initConfig) (string, error) {
 	return fullPath, nil
 }
 
+// initModuleName — dot-имя, под которым discovery найдёт модуль, созданный
+// по пути path: без расширения, у пакета (<dir>/config.yaml) — имя каталога.
+func initModuleName(path string) string {
+	rel := strings.TrimSuffix(strings.TrimSuffix(filepath.ToSlash(path), ".yaml"), ".yml")
+	if dir, base := filepath.Split(rel); base == "config" && dir != "" {
+		rel = strings.TrimSuffix(dir, "/")
+	}
+	return dotName(rel)
+}
+
 // generateModuleYAML генерирует YAML-шаблон модуля.
 // name — имя модуля (из последнего сегмента path).
 // description — описание (квотируется для безопасности — фикс #41).
 // defaultCmd — cmd на уровне модуля (пусто = не добавлять).
 // commands — имена команд (если пусто — одна команда hello по умолчанию).
-// #46: name квотируется. #47: ключи команд квотируются.
+// #46: name квотируется. #47: ключи команд квотируются. F62: имя команды в
+// cmd квотируется для shlex — argv всегда [echo, <имя>].
 func generateModuleYAML(name, description, defaultCmd string, commands []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "name: %s\n", quoteYAMLValue(name))
@@ -181,7 +187,7 @@ func generateModuleYAML(name, description, defaultCmd string, commands []string)
 	b.WriteString("commands:\n")
 	if len(commands) > 0 {
 		for _, cmd := range commands {
-			fmt.Fprintf(&b, "  %s:\n    cmd: %s\n", quoteYAMLValue(cmd), quoteYAMLValue("echo "+cmd))
+			fmt.Fprintf(&b, "  %s:\n    cmd: %s\n", quoteYAMLValue(cmd), quoteYAMLValue("echo "+execmodule.QuoteShlex(cmd)))
 		}
 	} else {
 		b.WriteString("  \"hello\":\n    cmd: \"echo hello\"\n")
@@ -206,7 +212,19 @@ func runModulesInit(w io.Writer, args []string) error {
 		return err
 	}
 
-	targetPath, err := targetFilePath(cfg)
+	// Глобальный каталог и config.yaml — до записи: ошибка не должна
+	// прийти после «Created:». Конфиг нужен для сообщения о видимости модуля.
+	var globalDir string
+	var futiCfg *config.Config
+	if cfg.global {
+		if globalDir, err = globalModulesDir(); err != nil {
+			return fmt.Errorf("modules dir: %w", err)
+		}
+		if futiCfg, err = loadFutiConfig(); err != nil {
+			return err
+		}
+	}
+	targetPath, err := targetFilePath(cfg, globalDir)
 	if err != nil {
 		return err
 	}
@@ -257,5 +275,8 @@ func runModulesInit(w io.Writer, args []string) error {
 		displayPath = resolved
 	}
 	fmt.Fprintf(w, "Created: %s\n", displayPath)
+	if cfg.global {
+		reportSourcesVisibility(w, futiCfg, globalDir, initModuleName(cfg.path))
+	}
 	return nil
 }

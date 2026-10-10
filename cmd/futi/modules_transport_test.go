@@ -224,3 +224,33 @@ func TestRunModulesUpdateRejectsHTTPSource(t *testing.T) {
 		t.Errorf("curl must not run, argv = %q", a)
 	}
 }
+
+func TestArchiveExtIgnoresQuery(t *testing.T) {
+	const u = "https://h/x.tar.gz?t=1#f"
+	if got := archiveExt(u); got != ".tar.gz" {
+		t.Errorf("archiveExt(%q) = %q, want .tar.gz", u, got)
+	}
+	if !isArchiveURL(u) {
+		t.Errorf("isArchiveURL(%q) = false, want true", u)
+	}
+	if got := archiveExt("https://h/x.zip?name=a.tgz"); got != ".zip" {
+		t.Errorf("archiveExt with ext in query = %q, want .zip", got)
+	}
+	if got := fallbackName("https://h/mod.tar.gz?t=1"); got != "mod" {
+		t.Errorf("fallbackName = %q, want mod", got)
+	}
+}
+
+func TestInstallRejectsBz2BeforeDownload(t *testing.T) {
+	bin := fakeBin(t, map[string]string{"git": "exit 0", "curl": "exit 0"})
+	for _, ext := range []string{".tar.bz2", ".tbz2", ".tar.xz", ".txz"} {
+		src := "https://h/m" + ext
+		_, _, err := fetchSource(context.Background(), src, kindArchive, "", t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "unsupported archive format "+ext) {
+			t.Errorf("%s: err = %v, want unsupported archive format %s", src, err, ext)
+		}
+	}
+	if a := readArgv(t, bin, "curl"); a != nil {
+		t.Errorf("curl must not run, argv = %q", a)
+	}
+}

@@ -119,15 +119,7 @@ func installRoot(local bool) (string, error) {
 		// Абсолютный путь: dest попадает в cwd и module_root хука.
 		return filepath.Abs(".futi")
 	}
-	dir := os.Getenv("FUTI_MODULES_DIR")
-	if dir == "" {
-		var err error
-		dir, err = config.DefaultModulesDir()
-		if err != nil {
-			return "", err
-		}
-	}
-	return dir, nil
+	return globalModulesDir()
 }
 
 // computeTreeHash считает хеш дерева модуля при install; шов для тестов.
@@ -146,6 +138,11 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 		return err
 	}
 
+	// F62: --ref осмыслен только для git; отказ до временных каталогов и сети.
+	if cfg.ref != "" && kind != kindGit {
+		return fmt.Errorf("modules install: --ref is only supported for git sources")
+	}
+
 	// Относительный local-источник привязываем к cwd установки: update
 	// может запускаться из другого каталога. Считаем до переноса, чтобы ошибка
 	// не оставила модуль без meta.
@@ -159,6 +156,14 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 	root, err := installRoot(cfg.local)
 	if err != nil {
 		return fmt.Errorf("modules install: %w", err)
+	}
+	// Конфиг нужен только для сообщения о видимости глобальной установки,
+	// но невалидный — ошибка до любых изменений на диске.
+	var futiCfg *config.Config
+	if !cfg.local {
+		if futiCfg, err = loadFutiConfig(); err != nil {
+			return fmt.Errorf("modules install: %w", err)
+		}
 	}
 
 	// Fetch в temp-каталог; очистка при любом исходе.
@@ -268,7 +273,7 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 
 	// attach: провал → rollback (rm dest) + error (§3.1, §8 #6).
 	if runAttach {
-		if err := modulerunner.RunHook(context.Background(), mod.Attach, dest, name, os.Stdout, os.Stderr); err != nil {
+		if err := modulerunner.RunHook(context.Background(), mod.Attach, dest, name, w, os.Stderr); err != nil {
 			return fmt.Errorf("attach failed, module removed: %w", err)
 		}
 	}
@@ -280,5 +285,8 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 	}
 
 	fmt.Fprintf(w, "Installed: %s → %s\n", cfg.source, dest)
+	if !cfg.local {
+		reportSourcesVisibility(w, futiCfg, root, dotName(filepath.Join(nsPath, name)))
+	}
 	return nil
 }

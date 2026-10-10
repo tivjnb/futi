@@ -485,3 +485,43 @@ func TestInstallSucceedsWhenSrcRemoveFails(t *testing.T) {
 		t.Fatalf("meta missing: %v", err)
 	}
 }
+
+// F62: --ref имеет смысл только для git; ошибка до временных каталогов и сети.
+func TestModulesInstallRefRequiresGit(t *testing.T) {
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	t.Chdir(t.TempDir())
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+
+	for _, args := range [][]string{
+		{src, "--ref", "v1"},
+		{src, "--from-local", "--ref=v1"},
+		{"https://h/x.zip", "--ref", "v1"},
+		{"https://h/x", "--from-archive", "--ref", "v1"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			err := runModulesInstall(&bytes.Buffer{}, strings.NewReader(""), newTestCache(), args)
+			if err == nil || !strings.Contains(err.Error(), "--ref is only supported for git sources") {
+				t.Fatalf("err = %v, want --ref is only supported for git sources", err)
+			}
+		})
+	}
+}
+
+// https-URL без расширения: формат определяется по содержимому (zip от curl).
+func TestRunModulesInstallFromArchiveURLWithoutExtension(t *testing.T) {
+	zipPath := buildZip(t, []zipEntry{
+		{"qr/config.yaml", 0o644, "name: qr\ncommands:\n  run:\n    cmd: echo run\n"},
+	})
+	fakeBin(t, map[string]string{"curl": "cat '" + zipPath + "'"})
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	var b bytes.Buffer
+	if err := runModulesInstall(&b, strings.NewReader(""), newTestCache(), []string{"https://example.com/download", "--from-archive"}); err != nil {
+		t.Fatalf("runModulesInstall: %v\n%s", err, b.String())
+	}
+	if _, err := os.Stat(filepath.Join(global, "qr", "config.yaml")); err != nil {
+		t.Fatalf("module not installed: %v\n%s", err, b.String())
+	}
+}

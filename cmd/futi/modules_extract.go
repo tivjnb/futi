@@ -28,18 +28,34 @@ var (
 	errExtractTooManyFiles = errors.New("archive exceeds limit: more than 10000 files and directories")
 )
 
-// extractArchive распаковывает архив path в dest. Поддержка: .zip,
-// .tar.gz, .tgz. .tar.bz2/.txz — не в MVP (отклонение плана №2).
+// extractArchive распаковывает архив path в dest. Формат определяется по
+// содержимому (zip: PK\x03\x04, gzip: \x1f\x8b), а не по имени файла.
+// Поддержка: zip, tar.gz. bz2/xz — не поддерживаются.
 func extractArchive(path, dest string) error {
-	lower := strings.ToLower(path)
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	var magic [4]byte
+	n, err := io.ReadFull(f, magic[:])
+	f.Close()
+	// Короткий файл (EOF) — не ошибка чтения: формат определим по тому, что есть.
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return fmt.Errorf("read archive: %w", err)
+	}
 	switch {
-	case strings.HasSuffix(lower, ".zip"):
+	case n == 4 && magic == [4]byte{'P', 'K', 3, 4}:
 		return extractZip(path, dest)
-	case strings.HasSuffix(lower, ".tar.gz"), strings.HasSuffix(lower, ".tgz"):
+	case n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b:
 		return extractTarGz(path, dest)
 	default:
-		return fmt.Errorf("unsupported archive format: %s (supported: .tar.gz, .tgz, .zip)", filepath.Base(path))
+		return errors.New("unsupported archive format: content is not zip or gzip (supported: .tar.gz, .tgz, .zip)")
 	}
+}
+
+// errUnsupportedArchive — ошибка неподдерживаемого расширения архива из URL.
+func errUnsupportedArchive(ext string) error {
+	return fmt.Errorf("unsupported archive format %s (supported: .tar.gz, .tgz, .zip)", ext)
 }
 
 // safeJoin присоединяет name к dest с защитой от zip-slip: результирующий

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -282,5 +283,77 @@ func TestExtractLimitsCountIntermediateDirs(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestExtractArchiveByContent(t *testing.T) {
+	// Формат определяется по содержимому: имя без расширения.
+	copyAs := func(t *testing.T, src string) string {
+		t.Helper()
+		data, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(t.TempDir(), "archive")
+		if err := os.WriteFile(p, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	t.Run("zip", func(t *testing.T) {
+		p := copyAs(t, buildZip(t, []zipEntry{{"a.txt", 0o644, "zip-body"}}))
+		dest := t.TempDir()
+		if err := extractArchive(p, dest); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := os.ReadFile(filepath.Join(dest, "a.txt")); string(b) != "zip-body" {
+			t.Errorf("a.txt = %q, want zip-body", b)
+		}
+	})
+	t.Run("tar.gz", func(t *testing.T) {
+		p := copyAs(t, buildTarGz(t, []tarEntry{{"a.txt", 0o644, "tar-body"}}))
+		dest := t.TempDir()
+		if err := extractArchive(p, dest); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := os.ReadFile(filepath.Join(dest, "a.txt")); string(b) != "tar-body" {
+			t.Errorf("a.txt = %q, want tar-body", b)
+		}
+	})
+	t.Run("zip под именем .tar.gz", func(t *testing.T) {
+		data, err := os.ReadFile(buildZip(t, []zipEntry{{"a.txt", 0o644, "x"}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(t.TempDir(), "m.tar.gz")
+		if err := os.WriteFile(p, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := extractArchive(p, t.TempDir()); err != nil {
+			t.Fatalf("err = %v, want nil (формат по содержимому)", err)
+		}
+	})
+	t.Run("мусор", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "archive")
+		if err := os.WriteFile(p, []byte("not an archive at all"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		err := extractArchive(p, t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "unsupported archive format") ||
+			!strings.Contains(err.Error(), "content is not zip or gzip") {
+			t.Fatalf("err = %v, want unsupported archive format: content is not zip or gzip", err)
+		}
+	})
+}
+
+// Ошибка чтения (не EOF) возвращается как есть, а не маскируется под
+// «неизвестный формат».
+func TestExtractArchiveReturnsReadError(t *testing.T) {
+	err := extractArchive(t.TempDir(), t.TempDir()) // чтение каталога даёт ошибку, не EOF
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if strings.Contains(err.Error(), "not zip or gzip") {
+		t.Fatalf("err = %v, read error must not be reported as unknown format", err)
 	}
 }

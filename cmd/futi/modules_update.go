@@ -17,6 +17,7 @@ import (
 	"github.com/tivjnb/futi/internal/metayaml"
 	"github.com/tivjnb/futi/internal/modulecache"
 	"github.com/tivjnb/futi/internal/modulerunner"
+	"github.com/tivjnb/futi/internal/termtext"
 )
 
 // writeMeta записывает lockfile при обновлении; переменная — шов для тестов.
@@ -79,11 +80,22 @@ func runModulesUpdate(w io.Writer, stdin io.Reader, source discovery.Source, cac
 		return updateOne(w, gate, source, cache, cfg.name)
 	}
 
-	roots, err := moduleRoots()
+	roots, err := readModuleRoots()
 	if err != nil {
 		return fmt.Errorf("modules update: %w", err)
 	}
-	entries, backups := scanRoots(roots)
+	scanned, backups := scanRoots(roots)
+	// Модуль, чей каталог сам симлинк, не обновляем: замена дерева превратила
+	// бы симлинк в копию, а оригинал остался бы старым. Симлинк-каталог
+	// namespace выше модуля не мешает (dotfiles-схема).
+	var entries []installedEntry
+	for _, e := range scanned {
+		if e.SelfLink {
+			fmt.Fprintf(os.Stderr, "Warning: skipped %s: module directory is a symlink\n", termtext.Line(e.Name))
+			continue
+		}
+		entries = append(entries, e)
+	}
 	for _, b := range backups {
 		fmt.Fprintf(os.Stderr, "Warning: found %s left by an interrupted update; inspect it and remove or restore it manually\n", b)
 	}
@@ -131,15 +143,20 @@ func updateOne(w io.Writer, gate attachGate, source discovery.Source, cache *mod
 }
 
 // backupHint возвращает подсказку про оставшийся backup модуля name в одном из
-// корней или пустую строку.
+// корней или пустую строку. Путь строится в корне, чей префикс совпадает с
+// началом имени (префикс снимается).
 func backupHint(name string) string {
-	roots, err := moduleRoots()
+	roots, err := readModuleRoots()
 	if err != nil {
 		return ""
 	}
-	rel := filepath.FromSlash(strings.ReplaceAll(name, ".", "/"))
 	for _, root := range roots {
-		backup := filepath.Join(root, rel) + backupSuffix
+		relName, ok := stripRootPrefix(root.Prefix, name)
+		if !ok {
+			continue
+		}
+		rel := filepath.FromSlash(strings.ReplaceAll(relName, ".", "/"))
+		backup := filepath.Join(root.Dir, rel) + backupSuffix
 		if _, err := os.Lstat(backup); err == nil {
 			return fmt.Sprintf(" (found %s left by an interrupted update; inspect it and remove or restore it manually)", backup)
 		}
@@ -291,7 +308,7 @@ func updateAt(w io.Writer, gate attachGate, cache *modulecache.Cache, name, labe
 	// Прерывание сигналом возвращаем после Invalidate: дерево уже заменено.
 	var interruptErr error
 	if runAttach {
-		if err := modulerunner.RunHook(context.Background(), mod.Attach, moduleRoot, name, os.Stdout, os.Stderr); err != nil {
+		if err := modulerunner.RunHook(context.Background(), mod.Attach, moduleRoot, name, w, os.Stderr); err != nil {
 			if _, interrupted := interruptSignal(err); interrupted {
 				interruptErr = fmt.Errorf("attach interrupted: %w", err)
 			} else {

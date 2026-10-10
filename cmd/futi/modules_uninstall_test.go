@@ -341,3 +341,30 @@ func TestRunModulesUninstallBrokenYAMLStrictDetachRefuses(t *testing.T) {
 		t.Fatal("module must NOT be deleted")
 	}
 }
+
+// F62: stdout хука detach идёт в writer вызывающей функции.
+func TestModulesUninstallHookOutputToWriter(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	moduleDir := filepath.Join(global, "qr")
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "name: qr\ndetach: \"echo detach-hook-says-hi\"\ncommands:\n  run:\n    cmd: echo\n"
+	if err := os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := runModulesUninstall(&buf, strings.NewReader("\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "--yes"}); err != nil {
+		t.Fatalf("runModulesUninstall: %v", err)
+	}
+	if !strings.Contains(buf.String(), "detach-hook-says-hi") {
+		t.Fatalf("writer output = %q, want hook stdout", buf.String())
+	}
+}

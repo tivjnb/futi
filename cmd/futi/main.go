@@ -216,12 +216,9 @@ func createGlobalSource() (*config.Config, discovery.Source, error) {
 	}
 
 	// Fallback: нет конфига — одиночный GlobalSource
-	modDir := os.Getenv("FUTI_MODULES_DIR")
-	if modDir == "" {
-		modDir, err = config.DefaultModulesDir()
-		if err != nil {
-			return nil, nil, fmt.Errorf("modules dir: %w", err)
-		}
+	modDir, err := globalModulesDir()
+	if err != nil {
+		return nil, nil, fmt.Errorf("modules dir: %w", err)
 	}
 	return cfg, discovery.NewGlobalSource(modDir), nil
 }
@@ -740,6 +737,10 @@ MODULES
   futi modules remove_command <module> <command>
                                    Remove a command from config.yaml
 
+  list, update and uninstall see modules in all config.yaml sources (names
+  include the mountpoint); install and init --global write only to the global
+  modules directory (or ./.futi/ with --local).
+
   install flags:
   --local                          Install into ./.futi/ instead of the
                                    global modules directory
@@ -850,9 +851,10 @@ EXAMPLES
   If docker build exits with 5, futi exits with 5.
 
 ENVIRONMENT
-  FUTI_MODULES_DIR                  Override modules directory (used when
-                                    no config.yaml exists; default
-                                    ~/.config/futi/modules/)
+  FUTI_MODULES_DIR                  Override modules directory (discovery
+                                    uses it when no config.yaml exists;
+                                    install without --local writes there;
+                                    default ~/.config/futi/modules/)
 `)
 }
 

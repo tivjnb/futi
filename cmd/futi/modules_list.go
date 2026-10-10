@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tivjnb/futi/internal/config"
 	"github.com/tivjnb/futi/internal/metayaml"
 	"github.com/tivjnb/futi/internal/termtext"
 
@@ -18,30 +17,12 @@ import (
 
 // installedEntry — установленный модуль, найденный сканированием.
 type installedEntry struct {
-	Name string // dot-имя (namespace.name)
-	Dir  string // каталог модуля (пакет)
-	Meta *metayaml.Meta
-}
-
-// moduleRoots возвращает корни поиска установленных модулей: глобальный
-// каталог (FUTI_MODULES_DIR или default) + ./.futi (если существует).
-func moduleRoots() ([]string, error) {
-	globalDir := os.Getenv("FUTI_MODULES_DIR")
-	if globalDir == "" {
-		dir, err := config.DefaultModulesDir()
-		if err != nil {
-			return nil, err
-		}
-		globalDir = dir
-	}
-	roots := []string{globalDir}
-
-	if info, err := os.Stat(".futi"); err == nil && info.IsDir() {
-		if abs, err := filepath.Abs(".futi"); err == nil {
-			roots = append(roots, abs)
-		}
-	}
-	return roots, nil
+	Name    string // dot-имя (namespace.name)
+	Dir     string // каталог модуля (пакет)
+	Meta    *metayaml.Meta
+	ViaLink bool // путь проходит через симлинк-каталог ниже корня
+	// SelfLink — сам каталог модуля (последний элемент пути) симлинк.
+	SelfLink bool
 }
 
 // dotName превращает относительный путь ("images/qr") в dot-имя ("images.qr").
@@ -55,39 +36,93 @@ const backupSuffix = ".futi-backup"
 // scanRoots обходит корни и собирает пакеты с config.yaml +
 // __futi_meta.yaml, а также каталоги *.futi-backup, оставшиеся после
 // прерванного update (backup — не модуль, внутрь не спускаемся). Внутрь
-// найденного модуля не спускаемся (SkipDir). Ошибки чтения отдельного
-// модуля не фатальны — модуль пропускается.
-func scanRoots(roots []string) (entries []installedEntry, backups []string) {
+// найденного модуля не спускаемся. Имя модуля — с префиксом корня, как его
+// резолвит discovery. Симлинки на каталоги (и корень-симлинк) раскрываются,
+// как в discovery; один реальный каталог модуля или backup попадает в
+// результат один раз — update не обновит его дважды. Из нескольких путей к
+// нему выбирается найденный без симлинк-каталога (ViaLink == false), иначе —
+// первый по обходу; порядок — по первому появлению, он детерминирован
+// (корни по порядку, записи каталога по имени). Ошибки чтения отдельного
+// модуля или каталога не фатальны — он пропускается.
+func scanRoots(roots []moduleRoot) (entries []installedEntry, backups []string) {
+	st := scanState{entryIdx: make(map[string]int), backupIdx: make(map[string]int)}
 	for _, root := range roots {
-		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || !d.IsDir() {
-				return nil // недоступное — пропускаем
-			}
-			rel, relErr := filepath.Rel(root, path)
-			if relErr != nil || rel == "." {
-				return nil
-			}
-			if metayaml.IsExcluded(rel) {
-				return filepath.SkipDir
-			}
-			if strings.HasSuffix(rel, backupSuffix) {
-				backups = append(backups, path)
-				return filepath.SkipDir
-			}
-			if _, statErr := os.Stat(filepath.Join(path, "config.yaml")); statErr == nil {
-				if meta, metaErr := metayaml.Read(filepath.Join(path, metayaml.FileName)); metaErr == nil {
-					entries = append(entries, installedEntry{Name: dotName(rel), Dir: path, Meta: meta})
-				}
-				return filepath.SkipDir // внутрь модуля не спускаемся
-			}
-			return nil
-		})
+		st.walk(root, root.Dir, "", false, make(map[string]bool))
 	}
-	return entries, backups
+	for _, b := range st.backups {
+		backups = append(backups, b.Dir)
+	}
+	return st.entries, backups
+}
+
+// scanState — накопленный результат scanRoots; *Idx — реальный путь
+// каталога → индекс записи (Name и Meta у backup-записей не заполняются).
+type scanState struct {
+	entries   []installedEntry
+	entryIdx  map[string]int
+	backups   []installedEntry
+	backupIdx map[string]int
+}
+
+// walk обходит каталог dir корня root (rel — его путь от корня, viaLink —
+// путь уже прошёл через симлинк-каталог ниже корня). ancestors — реальные
+// пути каталогов текущего пути обхода: симлинк на предка (цикл) не
+// раскрывается.
+func (st *scanState) walk(root moduleRoot, dir, rel string, viaLink bool, ancestors map[string]bool) {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil || ancestors[real] {
+		return
+	}
+	ancestors[real] = true
+	defer delete(ancestors, real)
+
+	children, err := os.ReadDir(dir)
+	if err != nil {
+		return // недоступное — пропускаем
+	}
+	for _, child := range children {
+		path := filepath.Join(dir, child.Name())
+		childRel := filepath.Join(rel, child.Name())
+		info, err := os.Stat(path) // за симлинком
+		if err != nil || !info.IsDir() || metayaml.IsExcluded(childRel) {
+			continue
+		}
+		childViaLink := viaLink || child.Type()&fs.ModeSymlink != 0
+		if strings.HasSuffix(child.Name(), backupSuffix) {
+			keepPreferred(&st.backups, st.backupIdx, installedEntry{Dir: path, ViaLink: childViaLink})
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(path, "config.yaml")); err == nil {
+			if meta, err := metayaml.Read(filepath.Join(path, metayaml.FileName)); err == nil {
+				keepPreferred(&st.entries, st.entryIdx, installedEntry{
+					Name: prefixedName(root.Prefix, dotName(childRel)), Dir: path, Meta: meta, ViaLink: childViaLink,
+					SelfLink: child.Type()&fs.ModeSymlink != 0,
+				})
+			}
+			continue // внутрь модуля не спускаемся
+		}
+		st.walk(root, path, childRel, childViaLink, ancestors)
+	}
+}
+
+// keepPreferred добавляет e в *list, если его реальный каталог ещё не
+// встречался; встречался через симлинк-каталог, а e найден без него — e
+// заменяет прежнюю запись на её месте.
+func keepPreferred(list *[]installedEntry, idx map[string]int, e installedEntry) {
+	real := normalizePath(e.Dir)
+	i, ok := idx[real]
+	if !ok {
+		idx[real] = len(*list)
+		*list = append(*list, e)
+		return
+	}
+	if (*list)[i].ViaLink && !e.ViaLink {
+		(*list)[i] = e
+	}
 }
 
 // scanInstalled — установленные модули из корней (без backup-каталогов).
-func scanInstalled(roots []string) []installedEntry {
+func scanInstalled(roots []moduleRoot) []installedEntry {
 	entries, _ := scanRoots(roots)
 	return entries
 }
@@ -98,7 +133,7 @@ func runModulesList(w io.Writer, args []string) error {
 		return fmt.Errorf("usage: futi modules list")
 	}
 
-	roots, err := moduleRoots()
+	roots, err := readModuleRoots()
 	if err != nil {
 		return fmt.Errorf("modules list: %w", err)
 	}
@@ -112,7 +147,11 @@ func runModulesList(w io.Writer, args []string) error {
 
 	var rows [][]string
 	for _, e := range entries {
-		version := e.Meta.Lockfile.Ref
+		// Ref осмыслен только для git; в старых lockfile local/archive он мог остаться.
+		version := ""
+		if e.Meta.Lockfile.Type == "git" {
+			version = e.Meta.Lockfile.Ref
+		}
 		if version == "" {
 			version = e.Meta.Lockfile.Commit
 			if len(version) > 12 {
