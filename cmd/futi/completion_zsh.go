@@ -13,34 +13,36 @@ _futi() {
     local -a response
     (( ! $+commands[futi] )) && return 1
 
+    # Слова от первого после futi до текущего включительно: слова после
+    # курсора (TAB в середине строки) не передаются.
     local -a args
-    args=("${words[@]:1}")
+    args=("${(@)words[2,CURRENT]}")
 
     response=("${(@f)$(futi __complete "${args[@]}" 2>/dev/null)}")
 
-    local directive
-    directive="${response[-1]#:}"
-    if [[ -z "$directive" ]]; then
-        directive=0
+    # Директива — только последняя строка вида :N; иначе это кандидат.
+    local directive=0
+    if [[ "${response[-1]}" =~ '^:[0-9]+$' ]]; then
+        directive="${response[-1]#:}"
+        response=("${(@)response[1,-2]}")
     fi
 
-    # Drop the directive line.
-    response=("${(@)response[1,-2]}")
-
+    local comp ctext cdesc
     for comp in "${response[@]}"; do
-        if [[ "$comp" == $'\t'* ]]; then
-            # Tab-prefixed: description-only entry (rare).
-            completions_with_descriptions+=("${comp}")
-        elif [[ "$comp" == *$'\t'* ]]; then
-            # "text\tdescription" — split for _describe.
-            # REV-010: ':' экранируется в text и description — _describe
-            # использует ':' как разделитель, неэкранированное двоеточие
-            # в кандидате искажает подсказку.
-            local ctext="${comp%%$'\t'*}"
-            local cdesc="${comp#*$'\t'}"
-            completions_with_descriptions+=("${ctext//:/\\:}:${cdesc//:/\\:}")
+        [[ -z "$comp" ]] && continue
+        # _describe использует ':' как разделитель text:description, поэтому
+        # '\' и ':' экранируются (сначала '\') в тексте и в описании.
+        if [[ "$comp" == *$'\t'* ]]; then
+            ctext="${comp%%$'\t'*}"
+            cdesc="${comp#*$'\t'}"
+            ctext="${ctext//\\/\\\\}"
+            ctext="${ctext//:/\\:}"
+            cdesc="${cdesc//\\/\\\\}"
+            cdesc="${cdesc//:/\\:}"
+            completions_with_descriptions+=("${ctext}:${cdesc}")
         else
-            completions+=("${comp}")
+            ctext="${comp//\\/\\\\}"
+            completions+=("${ctext//:/\\:}")
         fi
     done
 
@@ -51,16 +53,22 @@ _futi() {
         _describe -d 'values' completions_with_descriptions
     fi
 
-    case "$directive" in
-        1) _message 'error occurred during completion' ;;
-        2) _message 'no space left' ;;
-        4) _message 'no file completion' ;;
-        # Default: futi разрешает файловое дополнение (значения флагов —
-        # пути). Функция завершения полностью контролирует кандидатов,
-        # поэтому генерируем файловые сами.
-        0) _files ;;
-        *) ;;
-    esac
+    # Директива — битовая маска: 1 — ошибка, 2 — без пробела, 4 — без файлов.
+    if (( directive & 1 )); then
+        _message 'error occurred during completion'
+    fi
+    if (( directive & 2 )); then
+        _message 'no space left'
+    fi
+    if (( directive & 4 )); then
+        _message 'no file completion'
+    fi
+    # Default: futi разрешает файловое дополнение (значения флагов —
+    # пути). Функция завершения полностью контролирует кандидатов,
+    # поэтому генерируем файловые сами.
+    if (( directive == 0 )); then
+        _files
+    fi
 
     return 0
 }
