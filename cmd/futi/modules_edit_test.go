@@ -245,7 +245,7 @@ func listDir(t *testing.T, dir string) []string {
 
 // Невалидный результат правки не трогает оригинал: байты и права на месте,
 // временных файлов в каталоге нет.
-func TestAddCommandInvalidResultKeepsOriginal(t *testing.T) {
+func TestEditInvalidResultKeepsOriginal(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("права 0600 не проверяются на Windows")
 	}
@@ -260,8 +260,12 @@ func TestAddCommandInvalidResultKeepsOriginal(t *testing.T) {
 	}
 
 	// Пустой cmd у единственной команды после удаления — невалидный манифест.
-	if err := removeCommandFromManifest(path, "only"); err == nil {
+	err := removeCommandFromManifest(path, "only")
+	if err == nil {
 		t.Fatal("expected invalid-manifest error")
+	}
+	if strings.Contains(err.Error(), ".m.yaml-") || !strings.Contains(err.Error(), path) {
+		t.Fatalf("error must name %s, not a temp file: %v", path, err)
 	}
 
 	data, _ := os.ReadFile(path)

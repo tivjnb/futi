@@ -150,9 +150,10 @@ func removeCommandFromManifest(path, cmdName string) error {
 //
 // Если path — симлинк, правится его цель (EvalSymlinks): модуль = код, и
 // пользователь сам редактирует свой модуль; rename поверх симлинка заменил бы
-// сам симлинк обычным файлом. Имя временного файла на результат LoadModule не
-// влияет (путь манифеста используется только в сообщениях об ошибках), а
-// moduleRoot берётся от настоящего каталога манифеста.
+// сам симлинк обычным файлом. Результат проверяется в памяти (ParseManifest +
+// Validate, как LoadModule) до создания temp-файла; в сообщении об ошибке — путь
+// path в том виде, в каком его знает пользователь (для симлинка — сам симлинк),
+// а moduleRoot берётся от настоящего каталога манифеста.
 func writeValidated(path string, doc *yaml.Node) error {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
@@ -174,6 +175,14 @@ func writeValidated(path string, doc *yaml.Node) error {
 	}
 	dir := filepath.Dir(real)
 
+	mod, err := execmodule.ParseManifest(buf.Bytes(), path, dir)
+	if err != nil {
+		return fmt.Errorf("edited manifest is invalid, original kept: %w", err)
+	}
+	if errs, _ := mod.Validate(); len(errs) > 0 {
+		return fmt.Errorf("edited manifest is invalid, original kept: execmodule: invalid module %q: %w", path, errs[0])
+	}
+
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(real)+"-*")
 	if err != nil {
 		return fmt.Errorf("create temp manifest: %w", err)
@@ -185,6 +194,8 @@ func writeValidated(path string, doc *yaml.Node) error {
 		tmp.Close()
 		return fmt.Errorf("write manifest: %w", err)
 	}
+	// Сохраняются только права Perm(): владелец, группа и биты сверх Perm()
+	// (setuid и т.п.) при замене через temp+rename не переносятся.
 	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
 		tmp.Close()
 		return fmt.Errorf("write manifest: %w", err)
@@ -197,9 +208,6 @@ func writeValidated(path string, doc *yaml.Node) error {
 		return fmt.Errorf("write manifest: %w", err)
 	}
 
-	if _, err := execmodule.LoadModule(tmpPath, dir); err != nil {
-		return fmt.Errorf("edited manifest is invalid, original kept: %w", err)
-	}
 	if err := os.Rename(tmpPath, real); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
