@@ -72,8 +72,8 @@ func isNullNode(n *yaml.Node) bool {
 
 // addCommandToManifest добавляет команду cmdName в commands: манифеста path.
 // cmdStr — тело команды; desc — описание (опционально).
-// Ошибка, если команда уже существует. После записи манифест валидируется;
-// при провале восстанавливается оригинал.
+// Ошибка, если команда уже существует. Результат проверяется до записи
+// (writeValidated); при невалидном результате оригинал не меняется.
 func addCommandToManifest(path, cmdName, cmdStr, desc string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
