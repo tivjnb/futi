@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,9 +37,23 @@ func (k sourceKind) String() string {
 // archiveExts — расширения web-архивов (спека §6.2).
 var archiveExts = []string{".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".zip"}
 
-// archiveExt возвращает расширение архива из строки (длиннейшее совпадение).
+// urlPath возвращает путь http(s)-URL без query и fragment; для остальных
+// строк (локальные пути) — саму строку.
+func urlPath(src string) string {
+	if !strings.HasPrefix(src, "http://") && !strings.HasPrefix(src, "https://") {
+		return src
+	}
+	u, err := url.Parse(src)
+	if err != nil {
+		return src
+	}
+	return u.Path
+}
+
+// archiveExt возвращает расширение архива из пути строки (длиннейшее
+// совпадение); query и fragment URL не учитываются.
 func archiveExt(src string) string {
-	lower := strings.ToLower(src)
+	lower := strings.ToLower(urlPath(src))
 	for _, ext := range archiveExts {
 		if strings.HasSuffix(lower, ext) {
 			return ext
@@ -106,7 +121,7 @@ func detectSourceType(src string, fromLocal, fromGit, fromArchive bool) (sourceK
 // источника без хвостового "/", суффикса ".git", расширения архива и
 // расширения одиночного манифеста (.yaml/.yml).
 func fallbackName(src string) string {
-	base := strings.TrimSuffix(strings.TrimSuffix(src, "/"), ".git")
+	base := strings.TrimSuffix(strings.TrimSuffix(urlPath(src), "/"), ".git")
 	if ext := archiveExt(base); ext != "" {
 		base = strings.TrimSuffix(base, ext)
 	}
