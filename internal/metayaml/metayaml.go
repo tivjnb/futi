@@ -152,17 +152,31 @@ func IsExcluded(rel string) bool {
 	return false
 }
 
-// ComputeTreeHash считает SHA256 дерева модуля: конкатенация строк
-// "relpath\x00sha256(content)\n" по всем regular-файлам, отсортированным
-// лексикографически. Исключения: __futi_meta.yaml и ExcludedDirs-компоненты.
-// Возвращает "sha256:<hex>".
-func ComputeTreeHash(root string) (string, error) {
-	var lines []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+// treeEntry — запись дерева модуля, по которой считаются хеш и разница.
+// Полный mode не входит: прочие биты прав зависят от umask и checkout.
+type treeEntry struct {
+	symlink bool   // симлинк (иначе regular-файл)
+	exec    bool   // бит исполнения у кого-либо (mode&0o111 != 0); у симлинка — false
+	content string // sha256 содержимого файла (hex) или цель симлинка
+}
+
+// walkTree собирает записи дерева root: relpath (слэши) → treeEntry.
+// Исключения — FileName и компоненты ExcludedDirs. Корень разрешается через
+// EvalSymlinks: иначе симлинк на месте корня давал бы пустое дерево.
+// Симлинки внутри дерева не разыменовываются — учитывается их цель.
+// Прочие типы (fifo, сокеты, устройства) пропускаются: install их не
+// копирует, и в источнике модуля они не встречаются.
+func walkTree(root string) (map[string]treeEntry, error) {
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
+	entries := make(map[string]treeEntry)
+	err = filepath.WalkDir(resolved, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, relErr := filepath.Rel(root, path)
+		rel, relErr := filepath.Rel(resolved, path)
 		if relErr != nil {
 			return relErr
 		}
@@ -175,24 +189,108 @@ func ComputeTreeHash(root string) (string, error) {
 			}
 			return nil
 		}
-		if !d.Type().IsRegular() {
-			return nil // симлинки и прочее не хешируем
-		}
 		if rel == FileName || IsExcluded(rel) {
 			return nil
 		}
-		data, err := osReadFile(path)
-		if err != nil {
-			return err
+		key := filepath.ToSlash(rel)
+		switch {
+		case d.Type()&os.ModeSymlink != 0:
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			entries[key] = treeEntry{symlink: true, content: filepath.ToSlash(target)}
+		case d.Type().IsRegular():
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			data, err := osReadFile(path)
+			if err != nil {
+				return err
+			}
+			sum := sha256.Sum256(data)
+			entries[key] = treeEntry{exec: info.Mode()&0o111 != 0, content: hex.EncodeToString(sum[:])}
 		}
-		sum := sha256.Sum256(data)
-		lines = append(lines, fmt.Sprintf("%s\x00%s\n", filepath.ToSlash(rel), hex.EncodeToString(sum[:])))
 		return nil
 	})
 	if err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+// ComputeTreeHash считает SHA256 дерева модуля (записи walkTree): конкатенация
+// строк "relpath\x00тип\x00exec\x00содержимое\n", отсортированных по relpath;
+// тип — "f" (файл) или "l" (симлинк), exec — "x" или "-", содержимое —
+// sha256 файла или цель симлинка. Возвращает "sha256:<hex>".
+func ComputeTreeHash(root string) (string, error) {
+	entries, err := walkTree(root)
+	if err != nil {
 		return "", fmt.Errorf("metayaml: hash tree %q: %w", root, err)
 	}
-	sort.Strings(lines)
-	h := sha256.Sum256([]byte(strings.Join(lines, "")))
+	var b strings.Builder
+	for _, rel := range sortedKeys(entries) {
+		e := entries[rel]
+		kind, exec := "f", "-"
+		if e.symlink {
+			kind = "l"
+		}
+		if e.exec {
+			exec = "x"
+		}
+		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00%s\n", rel, kind, exec, e.content)
+	}
+	h := sha256.Sum256([]byte(b.String()))
 	return "sha256:" + hex.EncodeToString(h[:]), nil
+}
+
+// TreeDiff — разница двух деревьев модуля; пути со слэшами, отсортированы.
+type TreeDiff struct {
+	Added    []string // есть только в новом дереве
+	Modified []string // есть в обоих, отличается тип, бит исполнения или содержимое
+	Deleted  []string // есть только в старом дереве
+}
+
+// Empty сообщает, что деревья совпадают.
+func (d TreeDiff) Empty() bool {
+	return len(d.Added) == 0 && len(d.Modified) == 0 && len(d.Deleted) == 0
+}
+
+// DiffTrees сравнивает дерево oldRoot с newRoot по тем же записям и
+// исключениям, что и ComputeTreeHash.
+func DiffTrees(oldRoot, newRoot string) (TreeDiff, error) {
+	oldEntries, err := walkTree(oldRoot)
+	if err != nil {
+		return TreeDiff{}, fmt.Errorf("metayaml: diff tree %q: %w", oldRoot, err)
+	}
+	newEntries, err := walkTree(newRoot)
+	if err != nil {
+		return TreeDiff{}, fmt.Errorf("metayaml: diff tree %q: %w", newRoot, err)
+	}
+	var d TreeDiff
+	for _, rel := range sortedKeys(newEntries) {
+		old, ok := oldEntries[rel]
+		switch {
+		case !ok:
+			d.Added = append(d.Added, rel)
+		case old != newEntries[rel]:
+			d.Modified = append(d.Modified, rel)
+		}
+	}
+	for _, rel := range sortedKeys(oldEntries) {
+		if _, ok := newEntries[rel]; !ok {
+			d.Deleted = append(d.Deleted, rel)
+		}
+	}
+	return d, nil
+}
+
+func sortedKeys(entries map[string]treeEntry) []string {
+	keys := make([]string, 0, len(entries))
+	for k := range entries {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
