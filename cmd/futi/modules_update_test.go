@@ -808,3 +808,74 @@ func TestUpdateChangeListTruncated(t *testing.T) {
 		t.Fatalf("stderr = %q, want truncated list ending with ... and 10 more", stderr)
 	}
 }
+
+// Удаления печатаются первыми: длинный список добавлений не прячет их в
+// «... and N more».
+func TestUpdateChangeListDeletionsFirst(t *testing.T) {
+	added := make([]string, 60)
+	for i := range added {
+		added[i] = fmt.Sprintf("f%02d.txt", i)
+	}
+	diff := metayaml.TreeDiff{Added: added, Modified: []string{"config.yaml"}, Deleted: []string{"mine.txt"}}
+
+	var err error
+	stderr := captureStderr(t, func() {
+		err = attachGate{yes: true}.allowReplace("qr", "/m/qr", diff)
+	})
+	if err != nil {
+		t.Fatalf("allowReplace: %v", err)
+	}
+	want := "Module qr will change (/m/qr):\n  D mine.txt\n  M config.yaml\n  A f00.txt\n"
+	if !strings.HasPrefix(stderr, want) {
+		t.Fatalf("stderr = %q, want prefix %q", stderr, want)
+	}
+	if !strings.HasSuffix(stderr, "  A f47.txt\n  ... and 12 more\n") {
+		t.Fatalf("stderr = %q, want 50 lines then ... and 12 more", stderr)
+	}
+}
+
+// Пустой stdin на «терминале» (/dev/null) при вопросе о замене — отказ с
+// подсказкой про --yes, дерево не тронуто.
+func TestUpdateReplaceNoAnswerHintsYes(t *testing.T) {
+	src, dest := installForUpdate(t)
+	setStdinTerminal(t, true)
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo v2\n")
+
+	_, _, err := runUpdateQR(t, strings.NewReader(""))
+	if !errors.Is(err, errUpdateNotConfirmed) || !strings.Contains(err.Error(), "--yes") || !strings.Contains(err.Error(), "module not updated") {
+		t.Fatalf("err = %v, want update not confirmed with --yes hint", err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dest, "config.yaml")); strings.Contains(string(data), "echo v2") {
+		t.Fatal("tree must stay when there is no answer")
+	}
+	if exists(dest + backupSuffix) {
+		t.Fatal("backup must not be created")
+	}
+}
+
+// update без имени: отказ от замены — ошибка этого модуля, остальные обновляются.
+func TestUpdateAllDeclineReplaceOneModule(t *testing.T) {
+	global := attachEnv(t)
+	setStdinTerminal(t, true)
+	for _, name := range []string{"a", "b"} {
+		src := makeSourceModule(t, t.TempDir(), name, "")
+		if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src}); err != nil {
+			t.Fatalf("install %s: %v", name, err)
+		}
+		writeFile(t, filepath.Join(src, "config.yaml"), "name: "+name+"\ncommands:\n  run:\n    cmd: echo v2\n")
+	}
+
+	var err error
+	captureStderr(t, func() {
+		err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader("n\ny\n"), discovery.NewGlobalSource(global), newTestCache(), nil)
+	})
+	if err == nil || err.Error() != "failed to update: a" {
+		t.Fatalf("err = %v, want failed to update: a", err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(global, "a", "config.yaml")); strings.Contains(string(data), "echo v2") {
+		t.Fatal("a: old tree must stay after n")
+	}
+	if data, _ := os.ReadFile(filepath.Join(global, "b", "config.yaml")); !strings.Contains(string(data), "echo v2") {
+		t.Fatal("b: new tree must be installed after y")
+	}
+}

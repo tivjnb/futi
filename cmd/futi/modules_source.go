@@ -127,6 +127,13 @@ func isExcludedComponent(name string) bool {
 // copyTreeFiltered копирует дерево src в dst, пропуская excluded-каталоги.
 // Копируем только regular-файлы (симлинки и прочее — пропускаем).
 func copyTreeFiltered(src, dst string) error {
+	return copyTree(src, dst, false)
+}
+
+// copyTree копирует дерево src в dst, пропуская excluded-каталоги и типы
+// кроме каталогов, regular-файлов и (при keepSymlinks) симлинков. Симлинк
+// воссоздаётся с той же целью, без следования по нему.
+func copyTree(src, dst string, keepSymlinks bool) error {
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -144,7 +151,17 @@ func copyTreeFiltered(src, dst string) error {
 			}
 			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
 		}
-		if !d.Type().IsRegular() || isExcludedComponent(d.Name()) {
+		if isExcludedComponent(d.Name()) {
+			return nil
+		}
+		if keepSymlinks && d.Type()&fs.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(target, filepath.Join(dst, rel))
+		}
+		if !d.Type().IsRegular() {
 			return nil
 		}
 		data, err := os.ReadFile(path)
@@ -166,7 +183,8 @@ var renameDir = os.Rename
 
 // moveTree переносит каталог src в dst: сначала os.Rename (атомарно);
 // при ошибке (разные файловые системы, например /tmp → $HOME) —
-// копирование copyTreeFiltered + удаление src.
+// копирование copyTree с симлинками + удаление src. Симлинки переносим, как
+// rename: иначе хеш дерева после install разошёлся бы с хешем источника в update.
 func moveTree(src, dst string) error {
 	// Существующий dst не трогаем: иначе откат после сбоя копирования мог бы
 	// удалить чужие данные.
@@ -176,7 +194,7 @@ func moveTree(src, dst string) error {
 	if err := renameDir(src, dst); err == nil {
 		return nil
 	}
-	if err := copyTreeFiltered(src, dst); err != nil {
+	if err := copyTree(src, dst, true); err != nil {
 		// Частичное дерево не оставляем (dst создали мы).
 		if rmErr := os.RemoveAll(dst); rmErr != nil {
 			return fmt.Errorf("move tree: %w (remove partial %s: %v)", err, dst, rmErr)

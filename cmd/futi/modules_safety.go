@@ -224,11 +224,13 @@ func (g attachGate) allow(attach, name, dir string) (bool, error) {
 // Отказ — errUpdateNotConfirmed.
 func (g attachGate) allowReplace(label, dir string, diff metayaml.TreeDiff) error {
 	fmt.Fprintf(os.Stderr, "Module %s will change (%s):\n", termtext.Line(label), termtext.Line(dir))
+	// Порядок D, M, A: потеря файлов важнее, длинный список добавлений не
+	// должен прятать удаления за «... and N more».
 	var lines []string
 	for _, c := range []struct {
 		mark  string
 		paths []string
-	}{{"A", diff.Added}, {"M", diff.Modified}, {"D", diff.Deleted}} {
+	}{{"D", diff.Deleted}, {"M", diff.Modified}, {"A", diff.Added}} {
 		for _, p := range c.paths {
 			lines = append(lines, "  "+c.mark+" "+termtext.Line(p))
 		}

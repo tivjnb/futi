@@ -224,3 +224,70 @@ func TestRunModulesUpdateRollbackFailureNamesBackup(t *testing.T) {
 		t.Fatalf("want rollback failure naming backup path, got %v", err)
 	}
 }
+
+// crossDeviceRename форсирует путь копирования в moveTree, как при EXDEV.
+func crossDeviceRename(t *testing.T) {
+	t.Helper()
+	orig := renameDir
+	renameDir = func(string, string) error { return syscall.EXDEV }
+	t.Cleanup(func() { renameDir = orig })
+}
+
+// Копирование в moveTree переносит дерево как rename: симлинки — симлинками
+// с той же целью, бит исполнения сохраняется.
+func TestMoveTreeFallbackKeepsSymlinks(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	writeFile(t, filepath.Join(src, "run.sh"), "echo\n")
+	if err := os.Chmod(filepath.Join(src, "run.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("run.sh", filepath.Join(src, "current")); err != nil {
+		t.Fatal(err)
+	}
+	crossDeviceRename(t)
+
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := moveTree(src, dst); err != nil {
+		t.Fatalf("moveTree: %v", err)
+	}
+	fi, err := os.Lstat(filepath.Join(dst, "current"))
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("current must be a symlink: fi=%v err=%v", fi, err)
+	}
+	if target, _ := os.Readlink(filepath.Join(dst, "current")); target != "run.sh" {
+		t.Fatalf("symlink target = %q, want run.sh", target)
+	}
+	if fi, err := os.Stat(filepath.Join(dst, "run.sh")); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Fatalf("run.sh mode = %v (err %v), want 0755", fi.Mode().Perm(), err)
+	}
+}
+
+// Модуль из git с симлинком, установленный через копирование (другая ФС):
+// update без изменений апстрима — up to date, без вопроса о замене.
+func TestUpdateCrossDeviceSymlinkUpToDate(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	global := attachEnv(t)
+	setStdinTerminal(t, false)
+	repo := filepath.Join(t.TempDir(), "qr")
+	writeFile(t, filepath.Join(repo, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo run\n")
+	if err := os.Symlink("config.yaml", filepath.Join(repo, "link")); err != nil {
+		t.Fatal(err)
+	}
+	gitRunTest(t, repo, "init", "-q")
+	gitRunTest(t, repo, "add", ".")
+	gitRunTest(t, repo, "commit", "-q", "-m", "init")
+	crossDeviceRename(t)
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{"--from-git", repo}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	out, stderr, err := runUpdateQR(t, unreadableStdin{t})
+	if err != nil || out != "qr: up to date\n" {
+		t.Fatalf("update: out=%q err=%v stderr=%q, want up to date", out, err, stderr)
+	}
+	if fi, err := os.Lstat(filepath.Join(global, "qr", "link")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link must stay a symlink in dest: err=%v", err)
+	}
+}

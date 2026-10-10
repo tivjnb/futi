@@ -280,39 +280,24 @@ func TestUpdateAttachDeclinedKeepsOldTree(t *testing.T) {
 	}
 }
 
-// Без терминала и --yes update останавливается ещё на подтверждении замены
-// файлов — до вопроса о хуке; stdin не читается.
-func TestUpdateAttachWithoutTerminalRefuses(t *testing.T) {
-	global := attachEnv(t)
-	setStdinTerminal(t, false)
-	dest := installThenChange(t, global, "qr")
-
-	var err error
-	captureStderr(t, func() {
-		err = runModulesUpdate(&bytes.Buffer{}, unreadableStdin{t}, discovery.NewGlobalSource(global), newTestCache(), []string{"qr"})
-	})
-	if err == nil || !strings.Contains(err.Error(), "--yes") {
-		t.Fatalf("err = %v, want hint about --yes", err)
-	}
-	if exists(filepath.Join(dest, "attached")) {
-		t.Fatal("attach hook must not run")
-	}
-	data, _ := os.ReadFile(filepath.Join(dest, "config.yaml"))
-	if strings.Contains(string(data), "echo v2") {
-		t.Fatal("old tree must stay")
-	}
-}
-
 func TestUpdateAttachYesRuns(t *testing.T) {
 	global := attachEnv(t)
 	setStdinTerminal(t, false)
 	dest := installThenChange(t, global, "qr")
 
-	if err := runModulesUpdate(&bytes.Buffer{}, unreadableStdin{t}, discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "-y"}); err != nil {
+	// -y подтверждает и замену файлов, и хук: без TTY ни о чём не спрашиваем.
+	var err error
+	prompt := captureStderr(t, func() {
+		err = runModulesUpdate(&bytes.Buffer{}, unreadableStdin{t}, discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "-y"})
+	})
+	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if !exists(filepath.Join(dest, "attached")) {
 		t.Fatal("attach hook must run with -y")
+	}
+	if strings.Contains(prompt, "Run it?") || strings.Contains(prompt, "Replace module files?") {
+		t.Fatalf("no prompt expected with -y, got %q", prompt)
 	}
 }
 

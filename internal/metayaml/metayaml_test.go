@@ -327,6 +327,41 @@ func TestDiffTrees(t *testing.T) {
 		t.Fatalf("DiffTrees = %+v, want %+v", got, want)
 	}
 
+	// Содержимое то же, отличаются только exec-бит, цель симлинка или тип.
+	if runtime.GOOS != "windows" {
+		oldRoot, newRoot := t.TempDir(), t.TempDir()
+		for _, root := range []string{oldRoot, newRoot} {
+			write(t, filepath.Join(root, "run.sh"), "echo\n")
+			write(t, filepath.Join(root, "kind"), "x\n")
+		}
+		if err := os.Chmod(filepath.Join(newRoot, "run.sh"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("run.sh", filepath.Join(oldRoot, "link")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("kind", filepath.Join(newRoot, "link")); err != nil {
+			t.Fatal(err)
+		}
+		// Файл kind в новом дереве заменён симлинком на файл с тем же содержимым.
+		write(t, filepath.Join(newRoot, "kind.txt"), "x\n")
+		write(t, filepath.Join(oldRoot, "kind.txt"), "x\n")
+		if err := os.Remove(filepath.Join(newRoot, "kind")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("kind.txt", filepath.Join(newRoot, "kind")); err != nil {
+			t.Fatal(err)
+		}
+		got, err := DiffTrees(oldRoot, newRoot)
+		if err != nil {
+			t.Fatalf("DiffTrees: %v", err)
+		}
+		want := TreeDiff{Modified: []string{"kind", "link", "run.sh"}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("DiffTrees = %+v, want %+v", got, want)
+		}
+	}
+
 	same, err := DiffTrees(oldRoot, oldRoot)
 	if err != nil {
 		t.Fatalf("DiffTrees same: %v", err)
