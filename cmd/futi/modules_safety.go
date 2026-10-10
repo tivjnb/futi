@@ -221,8 +221,10 @@ func (g attachGate) allow(attach, name, dir string) (bool, error) {
 // allowReplace показывает в stderr изменения файлов модуля label в каталоге
 // dir (диск против нового дерева) и спрашивает, заменять ли их. Список
 // печатается и с --yes; без терминала на stdin ответ не читается, как в allow.
-// Отказ — errUpdateNotConfirmed.
-func (g attachGate) allowReplace(label, dir string, diff metayaml.TreeDiff) error {
+// Отказ — errUpdateNotConfirmed. attach — хук нового модуля: если он будет
+// запущен (не пуст и нет --skip-attach), к подсказке про --yes добавляется
+// предупреждение, что --yes подтвердит и хук, который здесь не показан.
+func (g attachGate) allowReplace(label, dir, attach string, diff metayaml.TreeDiff) error {
 	fmt.Fprintf(os.Stderr, "Module %s will change (%s):\n", termtext.Line(label), termtext.Line(dir))
 	// Порядок D, M, A: потеря файлов важнее, длинный список добавлений не
 	// должен прятать удаления за «... and N more».
@@ -246,13 +248,17 @@ func (g attachGate) allowReplace(label, dir string, diff metayaml.TreeDiff) erro
 	if g.yes {
 		return nil
 	}
+	hint := ""
+	if attach != "" && !g.skip {
+		hint = " (--yes also runs the attach hook; add --skip-attach to skip it)"
+	}
 	if !stdinIsTerminal() {
-		return errors.New("update replaces module files: rerun with --yes to confirm")
+		return errors.New("update replaces module files: rerun with --yes to confirm" + hint)
 	}
 	fmt.Fprint(os.Stderr, "Replace module files? [y/N] ")
 	ok, err := readYes(g.in)
 	if errors.Is(err, errNoAnswer) {
-		return fmt.Errorf("%w (no answer on stdin): rerun with --yes to confirm", errUpdateNotConfirmed)
+		return fmt.Errorf("%w (no answer on stdin): rerun with --yes to confirm%s", errUpdateNotConfirmed, hint)
 	}
 	if err != nil {
 		return err

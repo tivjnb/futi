@@ -210,8 +210,8 @@ func updateAt(w io.Writer, gate attachGate, cache *modulecache.Cache, name, labe
 	if newHash == lf.Hash {
 		// No-op: обновляем только last_check (§5.3 шаг 6).
 		meta.Lockfile.LastCheck = time.Now()
-		if err := metayaml.Write(metaPath, meta); err != nil {
-			return err
+		if err := writeMeta(metaPath, meta); err != nil {
+			return fmt.Errorf("write %s: %w", metayaml.FileName, err)
 		}
 		fmt.Fprintf(w, "%s: up to date\n", label)
 		return nil
@@ -236,7 +236,7 @@ func updateAt(w io.Writer, gate attachGate, cache *modulecache.Cache, name, labe
 	}
 	// Подтверждение замены — до attach и до замены дерева: отказ оставляет
 	// модуль как был, включая локальные правки.
-	err = gate.allowReplace(label, moduleRoot, diff)
+	err = gate.allowReplace(label, moduleRoot, mod.Attach, diff)
 	if errors.Is(err, errUpdateNotConfirmed) {
 		return fmt.Errorf("%w; module not updated", err)
 	}

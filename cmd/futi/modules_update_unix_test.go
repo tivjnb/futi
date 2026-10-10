@@ -291,3 +291,43 @@ func TestUpdateCrossDeviceSymlinkUpToDate(t *testing.T) {
 		t.Fatalf("link must stay a symlink in dest: err=%v", err)
 	}
 }
+
+// M3(б): модуль из git, в апстриме поменялась только цель симлинка — это
+// изменение (M), а не up to date. Локальные источники симлинки не копируют.
+func TestUpdateSymlinkTargetOnlyChangeShownAsModified(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	global := attachEnv(t)
+	setStdinTerminal(t, false)
+	repo := filepath.Join(t.TempDir(), "qr")
+	writeFile(t, filepath.Join(repo, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo run\n")
+	link := filepath.Join(repo, "lnk")
+	if err := os.Symlink("a.txt", link); err != nil {
+		t.Fatal(err)
+	}
+	gitRunTest(t, repo, "init", "-q")
+	gitRunTest(t, repo, "add", ".")
+	gitRunTest(t, repo, "commit", "-q", "-m", "init")
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{"--from-git", repo}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("b.txt", link); err != nil {
+		t.Fatal(err)
+	}
+	gitRunTest(t, repo, "commit", "-q", "-a", "-m", "retarget")
+
+	out, stderr, err := runUpdateQR(t, unreadableStdin{t}, "--yes")
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if out != "qr: updated\n" || !strings.Contains(stderr, "):\n  M lnk\n") {
+		t.Fatalf("out = %q, stderr = %q; want updated with M lnk", out, stderr)
+	}
+	if got, _ := os.Readlink(filepath.Join(global, "qr", "lnk")); got != "b.txt" {
+		t.Fatalf("link target = %q, want b.txt", got)
+	}
+}
