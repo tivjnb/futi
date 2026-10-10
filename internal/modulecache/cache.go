@@ -1,10 +1,10 @@
 // Package modulecache — persistent кэш загруженных модулей.
 //
-// Архитектура (см. docs/superpowers/specs/2026-08-19-persistent-modulecache-design.md):
+// Архитектура:
 //   - Storage interface — абстракция над persistent/in-memory хранилищем.
 //   - DiskStorage — gob-файл на диске (используется CLI).
 //   - MemoryStorage — no-op fallback (нет home dir) и заготовка для HTTP server.
-//   - RefreshPolicy interface — стратегия обновления (always/every_t_min/force_only).
+//   - RefreshPolicy interface — стратегия обновления (every_time/every_t_min/force_only).
 //   - Cache — orchestrator: in-memory entries (ALL модули) + persistent (только глобальные).
 //
 // In-memory кэш хранит все модули (глобальные + локальные) в рамках процесса —
@@ -207,6 +207,9 @@ func (c *Cache) Load() cacheFile {
 //
 // Ошибка Load (повреждённый файл) — не фатальна: rebuild с пустого состояния
 // (несовместимая версия и чужой бинарь — тихая перестройка без ошибки и лога). Если политика требует Refresh — кэш заполнится заново.
+// При force_only Refresh не вызывается: после сброса кэша (в том числе после
+// пересборки бинаря) персистентный кэш пуст до явного `futi cache refresh`,
+// модули при этом читаются с диска напрямую.
 // Ошибка Save — не фатальна: in-memory кэш актуален.
 func (c *Cache) Start(globalSource discovery.Source) error {
 	cf := c.Load()

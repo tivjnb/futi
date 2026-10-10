@@ -55,9 +55,6 @@ func parseDuration(s string) (time.Duration, error) {
 	if err != nil {
 		return 0, fmt.Errorf("modulecache: parse days %q: %w", s, err)
 	}
-	if days <= 0 {
-		return 0, fmt.Errorf("modulecache: days in %q must be > 0", s)
-	}
 	// REV-007: проверяем ДО умножения — time.Duration(days)*24h переполняет
 	// int64 для days > maxDays (Atoi принимает до 2^63-1).
 	if days > maxDays {
@@ -67,7 +64,7 @@ func parseDuration(s string) (time.Duration, error) {
 	total := time.Duration(days) * 24 * time.Hour
 
 	// Если есть остаток — парсим через time.ParseDuration.
-	// #32: нулевой rest (0h, 0m) принимается — total уже > 0 от days.
+	// #32: нулевой rest (0h, 0m) принимается, если итог > 0 (проверка ниже).
 	if rest != "" {
 		restDur, err := time.ParseDuration(rest)
 		if err != nil {
@@ -82,6 +79,12 @@ func parseDuration(s string) (time.Duration, error) {
 		if total <= 0 {
 			return 0, fmt.Errorf("modulecache: duration %q too large", s)
 		}
+	}
+
+	// audit F42: ноль проверяем по сумме компонент: "0d12h" допустимо,
+	// "0d" и "0d0h" — нет.
+	if total <= 0 {
+		return 0, fmt.Errorf("modulecache: duration %q must be > 0", s)
 	}
 
 	return total, nil

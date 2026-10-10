@@ -973,10 +973,10 @@ Cache refreshed: 5 modules, 2 updated, 1 skipped
 
 ```bash
 $ futi cache
-error: cache requires a subcommand (try "cache refresh")
+error: cache requires a subcommand (try "cache refresh", "cache status", or "cache clear")
 
 $ futi cache foo
-error: unknown cache subcommand "foo" (try "cache refresh")
+error: unknown cache subcommand "foo" (try "cache refresh", "cache status", or "cache clear")
 ```
 
 ### `futi cache status` / `futi cache clear`
@@ -1020,8 +1020,8 @@ cache:
 | Политика | Поведение |
 |---|---|
 | `every_time` | Обновлять при каждом запуске CLI (default). |
-| `every_t_min` | Обновлять раз в указанный интервал `time`. Между запусками — использовать кэш с диска. |
-| `force_only` | Никогда автоматически. Только `futi cache refresh`. |
+| `every_t_min` | Обновлять раз в указанный интервал `time` (не более 365 дней; для большего используйте `force_only`). Между запусками — использовать кэш с диска. |
+| `force_only` | Никогда автоматически. Только `futi cache refresh`; кэш, сброшенный пересборкой бинаря, остаётся пустым до него. |
 
 Формат `time` — расширение `time.ParseDuration` с поддержкой дней через суффикс `d`:
 
@@ -1033,7 +1033,7 @@ cache:
 | `1d4h` | 1 день 4 часа (28 часов) |
 | `1d2h30m` | 1 день 2 часа 30 минут |
 
-Компоненты суммируются. Отрицательные значения не поддерживаются.
+Компоненты суммируются, итог должен быть больше нуля (`0d12h` допустимо, `0d` — нет). Отрицательные значения не поддерживаются.
 
 ### Fallback
 
