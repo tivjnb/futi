@@ -154,11 +154,11 @@ func TestRunCompletionUnknownShell(t *testing.T) {
 	}
 }
 
-func TestCompletionNeedsRefreshEmpty(t *testing.T) {
-	// Пустой кэш (не прогревался) → нужен refresh.
+func TestCompletionNeedsRefreshNeverRefreshedEmpty(t *testing.T) {
+	// Кэш, который никогда не обновлялся → нужен refresh.
 	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
 	if !completionNeedsRefresh(cache) {
-		t.Fatal("expected refresh needed for empty cache")
+		t.Fatal("expected refresh needed for never-refreshed cache")
 	}
 }
 
@@ -187,6 +187,35 @@ func TestCompletionNeedsRefreshFresh(t *testing.T) {
 	}
 	if completionNeedsRefresh(cache) {
 		t.Fatal("expected no refresh needed for fresh cache")
+	}
+}
+
+// TestCompletionNoRefreshAfterEmptyRefresh — регрессия F21: при пустом каталоге
+// глобальных модулей первый __complete обновляет кэш, второй (новый Cache,
+// Load с диска) — уже нет, иначе каждый TAB пишет файл кэша.
+func TestCompletionNoRefreshAfterEmptyRefresh(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	src := discovery.NewGlobalSource(t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	if code := runCompleteMain(&stdout, &stderr, nil, src, []string{""}); code != 0 {
+		t.Fatalf("first runCompleteMain code = %d, stderr: %s", code, stderr.String())
+	}
+	cachePath, err := defaultCachePath()
+	if err != nil {
+		t.Fatalf("defaultCachePath: %v", err)
+	}
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Fatalf("cache file should exist after first __complete: %v", err)
+	}
+
+	second := newCacheFromConfig(nil)
+	second.Load()
+	if second.LastRefresh().IsZero() {
+		t.Fatal("LastRefresh should survive Save/Load after refresh of empty modules dir")
+	}
+	if completionNeedsRefresh(second) {
+		t.Fatal("second __complete must not refresh cache again")
 	}
 }
 

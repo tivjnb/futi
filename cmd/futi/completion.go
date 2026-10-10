@@ -122,12 +122,12 @@ func runCompleteMain(stdout, stderr io.Writer, cfg *config.Config, globalSource 
 }
 
 // completionNeedsRefresh решает, стоит ли `__complete` обновить кэш перед работой.
-// Возвращает true если кэш пуст (не прогревался), никогда не обновлялся или
-// обновлялся слишком давно (см. completionCacheMaxAge).
+// Возвращает true если кэш никогда не обновлялся или обновлялся слишком давно
+// (см. completionCacheMaxAge). Число модулей не учитывается: пустой каталог
+// глобальных модулей после Refresh — валидный свежий кэш, иначе каждый TAB
+// переписывал бы файл кэша. Если все модули пропущены (Skipped == Total > 0),
+// Refresh не обновляет lastRefresh, и обновление на каждый TAB остаётся.
 func completionNeedsRefresh(cache *modulecache.Cache) bool {
-	if cache.ModuleCount() == 0 {
-		return true
-	}
 	lr := cache.LastRefresh()
 	if lr.IsZero() {
 		return true
