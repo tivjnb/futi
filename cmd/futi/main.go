@@ -753,7 +753,8 @@ MODULES
 
   update flags:
   --skip-attach                    Skip the attach: hook
-  --yes, -y                        Run the attach: hook without asking
+  --yes, -y                        Replace changed module files and run the
+                                   attach: hook without asking
 
   uninstall flags:
   --force                          Allow removing modules without __futi_meta.yaml

@@ -148,7 +148,7 @@ func TestRunModulesUpdateCopyFailureRestoresOld(t *testing.T) {
 	fix := failingCopyRename(t)
 
 	source := discovery.NewGlobalSource(global)
-	if err := runModulesUpdate(&bytes.Buffer{}, nil, source, cache, []string{"qr"}); err == nil {
+	if err := runModulesUpdate(&bytes.Buffer{}, nil, source, cache, []string{"qr", "--yes"}); err == nil {
 		t.Fatal("update must fail when the copy fails")
 	}
 
@@ -170,7 +170,7 @@ func TestRunModulesUpdateCopyFailureRestoresOld(t *testing.T) {
 	// Повторный update после «исправления» (перенос работает) проходит.
 	fix()
 	var b bytes.Buffer
-	if err := runModulesUpdate(&b, nil, source, cache, []string{"qr"}); err != nil {
+	if err := runModulesUpdate(&b, nil, source, cache, []string{"qr", "--yes"}); err != nil {
 		t.Fatalf("repeated update: %v", err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dest, "config.yaml"))
@@ -219,8 +219,115 @@ func TestRunModulesUpdateRollbackFailureNamesBackup(t *testing.T) {
 		return base(src, dst)
 	}
 
-	err := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"qr"})
+	err := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"qr", "--yes"})
 	if err == nil || !strings.Contains(err.Error(), "rollback failed") || !strings.Contains(err.Error(), dest+".futi-backup") {
 		t.Fatalf("want rollback failure naming backup path, got %v", err)
+	}
+}
+
+// crossDeviceRename форсирует путь копирования в moveTree, как при EXDEV.
+func crossDeviceRename(t *testing.T) {
+	t.Helper()
+	orig := renameDir
+	renameDir = func(string, string) error { return syscall.EXDEV }
+	t.Cleanup(func() { renameDir = orig })
+}
+
+// Копирование в moveTree переносит дерево как rename: симлинки — симлинками
+// с той же целью, бит исполнения сохраняется.
+func TestMoveTreeFallbackKeepsSymlinks(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	writeFile(t, filepath.Join(src, "run.sh"), "echo\n")
+	if err := os.Chmod(filepath.Join(src, "run.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("run.sh", filepath.Join(src, "current")); err != nil {
+		t.Fatal(err)
+	}
+	crossDeviceRename(t)
+
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := moveTree(src, dst); err != nil {
+		t.Fatalf("moveTree: %v", err)
+	}
+	fi, err := os.Lstat(filepath.Join(dst, "current"))
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("current must be a symlink: fi=%v err=%v", fi, err)
+	}
+	if target, _ := os.Readlink(filepath.Join(dst, "current")); target != "run.sh" {
+		t.Fatalf("symlink target = %q, want run.sh", target)
+	}
+	if fi, err := os.Stat(filepath.Join(dst, "run.sh")); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Fatalf("run.sh mode = %v (err %v), want 0755", fi.Mode().Perm(), err)
+	}
+}
+
+// Модуль из git с симлинком, установленный через копирование (другая ФС):
+// update без изменений апстрима — up to date, без вопроса о замене.
+func TestUpdateCrossDeviceSymlinkUpToDate(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	global := attachEnv(t)
+	setStdinTerminal(t, false)
+	repo := filepath.Join(t.TempDir(), "qr")
+	writeFile(t, filepath.Join(repo, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo run\n")
+	if err := os.Symlink("config.yaml", filepath.Join(repo, "link")); err != nil {
+		t.Fatal(err)
+	}
+	gitRunTest(t, repo, "init", "-q")
+	gitRunTest(t, repo, "add", ".")
+	gitRunTest(t, repo, "commit", "-q", "-m", "init")
+	crossDeviceRename(t)
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{"--from-git", repo}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	out, stderr, err := runUpdateQR(t, unreadableStdin{t})
+	if err != nil || out != "qr: up to date\n" {
+		t.Fatalf("update: out=%q err=%v stderr=%q, want up to date", out, err, stderr)
+	}
+	if fi, err := os.Lstat(filepath.Join(global, "qr", "link")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link must stay a symlink in dest: err=%v", err)
+	}
+}
+
+// M3(б): модуль из git, в апстриме поменялась только цель симлинка — это
+// изменение (M), а не up to date. Локальные источники симлинки не копируют.
+func TestUpdateSymlinkTargetOnlyChangeShownAsModified(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	global := attachEnv(t)
+	setStdinTerminal(t, false)
+	repo := filepath.Join(t.TempDir(), "qr")
+	writeFile(t, filepath.Join(repo, "config.yaml"), "name: qr\ncommands:\n  run:\n    cmd: echo run\n")
+	link := filepath.Join(repo, "lnk")
+	if err := os.Symlink("a.txt", link); err != nil {
+		t.Fatal(err)
+	}
+	gitRunTest(t, repo, "init", "-q")
+	gitRunTest(t, repo, "add", ".")
+	gitRunTest(t, repo, "commit", "-q", "-m", "init")
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{"--from-git", repo}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("b.txt", link); err != nil {
+		t.Fatal(err)
+	}
+	gitRunTest(t, repo, "commit", "-q", "-a", "-m", "retarget")
+
+	out, stderr, err := runUpdateQR(t, unreadableStdin{t}, "--yes")
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if out != "qr: updated\n" || !strings.Contains(stderr, "):\n  M lnk\n") {
+		t.Fatalf("out = %q, stderr = %q; want updated with M lnk", out, stderr)
+	}
+	if got, _ := os.Readlink(filepath.Join(global, "qr", "lnk")); got != "b.txt" {
+		t.Fatalf("link target = %q, want b.txt", got)
 	}
 }

@@ -130,9 +130,12 @@ func installRoot(local bool) (string, error) {
 	return dir, nil
 }
 
+// computeTreeHash считает хеш дерева модуля при install; шов для тестов.
+var computeTreeHash = metayaml.ComputeTreeHash
+
 // runModulesInstall устанавливает модуль из источника (спека §5.1).
 // stdin — для подтверждения attach-хука (os.Stdin из main).
-func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, args []string) error {
+func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, args []string) (retErr error) {
 	cfg, err := parseInstallArgs(args)
 	if err != nil {
 		return err
@@ -223,11 +226,26 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 		return fmt.Errorf("modules install: %w", err)
 	}
 	if err := moveTree(moduleDir, dest); err != nil {
+		// Ошибка moveTree означает, что перенос не состоялся: частичный dest
+		// он убрал сам, а существующий dst не трогал — откат здесь не нужен.
 		return fmt.Errorf("modules install: move to destination: %w", err)
 	}
+	// Дерево перенесено: любой выход без committed (hash, meta, attach)
+	// убирает dest, иначе модуль остался бы без meta и повторный install
+	// упёрся бы в "already exists". Пустые каталоги namespace, созданные
+	// MkdirAll, не убираем: они безвредны для discovery.
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if rmErr := os.RemoveAll(dest); rmErr != nil {
+			retErr = fmt.Errorf("%w (rollback failed: remove %s: %v)", retErr, dest, rmErr)
+		}
+	}()
 
 	// __futi_meta.yaml: новый lockfile + about из источника (§5.1 шаг 7).
-	hash, err := metayaml.ComputeTreeHash(dest)
+	hash, err := computeTreeHash(dest)
 	if err != nil {
 		return fmt.Errorf("modules install: %w", err)
 	}
@@ -244,17 +262,18 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 			LastCheck:   now,
 		},
 	}, sourceMeta)
-	if err := metayaml.Write(filepath.Join(dest, metayaml.FileName), meta); err != nil {
+	if err := writeMeta(filepath.Join(dest, metayaml.FileName), meta); err != nil {
 		return fmt.Errorf("modules install: %w", err)
 	}
 
 	// attach: провал → rollback (rm dest) + error (§3.1, §8 #6).
 	if runAttach {
 		if err := modulerunner.RunHook(context.Background(), mod.Attach, dest, name, os.Stdout, os.Stderr); err != nil {
-			os.RemoveAll(dest)
 			return fmt.Errorf("attach failed, module removed: %w", err)
 		}
 	}
+
+	committed = true
 
 	if err := cache.Invalidate(); err != nil {
 		fmt.Fprintf(os.Stderr, "cache: %v (continuing)\n", err)

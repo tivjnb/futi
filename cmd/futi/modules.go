@@ -35,9 +35,9 @@ func runModules(w io.Writer, stdin io.Reader, source discovery.Source, cache *mo
 	case "list":
 		return runModulesList(w, rest)
 	case "add_command":
-		return runModulesAddCommand(w, source, rest)
+		return runModulesAddCommand(w, source, cache, rest)
 	case "remove_command":
-		return runModulesRemoveCommand(w, source, rest)
+		return runModulesRemoveCommand(w, source, cache, rest)
 	case "path":
 		return runModulesPath(w, source, rest)
 	default:

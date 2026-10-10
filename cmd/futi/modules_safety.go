@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/tivjnb/futi/internal/completion"
+	"github.com/tivjnb/futi/internal/metayaml"
 	"github.com/tivjnb/futi/internal/termtext"
 )
 
@@ -160,8 +161,18 @@ var stdinIsTerminal = func() bool {
 // errAttachNotConfirmed — пользователь не подтвердил attach-хук.
 var errAttachNotConfirmed = errors.New("attach hook not confirmed")
 
+// errUpdateNotConfirmed — пользователь не подтвердил замену файлов модуля.
+var errUpdateNotConfirmed = errors.New("update not confirmed")
+
+// errNoAnswer — stdin закончился до ответа на вопрос.
+var errNoAnswer = errors.New("no answer on stdin")
+
+// maxListedChanges — сколько изменений файлов показывать перед вопросом о замене.
+const maxListedChanges = 50
+
 // attachGate решает, запускать ли attach-хук: --skip-attach важнее --yes,
 // без обоих флагов хук запускается только после подтверждения в терминале.
+// Им же update подтверждает замену файлов модуля (allowReplace, --yes).
 // in — один reader stdin на весь вызов команды: update без имени спрашивает
 // про каждый модуль, а свой буфер на каждый вопрос съел бы следующие ответы.
 type attachGate struct {
@@ -194,12 +205,80 @@ func (g attachGate) allow(attach, name, dir string) (bool, error) {
 	}
 	fmt.Fprint(os.Stderr, "Run it? [y/N] ")
 
-	line, err := g.in.ReadString('\n')
+	ok, err := readYes(g.in)
+	if errors.Is(err, errNoAnswer) {
+		return false, fmt.Errorf("%w (no answer on stdin): rerun with --yes to run it or --skip-attach to skip it", errAttachNotConfirmed)
+	}
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, errAttachNotConfirmed
+	}
+	return true, nil
+}
+
+// allowReplace показывает в stderr изменения файлов модуля label в каталоге
+// dir (диск против нового дерева) и спрашивает, заменять ли их. Список
+// печатается и с --yes; без терминала на stdin ответ не читается, как в allow.
+// Отказ — errUpdateNotConfirmed. attach — хук нового модуля: если он будет
+// запущен (не пуст и нет --skip-attach), к подсказке про --yes добавляется
+// предупреждение, что --yes подтвердит и хук, который здесь не показан.
+func (g attachGate) allowReplace(label, dir, attach string, diff metayaml.TreeDiff) error {
+	fmt.Fprintf(os.Stderr, "Module %s will change (%s):\n", termtext.Line(label), termtext.Line(dir))
+	// Порядок D, M, A: потеря файлов важнее, длинный список добавлений не
+	// должен прятать удаления за «... and N more».
+	var lines []string
+	for _, c := range []struct {
+		mark  string
+		paths []string
+	}{{"D", diff.Deleted}, {"M", diff.Modified}, {"A", diff.Added}} {
+		for _, p := range c.paths {
+			lines = append(lines, "  "+c.mark+" "+termtext.Line(p))
+		}
+	}
+	for i, line := range lines {
+		if i == maxListedChanges {
+			fmt.Fprintf(os.Stderr, "  ... and %d more\n", len(lines)-maxListedChanges)
+			break
+		}
+		fmt.Fprintln(os.Stderr, line)
+	}
+
+	if g.yes {
+		return nil
+	}
+	hint := ""
+	if attach != "" && !g.skip {
+		hint = " (--yes also runs the attach hook; add --skip-attach to skip it)"
+	}
+	if !stdinIsTerminal() {
+		return errors.New("update replaces module files: rerun with --yes to confirm" + hint)
+	}
+	fmt.Fprint(os.Stderr, "Replace module files? [y/N] ")
+	ok, err := readYes(g.in)
+	if errors.Is(err, errNoAnswer) {
+		return fmt.Errorf("%w (no answer on stdin): rerun with --yes to confirm%s", errUpdateNotConfirmed, hint)
+	}
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errUpdateNotConfirmed
+	}
+	return nil
+}
+
+// readYes читает строку ответа из in: true — "y"/"yes" без учёта регистра и
+// пробелов, любой другой ответ — false. Пустой stdin — errNoAnswer; перед ним
+// печатается перевод строки, чтобы сообщение об ошибке не слиплось с вопросом.
+func readYes(in *bufio.Reader) (bool, error) {
+	line, err := in.ReadString('\n')
 	if errors.Is(err, io.EOF) && line == "" {
 		// Пустой stdin при char device (/dev/null: docker run без -i,
-		// systemd StandardInput=null) — подсказываем флаги, как без TTY.
+		// systemd StandardInput=null) — вызывающий подсказывает флаги, как без TTY.
 		fmt.Fprintln(os.Stderr)
-		return false, fmt.Errorf("%w (no answer on stdin): rerun with --yes to run it or --skip-attach to skip it", errAttachNotConfirmed)
+		return false, errNoAnswer
 	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, fmt.Errorf("read confirmation: %w", err)
@@ -208,5 +287,5 @@ func (g attachGate) allow(attach, name, dir string) (bool, error) {
 	case "y", "yes":
 		return true, nil
 	}
-	return false, errAttachNotConfirmed
+	return false, nil
 }

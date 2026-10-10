@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -131,7 +133,7 @@ func TestRunModulesAddCommandCLI(t *testing.T) {
 	src := discovery.NewGlobalSource(dir)
 
 	var b bytes.Buffer
-	err := runModulesAddCommand(&b, src, []string{"qr", "scan", "--desc", "Scan QR"})
+	err := runModulesAddCommand(&b, src, newTestCache(), []string{"qr", "scan", "--desc", "Scan QR"})
 	if err != nil {
 		t.Fatalf("runModulesAddCommand: %v", err)
 	}
@@ -156,7 +158,7 @@ func TestRunModulesAddCommandDefaultCmd(t *testing.T) {
 	writeManifestFixture(t, dir, "qr")
 	src := discovery.NewGlobalSource(dir)
 
-	if err := runModulesAddCommand(&bytes.Buffer{}, src, []string{"qr", "scan"}); err != nil {
+	if err := runModulesAddCommand(&bytes.Buffer{}, src, newTestCache(), []string{"qr", "scan"}); err != nil {
 		t.Fatalf("runModulesAddCommand: %v", err)
 	}
 	mod, err := execmodule.LoadModule(filepath.Join(dir, "qr", "config.yaml"), filepath.Join(dir, "qr"))
@@ -225,5 +227,173 @@ func TestAddCommandNonMappingRoot(t *testing.T) {
 		if string(data) != body {
 			t.Fatalf("file changed: %q, want %q", data, body)
 		}
+	}
+}
+
+// listDir возвращает имена файлов каталога (для проверки отсутствия temp-файлов).
+func listDir(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// Невалидный результат правки не трогает оригинал: байты и права на месте,
+// временных файлов в каталоге нет.
+func TestEditInvalidResultKeepsOriginal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("права 0600 не проверяются на Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m.yaml")
+	body := "name: m\ncommands:\n  only:\n    cmd: echo\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Пустой cmd у единственной команды после удаления — невалидный манифест.
+	err := removeCommandFromManifest(path, "only")
+	if err == nil {
+		t.Fatal("expected invalid-manifest error")
+	}
+	if strings.Contains(err.Error(), ".m.yaml-") || !strings.Contains(err.Error(), path) {
+		t.Fatalf("error must name %s, not a temp file: %v", path, err)
+	}
+
+	data, _ := os.ReadFile(path)
+	if string(data) != body {
+		t.Fatalf("manifest changed:\n%s\nwant:\n%s", data, body)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v, want 0600", info.Mode().Perm())
+	}
+	if got := listDir(t, dir); len(got) != 1 || got[0] != "m.yaml" {
+		t.Fatalf("dir contents = %v, want only m.yaml", got)
+	}
+}
+
+// CreateTemp создаёт файл с 0600, поэтому берём и 0600, и 0640: второй ловит
+// отсутствие явного Chmod.
+func TestAddCommandPreservesMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("права не проверяются на Windows")
+	}
+	for _, mode := range []os.FileMode{0o600, 0o640} {
+		t.Run(mode.String(), func(t *testing.T) {
+			dir := t.TempDir()
+			path := writeManifestFixture(t, dir, "qr")
+			if err := os.Chmod(path, mode); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := addCommandToManifest(path, "scan", "echo scan", ""); err != nil {
+				t.Fatalf("addCommandToManifest: %v", err)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != mode {
+				t.Fatalf("mode = %v, want %v", info.Mode().Perm(), mode)
+			}
+			if got := listDir(t, filepath.Dir(path)); len(got) != 1 {
+				t.Fatalf("dir contents = %v, want only config.yaml", got)
+			}
+		})
+	}
+}
+
+// config.yaml — симлинк: правка идёт в цель, сам симлинк остаётся симлинком.
+func TestAddCommandThroughSymlinkEditsTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("симлинки требуют привилегий на Windows")
+	}
+	dir := t.TempDir()
+	target := writeManifestFixture(t, dir, "real")
+	link := filepath.Join(dir, "linked.yaml")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := addCommandToManifest(link, "scan", "echo scan", ""); err != nil {
+		t.Fatalf("addCommandToManifest: %v", err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link must stay a symlink, got %v, %v", fi, err)
+	}
+	data, _ := os.ReadFile(target)
+	if !strings.Contains(string(data), "scan:") {
+		t.Fatalf("target not edited:\n%s", data)
+	}
+}
+
+func TestAddCommandInvalidatesCache(t *testing.T) {
+	dir := t.TempDir()
+	writeManifestFixture(t, dir, "qr")
+	src := discovery.NewGlobalSource(dir)
+
+	cache := newTestCache()
+	stranger := makeSourceModule(t, t.TempDir(), "stranger", "")
+	if _, err := cache.LoadModule(filepath.Join(stranger, "config.yaml"), stranger); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runModulesAddCommand(&bytes.Buffer{}, src, cache, []string{"qr", "scan"}); err != nil {
+		t.Fatalf("runModulesAddCommand: %v", err)
+	}
+	if got := cache.ModuleCount(); got != 0 {
+		t.Fatalf("cache must be invalidated after add_command, got %d entries", got)
+	}
+}
+
+func TestRemoveCommandInvalidatesCache(t *testing.T) {
+	dir := t.TempDir()
+	writeManifestFixture(t, dir, "qr")
+	src := discovery.NewGlobalSource(dir)
+
+	cache := newTestCache()
+	stranger := makeSourceModule(t, t.TempDir(), "stranger", "")
+	if _, err := cache.LoadModule(filepath.Join(stranger, "config.yaml"), stranger); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runModulesRemoveCommand(&bytes.Buffer{}, src, cache, []string{"qr", "make"}); err != nil {
+		t.Fatalf("runModulesRemoveCommand: %v", err)
+	}
+	if got := cache.ModuleCount(); got != 0 {
+		t.Fatalf("cache must be invalidated after remove_command, got %d entries", got)
+	}
+}
+
+// Результат правки больше MaxManifestSize отвергается, оригинал не меняется.
+func TestAddCommandOversizedResultRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := writeManifestFixture(t, dir, "qr")
+	before, _ := os.ReadFile(path)
+
+	huge := strings.Repeat("x", execmodule.MaxManifestSize)
+	err := addCommandToManifest(path, "scan", "echo scan", huge)
+	if err == nil || !strings.Contains(err.Error(), strconv.Itoa(execmodule.MaxManifestSize)) {
+		t.Fatalf("err = %v, want size-limit error", err)
+	}
+	after, _ := os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Fatal("manifest changed")
+	}
+	if got := listDir(t, filepath.Dir(path)); len(got) != 1 {
+		t.Fatalf("dir contents = %v, want only config.yaml", got)
 	}
 }

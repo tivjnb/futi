@@ -259,7 +259,8 @@ func TestUpdateAttachDeclinedKeepsOldTree(t *testing.T) {
 
 	var err error
 	prompt := captureStderr(t, func() {
-		err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader("n\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr"})
+		// Сначала подтверждаем замену файлов, затем отказываемся от хука.
+		err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader("y\nn\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr"})
 	})
 	if err == nil || !strings.Contains(err.Error(), "not confirmed") {
 		t.Fatalf("err = %v, want attach hook not confirmed", err)
@@ -279,31 +280,24 @@ func TestUpdateAttachDeclinedKeepsOldTree(t *testing.T) {
 	}
 }
 
-func TestUpdateAttachWithoutTerminalRefuses(t *testing.T) {
-	global := attachEnv(t)
-	setStdinTerminal(t, false)
-	dest := installThenChange(t, global, "qr")
-
-	err := runModulesUpdate(&bytes.Buffer{}, unreadableStdin{t}, discovery.NewGlobalSource(global), newTestCache(), []string{"qr"})
-	if err == nil || !strings.Contains(err.Error(), "--skip-attach") {
-		t.Fatalf("err = %v, want hint about --skip-attach", err)
-	}
-	data, _ := os.ReadFile(filepath.Join(dest, "config.yaml"))
-	if strings.Contains(string(data), "echo v2") {
-		t.Fatal("old tree must stay")
-	}
-}
-
 func TestUpdateAttachYesRuns(t *testing.T) {
 	global := attachEnv(t)
 	setStdinTerminal(t, false)
 	dest := installThenChange(t, global, "qr")
 
-	if err := runModulesUpdate(&bytes.Buffer{}, unreadableStdin{t}, discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "-y"}); err != nil {
+	// -y подтверждает и замену файлов, и хук: без TTY ни о чём не спрашиваем.
+	var err error
+	prompt := captureStderr(t, func() {
+		err = runModulesUpdate(&bytes.Buffer{}, unreadableStdin{t}, discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "-y"})
+	})
+	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if !exists(filepath.Join(dest, "attached")) {
 		t.Fatal("attach hook must run with -y")
+	}
+	if strings.Contains(prompt, "Run it?") || strings.Contains(prompt, "Replace module files?") {
+		t.Fatalf("no prompt expected with -y, got %q", prompt)
 	}
 }
 
@@ -332,8 +326,9 @@ func TestUpdateAllAsksPerModule(t *testing.T) {
 		updated string
 		failed  string
 	}{
-		{"y\nn\n", "a", "b"},
-		{"n\ny\n", "b", "a"},
+		// На модуль два вопроса: замена файлов, затем attach-хук.
+		{"y\ny\ny\nn\n", "a", "b"},
+		{"y\nn\ny\ny\n", "b", "a"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.updated, func(t *testing.T) {
