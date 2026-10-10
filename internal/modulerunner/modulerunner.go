@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/tivjnb/futi/internal/discovery"
@@ -164,13 +165,13 @@ func resolveCommand(
 	loader ModuleLoader,
 ) (*resolvedCommand, error) {
 	// Реконструкция positional args из namespace + command.
+	// Непустой namespace всегда делится по ".", в т.ч. при command=="":
+	// `futi docker.build` даёт namespace "docker.build" без команды.
 	var positional []string
-	if namespace == "" {
-		positional = []string{command}
-	} else if command == "" {
-		positional = []string{namespace}
-	} else {
+	if namespace != "" {
 		positional = strings.Split(namespace, ".")
+	}
+	if namespace == "" || command != "" {
 		positional = append(positional, command)
 	}
 
@@ -226,7 +227,7 @@ type CommandInfo struct {
 }
 
 // ListCommands находит модуль через source, загружает его и возвращает
-// список команд с описаниями.
+// список команд с описаниями, отсортированный по имени.
 // loader — опциональный загрузчик с кэшем (nil = прямой LoadModule).
 func ListCommands(source discovery.Source, namespace string, loader ModuleLoader) ([]CommandInfo, error) {
 	manifestPath, moduleRoot, err := source.Resolve(namespace)
@@ -246,5 +247,6 @@ func ListCommands(source discovery.Source, namespace string, loader ModuleLoader
 			Description: cmd.Description,
 		})
 	}
+	sort.Slice(cmds, func(i, j int) bool { return cmds[i].Name < cmds[j].Name })
 	return cmds, nil
 }

@@ -1231,7 +1231,7 @@ commands:
       - name: container
         type: string
         required: true
-    cmd: "docker exec -it {{.container}} sh"
+    cmd: "docker exec -it {{quote .container}} sh"
 
   build-all:
     description: Build all images in directory

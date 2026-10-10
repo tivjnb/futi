@@ -1221,3 +1221,84 @@ func TestRunModuleNameDefaultsToPath(t *testing.T) {
 		})
 	}
 }
+
+// writeModules пишет манифесты (путь относительно dir -> тело) и возвращает глобальный source.
+func writeModules(t *testing.T, files map[string]string) discovery.Source {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range files {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return discovery.NewGlobalSource(dir)
+}
+
+func TestResolveCommandDotNamespaceWithoutCommand(t *testing.T) {
+	const docker = "name: docker\ncommands:\n  build:\n    cmd: \"echo docker-build\"\n"
+	const devDeploy = "name: dev.deploy\ncmd: \"echo deploy-default\"\n"
+	const dockerBuildMod = "name: docker.build\ncmd: \"echo module-docker-build\"\n"
+
+	tests := []struct {
+		name      string
+		files     map[string]string
+		namespace string
+		wantCmd   string
+	}{
+		{"dot split to module and command", map[string]string{"docker.yaml": docker}, "docker.build", "echo docker-build"},
+		{"module with dotted name keeps default cmd", map[string]string{"dev/deploy.yaml": devDeploy}, "dev.deploy", "echo deploy-default"},
+		{"longest module wins", map[string]string{"docker.yaml": docker, "docker/build.yaml": dockerBuildMod}, "docker.build", "echo module-docker-build"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := writeModules(t, tt.files)
+			cmd, err := ResolveCommand(source, nil, tt.namespace, "")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cmd.Cmd != tt.wantCmd {
+				t.Fatalf("Cmd = %q, want %q", cmd.Cmd, tt.wantCmd)
+			}
+		})
+	}
+}
+
+func TestRunDotNamespaceWithoutCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("echo недоступен на Windows")
+	}
+	source := writeModules(t, map[string]string{
+		"docker.yaml": "name: docker\ncommands:\n  build:\n    cmd: \"echo built\"\n",
+	})
+	var out bytes.Buffer
+	if err := Run(context.Background(), source, "docker.build", "", nil, "", nil, &out, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := out.String(); got != "built\n" {
+		t.Fatalf("output = %q, want %q", got, "built\n")
+	}
+}
+
+func TestListCommandsSortedByName(t *testing.T) {
+	source := writeModules(t, map[string]string{
+		"m.yaml": "name: m\ncommands:\n  zeta:\n    cmd: \"echo z\"\n  alpha:\n    cmd: \"echo a\"\n  mid:\n    cmd: \"echo m\"\n  beta:\n    cmd: \"echo b\"\n",
+	})
+	// Порядок обхода map случаен — несколько прогонов повышают шанс поймать регресс.
+	for i := 0; i < 20; i++ {
+		cmds, err := ListCommands(source, "m", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var got []string
+		for _, c := range cmds {
+			got = append(got, c.Name)
+		}
+		if want := "alpha,beta,mid,zeta"; strings.Join(got, ",") != want {
+			t.Fatalf("names = %v, want %s", got, want)
+		}
+	}
+}

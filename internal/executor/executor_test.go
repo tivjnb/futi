@@ -60,7 +60,9 @@ func TestConfigBuilders(t *testing.T) {
 }
 
 func TestRunWithConfigRejectsNilContext(t *testing.T) {
-	if err := RunWithConfig(context.TODO(), &Config{}, "script.sh"); err == nil {
+	// Именно nil, а не context.TODO(): проверяется отказ на nil-контексте.
+	//nolint:staticcheck // SA1012
+	if err := RunWithConfig(nil, &Config{}, "script.sh"); err == nil {
 		t.Fatal("expected an error for nil context")
 	}
 }
