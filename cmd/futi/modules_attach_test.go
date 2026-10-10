@@ -369,3 +369,23 @@ func TestModulesInstallHookOutputToWriter(t *testing.T) {
 		t.Fatalf("writer output = %q, want hook stdout", buf.String())
 	}
 }
+
+// F62: stdout хука attach при update идёт в writer вызывающей функции.
+func TestModulesUpdateHookOutputToWriter(t *testing.T) {
+	global := attachEnv(t)
+	setStdinTerminal(t, false)
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	writeFile(t, filepath.Join(src, "config.yaml"),
+		"name: qr\nattach: \"echo update-hook-says-hi\"\ncommands:\n  run:\n    cmd: echo v2\n")
+
+	var buf bytes.Buffer
+	if err := runModulesUpdate(&buf, unreadableStdin{t}, discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "-y"}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if !strings.Contains(buf.String(), "update-hook-says-hi") {
+		t.Fatalf("writer output = %q, want hook stdout", buf.String())
+	}
+}
