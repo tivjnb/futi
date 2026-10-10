@@ -315,3 +315,21 @@ cmd: "echo MODULEHELP"
 		t.Fatalf("stdout = %q, want default cmd of module help", stdout)
 	}
 }
+
+// `demo.greet help` должен вести себя как `demo greet help`: сегмент пути с
+// точкой делится на namespace и команду.
+func TestParseArgsHelpDotNamespaceMatchesSpacedPath(t *testing.T) {
+	src := helpTestSource(t)
+	_, err := parseArgs([]string{"demo.greet", "help"})
+	var req *helpRequest
+	if !errors.As(err, &req) {
+		t.Fatalf("err = %v, want helpRequest", err)
+	}
+	code, stdout, stderr := runHelpFor(t, src, req)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "Greet someone") || !strings.Contains(stdout, "--name") {
+		t.Fatalf("expected help of command greet, got:\n%s", stdout)
+	}
+}

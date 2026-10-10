@@ -109,7 +109,7 @@ func parseArgs(args []string) (*parsedArgs, error) {
 		// нет ли user-defined команды "help" (см. runHelp). Сырые флаги и args
 		// сохраняются для неё; системная справка их игнорирует.
 		return nil, &helpRequest{
-			positional: path[:len(path)-1],
+			positional: splitDots(path[:len(path)-1]),
 			flags:      flags,
 			args:       strings.Join(argsList, " "),
 			argsList:   argsList,
@@ -124,6 +124,16 @@ func parseArgs(args []string) (*parsedArgs, error) {
 	}
 	pa.namespace, pa.command = splitPath(path)
 	return pa, nil
+}
+
+// splitDots делит каждый сегмент пути по ".", чтобы `docker.build help`
+// вёл себя как `docker build help`.
+func splitDots(path []string) []string {
+	var out []string
+	for _, seg := range path {
+		out = append(out, strings.Split(seg, ".")...)
+	}
+	return out
 }
 
 // splitPath делит позиционный путь на namespace и команду. Один сегмент —
