@@ -397,7 +397,7 @@ func TestCacheRefreshSkipsUnchangedModules(t *testing.T) {
 	// Предзаполняем кэш актуальными mtime+size
 	cache.mu.Lock()
 	cache.entries[modPath] = entry{
-		Module:  &execmodule.Module{Name: "cached_app"},
+		Module:  &execmodule.Module{Name: "cached_app", Root: dir},
 		ModTime: info.ModTime(),
 		Size:    info.Size(),
 	}
@@ -817,11 +817,10 @@ func TestCacheRefreshCleansUpStaleEntries(t *testing.T) {
 	}
 }
 
-// TestCacheRefreshDoesNotRemoveEntriesWithReadErrors проверяет, что модули,
-// которые есть в source (discovery нашёл), но прочитать их не удалось
-// (временная ошибка, здесь — нет прав на чтение), НЕ удаляются из кэша.
-// Cleanup трогает только те, кого больше нет в source.
-func TestCacheRefreshDoesNotRemoveEntriesWithReadErrors(t *testing.T) {
+// TestCacheRefreshRemovesEntryWhenManifestUnreadable: модуль есть в source, но
+// манифест не перечитался (здесь — нет прав на чтение, ветка hash) — запись
+// удаляется из кэша, иначе исполнялся бы устаревший код (audit F37).
+func TestCacheRefreshRemovesEntryWhenManifestUnreadable(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root читает файл без прав на чтение")
 	}
@@ -838,7 +837,7 @@ func TestCacheRefreshDoesNotRemoveEntriesWithReadErrors(t *testing.T) {
 	// Предзаполняем кэш устаревшей записью: mtime не совпадёт → перечитывание.
 	cache.mu.Lock()
 	cache.entries[unreadable] = entry{
-		Module:  &execmodule.Module{Name: "cached_unreadable"},
+		Module:  &execmodule.Module{Name: "cached_unreadable", Root: dir},
 		ModTime: time.Now().Add(-1 * time.Hour),
 		Size:    100,
 	}
@@ -855,15 +854,13 @@ func TestCacheRefreshDoesNotRemoveEntriesWithReadErrors(t *testing.T) {
 	if result.Total != 1 || result.Skipped != 1 {
 		t.Fatalf("Refresh: Total=%d Skipped=%d, want 1 и 1", result.Total, result.Skipped)
 	}
-
+	if got := cache.ModuleCount(); got != 0 {
+		t.Fatalf("ModuleCount = %d, want 0 (запись неперечитанного модуля удалена)", got)
+	}
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	// unreadable.yaml в source (seenPaths), но чтение упало → НЕ удаляем.
-	if e, ok := cache.entries[unreadable]; !ok || e.Module.Name != "cached_unreadable" {
-		t.Fatalf("запись нечитаемого модуля должна сохраниться, got %+v (ok=%v)", e, ok)
-	}
-	if !cache.persistentPaths[unreadable] {
-		t.Fatal("путь нечитаемого модуля должен остаться в persistentPaths")
+	if cache.persistentPaths[unreadable] {
+		t.Fatal("путь неперечитанного модуля должен уйти из persistentPaths")
 	}
 }
 
@@ -1813,5 +1810,194 @@ func TestRefreshKeepsModulesOfUnsearchableDir(t *testing.T) {
 	cache.mu.RUnlock()
 	if !kept {
 		t.Fatalf("запись %s удалена из кэша", yPath)
+	}
+}
+
+// TestRefreshRemovesEntryWhenManifestNotReread: source отдал модуль, а манифест
+// не перечитался (stat, load) — запись удаляется, LoadModule возвращает ошибку
+// загрузки, а не устаревший модуль. Запись недоступного source (не в children)
+// остаётся (audit F37).
+func TestRefreshRemovesEntryWhenManifestNotReread(t *testing.T) {
+	tests := []struct {
+		name   string
+		break_ func(t *testing.T, path string)
+	}{
+		{"stat: манифест удалён после листинга", func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"load: манифест стал невалидным", func(t *testing.T, path string) {
+			writeFile(t, path, "name: [unclosed\ncmd: echo\n")
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			xPath := filepath.Join(dir, "x.yaml")
+			otherPath := filepath.Join(dir, "other.yaml")
+			writeFile(t, xPath, "name: x\ncmd: echo\n")
+			writeFile(t, otherPath, "name: other\ncmd: echo\n")
+			childX := discovery.Child{Name: "x", Type: "module", ManifestPath: xPath, ModuleRoot: dir}
+			childOther := discovery.Child{Name: "other", Type: "module", ManifestPath: otherPath, ModuleRoot: dir}
+			cache := newTestCache()
+			src := &stubSource{children: []discovery.Child{childX, childOther}}
+			restore := suppressLog(t)
+			defer restore()
+
+			if _, err := cache.Refresh(src); err != nil {
+				t.Fatalf("первый Refresh: %v", err)
+			}
+			if got := cache.ModuleCount(); got != 2 {
+				t.Fatalf("после первого Refresh ModuleCount = %d, want 2", got)
+			}
+
+			tt.break_(t, xPath)
+			// other недоступен (частичный листинг): его нет в children.
+			src.children = []discovery.Child{childX}
+			src.err = &discovery.PartialError{Errs: []error{errors.New("boom")}}
+			result, _ := cache.Refresh(src)
+
+			if result.Skipped != 1 {
+				t.Fatalf("Skipped = %d, want 1", result.Skipped)
+			}
+			if got := cache.ModuleCount(); got != 1 {
+				t.Fatalf("ModuleCount = %d, want 1 (x удалён, other сохранён)", got)
+			}
+			cache.mu.RLock()
+			_, xKept := cache.entries[xPath]
+			xPersistent := cache.persistentPaths[xPath]
+			_, otherKept := cache.entries[otherPath]
+			cache.mu.RUnlock()
+			if xKept || xPersistent {
+				t.Fatalf("запись x должна быть удалена (entries=%v persistent=%v)", xKept, xPersistent)
+			}
+			if !otherKept {
+				t.Fatal("запись other недоступного source должна сохраниться")
+			}
+			if _, err := cache.LoadModule(xPath, dir); err == nil {
+				t.Fatal("LoadModule после Refresh вернул модуль без ошибки, want ошибку загрузки")
+			}
+		})
+	}
+}
+
+// TestCacheLoadSkipsInvalidEntries: записи из storage с Module == nil или
+// Hash неверной длины отбрасываются, LoadModule грузит модуль с диска, а не
+// возвращает (nil, nil) (audit F35).
+func TestCacheLoadSkipsInvalidEntries(t *testing.T) {
+	dir := t.TempDir()
+	nilPath := filepath.Join(dir, "nil.yaml")
+	shortPath := filepath.Join(dir, "short.yaml")
+	okPath := filepath.Join(dir, "ok.yaml")
+	for _, p := range []string{nilPath, shortPath, okPath} {
+		writeFile(t, p, "name: disk\ncmd: echo\n")
+	}
+	storage := &fakeStorage{loadData: cacheFile{
+		Version: cacheFileVersion,
+		Entries: map[string]entry{
+			nilPath:   {Module: nil},
+			shortPath: {Module: &execmodule.Module{Name: "cached", Root: dir}, Hash: []byte("abc")},
+			okPath:    {Module: &execmodule.Module{Name: "cached", Root: dir}, Hash: make([]byte, sha256.Size)},
+		},
+	}}
+	cache := New(storage, ForceOnlyPolicy{})
+	cache.Load()
+
+	if got := cache.ModuleCount(); got != 1 {
+		t.Fatalf("ModuleCount = %d, want 1 (только ok)", got)
+	}
+	cache.mu.RLock()
+	persistent := len(cache.persistentPaths)
+	cache.mu.RUnlock()
+	if persistent != 1 {
+		t.Fatalf("persistentPaths = %d, want 1", persistent)
+	}
+	mod, err := cache.LoadModule(nilPath, dir)
+	if err != nil || mod == nil || mod.Name != "disk" {
+		t.Fatalf("LoadModule(nil-запись) = %v, %v, want модуль disk с диска", mod, err)
+	}
+	mod, err = cache.LoadModule(shortPath, dir)
+	if err != nil || mod == nil || mod.Name != "disk" {
+		t.Fatalf("LoadModule(короткий хеш) = %v, %v, want модуль disk с диска", mod, err)
+	}
+}
+
+// TestCacheLoadModuleNilModuleEntryIsMiss: запись с Module == nil, попавшая в
+// entries другим путём, трактуется как miss (audit F35).
+func TestCacheLoadModuleNilModuleEntryIsMiss(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "m.yaml")
+	writeFile(t, p, "name: m\ncmd: echo\n")
+	cache := newTestCache()
+	cache.mu.Lock()
+	cache.entries[p] = entry{}
+	cache.mu.Unlock()
+
+	mod, err := cache.LoadModule(p, dir)
+	if err != nil || mod == nil || mod.Name != "m" {
+		t.Fatalf("LoadModule = %v, %v, want модуль m", mod, err)
+	}
+}
+
+// TestCacheHitRequiresSameModuleRoot: запись кэша с другим Root не отдаётся
+// как hit — модуль перечитывается с новым moduleRoot (audit F36).
+func TestCacheHitRequiresSameModuleRoot(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "m.yaml")
+	writeFile(t, p, "name: m\ncmd: echo\n")
+	rootA := filepath.Join(dir, "a")
+	rootB := filepath.Join(dir, "b")
+
+	loaders := map[string]func(*Cache, string, string) (*execmodule.Module, error){
+		"LoadModule":         (*Cache).LoadModule,
+		"LoadModuleVerified": (*Cache).LoadModuleVerified,
+	}
+	for name, load := range loaders {
+		t.Run(name, func(t *testing.T) {
+			cache := newTestCache()
+			first, err := load(cache, p, rootA)
+			if err != nil || first.Root != rootA {
+				t.Fatalf("первая загрузка: %v, %v, want Root=%q", first, err, rootA)
+			}
+			again, err := load(cache, p, rootA)
+			if err != nil || again != first {
+				t.Fatalf("тот же root должен дать hit: %v, %v", again, err)
+			}
+			second, err := load(cache, p, rootB)
+			if err != nil || second.Root != rootB {
+				t.Fatalf("загрузка с другим root: %v, %v, want Root=%q", second, err, rootB)
+			}
+		})
+	}
+}
+
+// TestCacheRefreshRereadsWhenModuleRootChanged: mtime+size не изменились, но
+// source отдаёт другой ModuleRoot — запись перечитывается (audit F36).
+func TestCacheRefreshRereadsWhenModuleRootChanged(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "m.yaml")
+	writeFile(t, p, "name: m\ncmd: echo\n")
+	rootA := filepath.Join(dir, "a")
+	rootB := filepath.Join(dir, "b")
+	cache := newTestCache()
+	src := &stubSource{children: []discovery.Child{{Name: "m", Type: "module", ManifestPath: p, ModuleRoot: rootA}}}
+
+	if _, err := cache.Refresh(src); err != nil {
+		t.Fatalf("первый Refresh: %v", err)
+	}
+	src.children[0].ModuleRoot = rootB
+	result, err := cache.Refresh(src)
+	if err != nil {
+		t.Fatalf("второй Refresh: %v", err)
+	}
+	if result.Updated != 1 {
+		t.Fatalf("Updated = %d, want 1 (смена ModuleRoot)", result.Updated)
+	}
+	cache.mu.RLock()
+	got := cache.entries[p].Module.Root
+	cache.mu.RUnlock()
+	if got != rootB {
+		t.Fatalf("Root в кэше = %q, want %q", got, rootB)
 	}
 }
