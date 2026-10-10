@@ -55,9 +55,14 @@ func (e *listRequest) Unwrap() error { return errListCommand }
 // helpRequest сигнализирует, что запрошена справка (последний аргумент "help").
 // positional — все сегменты до "help" (namespace + command path). Диспетчер
 // решает: если "<positional> help" резолвится как user-defined команда —
-// выполнить её, иначе системная справка.
+// выполнить её (с flags/args/argsList, как обычную), иначе системная справка
+// (флаги и args при ней игнорируются). flags — сырые токены после пути, их
+// привязка к параметрам по схеме команды — в bindFlags.
 type helpRequest struct {
 	positional []string
+	flags      []string
+	args       string
+	argsList   []string
 }
 
 func (e *helpRequest) Error() string { return "help requested" }
@@ -101,8 +106,14 @@ func parseArgs(args []string) (*parsedArgs, error) {
 		return nil, parseListRequest(path[:len(path)-1], flags)
 	case "help":
 		// В отличие от list, help НЕ зарезервирован: диспетчер проверяет,
-		// нет ли user-defined команды "help" (см. runHelp). Флаги игнорируются.
-		return nil, &helpRequest{positional: path[:len(path)-1]}
+		// нет ли user-defined команды "help" (см. runHelp). Сырые флаги и args
+		// сохраняются для неё; системная справка их игнорирует.
+		return nil, &helpRequest{
+			positional: splitDots(path[:len(path)-1]),
+			flags:      flags,
+			args:       strings.Join(argsList, " "),
+			argsList:   argsList,
+		}
 	}
 
 	// args строка: join через пробел (сохраняет разделение для шаблона)
@@ -111,14 +122,27 @@ func parseArgs(args []string) (*parsedArgs, error) {
 		args:     strings.Join(argsList, " "),
 		argsList: argsList,
 	}
-	if len(path) == 1 {
-		// Один позиционный — namespace без команды (default cmd модуля).
-		pa.namespace = path[0]
-		return pa, nil
-	}
-	pa.namespace = strings.Join(path[:len(path)-1], ".")
-	pa.command = path[len(path)-1]
+	pa.namespace, pa.command = splitPath(path)
 	return pa, nil
+}
+
+// splitDots делит каждый сегмент пути по ".", чтобы `docker.build help`
+// вёл себя как `docker build help`.
+func splitDots(path []string) []string {
+	var out []string
+	for _, seg := range path {
+		out = append(out, strings.Split(seg, ".")...)
+	}
+	return out
+}
+
+// splitPath делит позиционный путь на namespace и команду. Один сегмент —
+// namespace без команды (default cmd модуля); иначе последний сегмент — команда.
+func splitPath(path []string) (namespace, command string) {
+	if len(path) == 1 {
+		return path[0], ""
+	}
+	return strings.Join(path[:len(path)-1], "."), path[len(path)-1]
 }
 
 // isFlagToken: токен — флаг, если начинается с "-" и длиннее одного символа.
@@ -248,11 +272,7 @@ func localSource(loader modulerunner.ModuleLoader) (discovery.Source, error) {
 		if err != nil {
 			return nil, fmt.Errorf("local source: %w", err)
 		}
-		name := mod.Name
-		if name == "" {
-			name = "futi"
-		}
-		layers = append(layers, discovery.NewFileSource(abs, absRoot, name))
+		layers = append(layers, discovery.NewFileSource(abs, absRoot, execmodule.EffectiveName(mod.Name, abs)))
 	}
 
 	if len(layers) == 0 {
@@ -552,14 +572,19 @@ func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader
 			path = termtext.Line(c.ManifestPath)
 			if c.Conflict && len(c.ConflictSources) > 0 {
 				// Модуль с одним именем в нескольких sources.
-				desc = "конфликт: модуль в нескольких sources: " + termtext.Line(strings.Join(c.ConflictSources, ", "))
+				desc = "conflict: module in several sources: " + termtext.Line(strings.Join(c.ConflictSources, ", "))
 			} else if c.Conflict {
 				// Resolve для такого имени вернёт ошибку конфликта: описание не грузим.
 				// ManifestPath конфликтной записи — от x.yaml; c.Name в `list -r` —
 				// полный путь (ns.x), поэтому имена файлов берём из пути.
 				base := filepath.Base(c.ManifestPath)
-				desc = termtext.Line("конфликт: " + base + " и " + strings.TrimSuffix(base, ".yaml") + "/config.yaml")
-			} else if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err == nil {
+				desc = termtext.Line("conflict: " + base + " and " + strings.TrimSuffix(base, ".yaml") + "/config.yaml")
+			} else if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err != nil {
+				// Битый модуль не должен быть неотличим от модуля без описания.
+				// Полную причину (с путём) не печатаем: колонка раздувается, путь
+				// есть в PATH при -v, причину покажет validate.
+				desc = "(error: cannot load module; run 'futi modules validate <namespace>')"
+			} else {
 				desc = termtext.Line(mod.Description)
 			}
 		}
@@ -593,8 +618,10 @@ func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader
 	return nil
 }
 
-func printUsage() {
-	fmt.Fprint(os.Stderr, `futi — universal CLI utility manager
+// printUsage печатает общую справку в w: stdout по явному запросу (-h, help),
+// stderr — когда futi запущен без аргументов.
+func printUsage(w io.Writer) {
+	fmt.Fprint(w, `futi — universal CLI utility manager
 
 Turns scattered commands, scripts and tools into YAML modules with a single
 CLI interface. Install a module once — use it everywhere.
@@ -811,8 +838,8 @@ MODULE SCHEMA (YAML)
   #   name: echo_mod
   #   cmd: "echo {{.args}}"
   #   commands:
-  #     upper:
-  #       cmd: "echo {{.args}} | tr a-z A-Z"
+  #     shout:
+  #       cmd: "echo {{quote .args}}"
 
 TEMPLATING
   Commands use Go text/template syntax:
@@ -823,8 +850,15 @@ TEMPLATING
     {{if index .env "FOO"}}...{{end}}  Conditional on env var presence
     {{if .follow}}...{{end}}        Conditional block (for bool params)
 
-  Quote values with spaces in the template:
-    cmd: "echo \"{{.msg}}\""        --msg "hello world" works correctly
+    {{.module_root}}                Directory of the module (use {{quote .module_root}})
+    {{.module_name}}                Name of the module
+
+  Commands run without a shell: the rendered "cmd" is split into words (like
+  shlex), so a substituted value is split again. Always wrap user input in
+  quote, otherwise spaces split it into several arguments and a value starting
+  with "-" becomes a flag:
+    cmd: "echo {{quote .msg}}"      --msg "hello world" is passed as one argument
+  Shell features (pipes, redirects, globs) are not available in "cmd".
 
 FLAGS
   -h, --help                        Show this help (after a path: help for
@@ -980,26 +1014,63 @@ func commandPath(pa *parsedArgs) []string {
 	return path
 }
 
-// exitAfterHelp печатает справку по пути в stdout (код 0); ошибка — в stderr, код 1.
-func exitAfterHelp(source discovery.Source, loader modulerunner.ModuleLoader, path []string) {
-	if err := runSystemHelp(os.Stdout, source, loader, path); err != nil {
-		if printPartialWarnings(os.Stderr, err) {
-			return
+// systemHelpCode печатает справку по пути в stdout и возвращает код выхода:
+// 0 (в том числе при частичном листинге — предупреждения в stderr) или 1 с
+// ошибкой в stderr.
+func systemHelpCode(stdout, stderr io.Writer, source discovery.Source, loader modulerunner.ModuleLoader, path []string) int {
+	if err := runSystemHelp(stdout, source, loader, path); err != nil {
+		if printPartialWarnings(stderr, err) {
+			return 0
 		}
-		fmt.Fprintf(os.Stderr, "%s\n", withValidateHint(err.Error(), err, path, source))
-		os.Exit(1)
+		fmt.Fprintf(stderr, "%s\n", withValidateHint(err.Error(), err, path, source))
+		return 1
 	}
+	return 0
+}
+
+// runParsed — общий путь исполнения команды (ResolveCommand → bindFlags
+// (-h/--help → справка) → Run → formatRunError) для обычной ветки main и
+// пользовательской help. Пишет в переданные stdout/stderr и возвращает код
+// выхода. Второе значение — ошибка запуска (уже напечатанная в stderr): её
+// возвращаем наружу, чтобы вызывающий через exitAfterRunError корректно
+// обработал сигнальный путь (процесс гибнет тем же сигналом), а тесты
+// проверяли код без os.Exit.
+func runParsed(ctx context.Context, stdout, stderr io.Writer, source discovery.Source, loader modulerunner.ModuleLoader, pa *parsedArgs) (int, error) {
+	// Схема команды нужна для привязки флагов (bool/string/int). -h/--help —
+	// справка по пути, в том числе для веток без своей команды (futi docker -h).
+	helpPath := commandPath(pa)
+	cmd, err := modulerunner.ResolveCommand(source, loader, pa.namespace, pa.command)
+	if err != nil {
+		if hasHelpFlag(pa.flags) {
+			return systemHelpCode(stdout, stderr, source, loader, helpPath), nil
+		}
+		fmt.Fprintf(stderr, "%s\n", withPathHint(withValidateHint(formatRunError(err), err, helpPath, source), pa.flags))
+		return exitCodeFromError(err), err
+	}
+	params, help, err := bindFlags(cmd, pa.flags)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s\n", withPathHint(err.Error(), pa.flags))
+		return 1, nil
+	}
+	if help {
+		return systemHelpCode(stdout, stderr, source, loader, helpPath), nil
+	}
+	if err := modulerunner.Run(ctx, source, pa.namespace, pa.command, params, pa.args, pa.argsList, stdout, stderr, loader); err != nil {
+		fmt.Fprintf(stderr, "%s\n", formatRunError(err))
+		return exitCodeFromError(err), err
+	}
+	return 0, nil
 }
 
 func main() {
 	if len(os.Args) < 2 {
-		printUsage()
+		printUsage(os.Stderr)
 		os.Exit(1)
 	}
 
 	// Быстрый путь: -h/--help не требует config/source/cache.
 	if os.Args[1] == "-h" || os.Args[1] == "--help" {
-		printUsage()
+		printUsage(os.Stdout)
 		return
 	}
 
@@ -1152,13 +1223,16 @@ func main() {
 				fmt.Fprintf(os.Stderr, "source: %v\n", err)
 				os.Exit(1)
 			}
-			if helpErr := runHelp(os.Stdout, source, cache, helpReq.positional); helpErr != nil && !printPartialWarnings(os.Stderr, helpErr) {
-				fmt.Fprintf(os.Stderr, "%s\n", withValidateHint(helpErr.Error(), helpErr, helpReq.positional, source))
-				os.Exit(1)
+			code, runErr := runHelp(context.Background(), os.Stdout, os.Stderr, source, cache, helpReq)
+			if runErr != nil {
+				exitAfterRunError(runErr)
+			}
+			if code != 0 {
+				os.Exit(code)
 			}
 			return
 		case errors.Is(err, errHelp):
-			printUsage()
+			printUsage(os.Stdout)
 			return
 		default:
 			fmt.Fprintf(os.Stderr, "parse: %v\n", err)
@@ -1171,30 +1245,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "source: %v\n", err)
 		os.Exit(1)
 	}
-	// Схема команды нужна для привязки флагов (bool/string/int). -h/--help —
-	// справка по пути, в том числе для веток без своей команды (futi docker -h).
-	helpPath := commandPath(pa)
-	cmd, err := modulerunner.ResolveCommand(source, cache, pa.namespace, pa.command)
-	if err != nil {
-		if hasHelpFlag(pa.flags) {
-			exitAfterHelp(source, cache, helpPath)
-			return
-		}
-		fmt.Fprintf(os.Stderr, "%s\n", withPathHint(withValidateHint(formatRunError(err), err, helpPath, source), pa.flags))
-		exitAfterRunError(err)
+	code, runErr := runParsed(context.Background(), os.Stdout, os.Stderr, source, cache, pa)
+	if runErr != nil {
+		exitAfterRunError(runErr)
 	}
-	params, help, err := bindFlags(cmd, pa.flags)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", withPathHint(err.Error(), pa.flags))
-		os.Exit(1)
-	}
-	if help {
-		exitAfterHelp(source, cache, helpPath)
-		return
-	}
-	if err := modulerunner.Run(context.Background(), source, pa.namespace, pa.command, params, pa.args, pa.argsList, nil, nil, cache); err != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", formatRunError(err))
-		exitAfterRunError(err)
+	if code != 0 {
+		os.Exit(code)
 	}
 }
 

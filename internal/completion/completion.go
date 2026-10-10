@@ -246,7 +246,13 @@ func isBoolFlag(loader modulerunner.ModuleLoader, manifest, root string, command
 
 // resolveModule ищет модуль progressive-ом от длиннейшего namespace к коротчайшему.
 // Возвращает путь манифеста, корень, флаг найденности и оставшийся command path.
+// Слова пути делятся по "." (audit F83): `docker.build` = `docker build`.
 func resolveModule(source discovery.Source, positionals []string) (manifest, root string, found bool, commandPath []string) {
+	var segs []string
+	for _, p := range positionals {
+		segs = append(segs, strings.Split(p, ".")...)
+	}
+	positionals = segs
 	for i := len(positionals); i >= 0; i-- {
 		ns := strings.Join(positionals[:i], ".")
 		mp, mr, err := source.Resolve(ns)

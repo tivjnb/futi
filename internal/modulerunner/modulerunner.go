@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/tivjnb/futi/internal/discovery"
@@ -79,6 +80,7 @@ func Run(
 		return err
 	}
 	cmd, mod, moduleRoot := r.cmd, r.mod, r.moduleRoot
+	moduleName := execmodule.EffectiveName(mod.Name, r.manifestPath)
 
 	resolved, err := cmd.Validate(params)
 	if err != nil {
@@ -90,7 +92,7 @@ func Run(
 		return fmt.Errorf("modulerunner: %w", err)
 	}
 
-	rendered, err := cmd.Render(resolved, args, argsList, execmodule.ModuleRef{Name: mod.Name, Root: moduleRoot})
+	rendered, err := cmd.Render(resolved, args, argsList, execmodule.ModuleRef{Name: moduleName, Root: moduleRoot})
 	if err != nil {
 		return fmt.Errorf("modulerunner: %w", err)
 	}
@@ -114,7 +116,7 @@ func Run(
 	// FUTI_CWD удалён (cwd = cwd вызова, getcwd() в скрипте даёт то же).
 	env := os.Environ()
 	env = append(env,
-		"FUTI_MODULE_NAME="+mod.Name,
+		"FUTI_MODULE_NAME="+moduleName,
 		"FUTI_MODULE_ROOT="+moduleRoot,
 	)
 	cfg := executor.NewConfig().WithEnv(env)
@@ -133,6 +135,8 @@ type resolvedCommand struct {
 	cmd        *execmodule.Command
 	mod        *execmodule.Module
 	moduleRoot string
+	// manifestPath нужен для имени модуля по умолчанию (execmodule.EffectiveName).
+	manifestPath string
 }
 
 // ResolveCommand находит модуль и команду (progressive resolution, как в Run)
@@ -161,13 +165,13 @@ func resolveCommand(
 	loader ModuleLoader,
 ) (*resolvedCommand, error) {
 	// Реконструкция positional args из namespace + command.
+	// Непустой namespace всегда делится по ".", в т.ч. при command=="":
+	// `futi docker.build` даёт namespace "docker.build" без команды.
 	var positional []string
-	if namespace == "" {
-		positional = []string{command}
-	} else if command == "" {
-		positional = []string{namespace}
-	} else {
+	if namespace != "" {
 		positional = strings.Split(namespace, ".")
+	}
+	if namespace == "" || command != "" {
 		positional = append(positional, command)
 	}
 
@@ -201,15 +205,16 @@ func resolveCommand(
 					Params:     mod.Params,
 					Positional: mod.Positional,
 				},
-				mod:        mod,
-				moduleRoot: moduleRoot,
+				mod:          mod,
+				moduleRoot:   moduleRoot,
+				manifestPath: manifestPath,
 			}, nil
 		}
 		cmd, err := mod.ResolveCommand(commandPath)
 		if err != nil {
 			return nil, fmt.Errorf("modulerunner: %w", err)
 		}
-		return &resolvedCommand{cmd: cmd, mod: mod, moduleRoot: moduleRoot}, nil
+		return &resolvedCommand{cmd: cmd, mod: mod, moduleRoot: moduleRoot, manifestPath: manifestPath}, nil
 	}
 
 	return nil, fmt.Errorf("modulerunner: %w for %v", ErrModuleNotFound, positional)
@@ -222,7 +227,7 @@ type CommandInfo struct {
 }
 
 // ListCommands находит модуль через source, загружает его и возвращает
-// список команд с описаниями.
+// список команд с описаниями, отсортированный по имени.
 // loader — опциональный загрузчик с кэшем (nil = прямой LoadModule).
 func ListCommands(source discovery.Source, namespace string, loader ModuleLoader) ([]CommandInfo, error) {
 	manifestPath, moduleRoot, err := source.Resolve(namespace)
@@ -242,5 +247,6 @@ func ListCommands(source discovery.Source, namespace string, loader ModuleLoader
 			Description: cmd.Description,
 		})
 	}
+	sort.Slice(cmds, func(i, j int) bool { return cmds[i].Name < cmds[j].Name })
 	return cmds, nil
 }

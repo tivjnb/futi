@@ -12,24 +12,27 @@ import (
 	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
-// runHelp обрабатывает запрос справки для позиционного пути positional
-// (всё до последнего "help"). Сначала проверяет user-defined команду "help":
-// если "<positional> help" резолвится как исполнимая команда/модуль — выполняет
-// её (user-defined выигрывает). Иначе показывает системную справку для positional.
-func runHelp(w io.Writer, source discovery.Source, loader modulerunner.ModuleLoader, positional []string) error {
+// runHelp обрабатывает запрос справки req. Сначала проверяет user-defined
+// команду "help": если "<positional> help" резолвится как исполнимая
+// команда/модуль — выполняет её общим путём runParsed (флаги, args, раздельные
+// stdout/stderr, код команды; user-defined выигрывает). Иначе показывает
+// системную справку для positional (флаги и args игнорируются). Возвращает код
+// выхода и ошибку запуска пользовательской команды (см. runParsed).
+func runHelp(ctx context.Context, stdout, stderr io.Writer, source discovery.Source, loader modulerunner.ModuleLoader, req *helpRequest) (int, error) {
 	// Полный путь с "help" как последней командой.
-	full := make([]string, len(positional)+1)
-	copy(full, positional)
-	full[len(positional)] = "help"
+	full := make([]string, len(req.positional)+1)
+	copy(full, req.positional)
+	full[len(req.positional)] = "help"
 
 	if manifest, root, cmdPath, ok := resolvePositional(source, full); ok {
 		if isExecutableHelp(source, loader, manifest, root, cmdPath) {
-			// User-defined help выигрывает — выполняем "<positional> help".
-			return runPositional(w, source, loader, full)
+			pa := &parsedArgs{flags: req.flags, args: req.args, argsList: req.argsList}
+			pa.namespace, pa.command = splitPath(full)
+			return runParsed(ctx, stdout, stderr, source, loader, pa)
 		}
 	}
 
-	return runSystemHelp(w, source, loader, positional)
+	return systemHelpCode(stdout, stderr, source, loader, req.positional), nil
 }
 
 // resolvePositional находит модуль для positional через progressive resolution
@@ -64,16 +67,6 @@ func isExecutableHelp(source discovery.Source, loader modulerunner.ModuleLoader,
 	return cmd.Cmd != ""
 }
 
-// runPositional выполняет команду по позиционному пути (последний сегмент — команда).
-func runPositional(w io.Writer, source discovery.Source, loader modulerunner.ModuleLoader, positional []string) error {
-	if len(positional) == 0 {
-		return fmt.Errorf("run: empty command")
-	}
-	ns := strings.Join(positional[:len(positional)-1], ".")
-	cmd := positional[len(positional)-1]
-	return modulerunner.Run(context.Background(), source, ns, cmd, map[string]string{}, "", nil, w, w, loader)
-}
-
 // helpModuleNotFoundError — модуль для справки не найден; Unwrap отдаёт
 // sentinel modulerunner.ErrModuleNotFound (для подсказки про validate).
 type helpModuleNotFoundError struct{ path string }
@@ -89,7 +82,7 @@ func (e *helpModuleNotFoundError) Unwrap() error { return modulerunner.ErrModule
 // Пустой positional (корень) — printUsage.
 func runSystemHelp(w io.Writer, source discovery.Source, loader modulerunner.ModuleLoader, positional []string) error {
 	if len(positional) == 0 {
-		printUsage()
+		printUsage(w)
 		return nil
 	}
 

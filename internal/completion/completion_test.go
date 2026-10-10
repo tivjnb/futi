@@ -215,6 +215,17 @@ func TestCompleteParamNames(t *testing.T) {
 	}
 }
 
+// audit F83: слово пути через точку делится как пробелы.
+func TestCompleteDottedPathParamNames(t *testing.T) {
+	src := newTestSource(t)
+	matches, _ := Complete(src, nil, []string{"docker.build"}, "--")
+	got := text(matches)
+	want := []string{"--force", "--tag"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected matches: %v, want %v", got, want)
+	}
+}
+
 func TestCompleteParamNamesFiltered(t *testing.T) {
 	src := newTestSource(t)
 	matches, _ := Complete(src, nil, []string{"docker", "build"}, "--t")

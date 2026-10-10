@@ -1,10 +1,10 @@
 // Package modulecache — persistent кэш загруженных модулей.
 //
-// Архитектура (см. docs/superpowers/specs/2026-08-19-persistent-modulecache-design.md):
+// Архитектура:
 //   - Storage interface — абстракция над persistent/in-memory хранилищем.
 //   - DiskStorage — gob-файл на диске (используется CLI).
 //   - MemoryStorage — no-op fallback (нет home dir) и заготовка для HTTP server.
-//   - RefreshPolicy interface — стратегия обновления (always/every_t_min/force_only).
+//   - RefreshPolicy interface — стратегия обновления (every_time/every_t_min/force_only).
 //   - Cache — orchestrator: in-memory entries (ALL модули) + persistent (только глобальные).
 //
 // In-memory кэш хранит все модули (глобальные + локальные) в рамках процесса —
@@ -62,11 +62,12 @@ func New(storage Storage, policy RefreshPolicy) *Cache {
 // НО НЕ в persistentPaths. Локальные модули не сохраняются на диск.
 // Использует double-check pattern: RLock → check → RUnlock; при miss — Lock → re-check → load.
 //
-// Ключ кэша — manifestPath. moduleRoot в ключ не входит.
-// Ошибки загрузки не кэшируются.
+// Ключ кэша — manifestPath, но hit засчитывается, только если Root записи
+// совпадает с moduleRoot: иначе модуль перечитывается и запись заменяется.
+// Запись с Module == nil — всегда miss. Ошибки загрузки не кэшируются.
 func (c *Cache) LoadModule(manifestPath, moduleRoot string) (*execmodule.Module, error) {
 	c.mu.RLock()
-	if e, ok := c.entries[manifestPath]; ok {
+	if e, ok := c.entries[manifestPath]; ok && usableFor(e, moduleRoot) {
 		c.mu.RUnlock()
 		return e.Module, nil
 	}
@@ -80,7 +81,7 @@ func (c *Cache) LoadModule(manifestPath, moduleRoot string) (*execmodule.Module,
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// Double-check: другая горутина могла загрузить тот же модуль.
-	if e, ok := c.entries[manifestPath]; ok {
+	if e, ok := c.entries[manifestPath]; ok && usableFor(e, moduleRoot) {
 		return e.Module, nil
 	}
 	c.entries[manifestPath] = entry{Module: mod}
@@ -108,7 +109,7 @@ func (c *Cache) LoadModuleVerified(manifestPath, moduleRoot string) (*execmodule
 	}
 
 	c.mu.RLock()
-	if e, ok := c.entries[manifestPath]; ok && len(e.Hash) > 0 && bytes.Equal(e.Hash, h) {
+	if e, ok := c.entries[manifestPath]; ok && usableFor(e, moduleRoot) && len(e.Hash) > 0 && bytes.Equal(e.Hash, h) {
 		c.mu.RUnlock()
 		return e.Module, nil
 	}
@@ -122,11 +123,17 @@ func (c *Cache) LoadModuleVerified(manifestPath, moduleRoot string) (*execmodule
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// Double-check: другая горутина могла обновить entry.
-	if e, ok := c.entries[manifestPath]; ok && len(e.Hash) > 0 && bytes.Equal(e.Hash, h) {
+	if e, ok := c.entries[manifestPath]; ok && usableFor(e, moduleRoot) && len(e.Hash) > 0 && bytes.Equal(e.Hash, h) {
 		return e.Module, nil
 	}
 	c.entries[manifestPath] = entry{Module: mod, Hash: h}
 	return mod, nil
+}
+
+// usableFor сообщает, можно ли отдать запись как cache hit для moduleRoot:
+// в записи есть модуль и его Root совпадает с запрошенным.
+func usableFor(e entry, moduleRoot string) bool {
+	return e.Module != nil && e.Module.Root == moduleRoot
 }
 
 // hashFile возвращает SHA-256 содержимого файла. Вызывается раньше
@@ -165,6 +172,9 @@ func hashFile(path string) ([]byte, error) {
 // для introspection (политика, версия). Используется когда Refresh будет вызван
 // явно (`futi cache refresh`) — устраняет двойной Refresh (Start + runCacheRefresh).
 //
+// Записи с Module == nil и с Hash длины не 0 и не sha256.Size (повреждённый
+// или подменённый файл кэша) пропускаются — их модуль загрузится с диска.
+//
 // Ошибка Load (повреждённый файл) — не фатальна: возвращается
 // пустая cacheFile, entries остаются пустыми. Несовместимая версия схемы и
 // чужая идентичность бинаря ошибкой не являются: storage тихо отдаёт пустую
@@ -179,6 +189,9 @@ func (c *Cache) Load() cacheFile {
 	}
 	c.mu.Lock()
 	for path, e := range cf.Entries {
+		if e.Module == nil || (len(e.Hash) != 0 && len(e.Hash) != sha256.Size) {
+			continue
+		}
 		c.entries[path] = e
 		c.persistentPaths[path] = true
 	}
@@ -194,6 +207,9 @@ func (c *Cache) Load() cacheFile {
 //
 // Ошибка Load (повреждённый файл) — не фатальна: rebuild с пустого состояния
 // (несовместимая версия и чужой бинарь — тихая перестройка без ошибки и лога). Если политика требует Refresh — кэш заполнится заново.
+// При force_only Refresh не вызывается: после сброса кэша (в том числе после
+// пересборки бинаря) персистентный кэш пуст до явного `futi cache refresh`,
+// модули при этом читаются с диска напрямую.
 // Ошибка Save — не фатальна: in-memory кэш актуален.
 func (c *Cache) Start(globalSource discovery.Source) error {
 	cf := c.Load()
@@ -236,8 +252,11 @@ type RefreshResult struct {
 //
 // Для каждого модуля из globalSource.ListChildrenRecursive(""):
 //  1. os.Stat(manifestPath) → получить mtime, size.
-//  2. Сравнить с entries[path] — если mtime+size совпадают, пропустить.
+//  2. Сравнить с entries[path] — если mtime+size и Root (с child.ModuleRoot)
+//     совпадают, пропустить.
 //  3. Иначе: execmodule.LoadModule → обновить entries[path], добавить в persistentPaths.
+//     Не удалось (stat/hash/LoadModule) — запись удаляется из entries и
+//     persistentPaths: устаревший модуль нельзя отдавать как актуальный.
 //  4. Cleanup: удалить из entries/persistentPaths те, кого больше нет в source
 //     (пропускается при частичном листинге, см. ниже).
 //  5. Обновить lastRefresh (только если не все модули пропущены).
@@ -248,8 +267,10 @@ type RefreshResult struct {
 // source не попадает, и его запись удаляется на шаге 4.
 //
 // Ошибки Stat/hash/LoadModule не фатальны: модуль пропускается, счётчик
-// Skipped инкрементируется, ошибка логируется, запись кэша сохраняется
-// (модуль есть в source). При следующем Refresh retry.
+// Skipped инкрементируется, ошибка логируется, запись кэша удаляется (source
+// модуль отдал, но манифест не перечитался, так что запись недостоверна).
+// При следующем Refresh retry. Записи модулей недоступных источников (их нет в
+// неполном листинге) не затрагиваются.
 // Ошибка Save не фатальна: in-memory кэш актуален, логируется.
 //
 // Контракт ошибки: если листинг вернул *discovery.PartialError (часть
@@ -291,12 +312,14 @@ func (c *Cache) Refresh(globalSource discovery.Source) (RefreshResult, error) {
 				Reason: fmt.Sprintf("stat: %v", err),
 			})
 			log.Printf("modulecache: refresh: stat %q: %v", child.ManifestPath, err)
+			c.dropEntry(child.ManifestPath)
 			continue
 		}
 
 		// Проверяем: изменился ли файл (mtime + size).
 		if e, ok := c.entries[child.ManifestPath]; ok {
-			if e.ModTime.Equal(info.ModTime()) && e.Size == info.Size() {
+			if e.Module != nil && e.Module.Root == child.ModuleRoot &&
+				e.ModTime.Equal(info.ModTime()) && e.Size == info.Size() {
 				c.persistentPaths[child.ManifestPath] = true
 				continue
 			}
@@ -312,6 +335,7 @@ func (c *Cache) Refresh(globalSource discovery.Source) (RefreshResult, error) {
 				Reason: fmt.Sprintf("hash: %v", err),
 			})
 			log.Printf("modulecache: refresh: hash %q: %v", child.ManifestPath, err)
+			c.dropEntry(child.ManifestPath)
 			continue
 		}
 
@@ -323,6 +347,7 @@ func (c *Cache) Refresh(globalSource discovery.Source) (RefreshResult, error) {
 				Reason: fmt.Sprintf("load: %v", err),
 			})
 			log.Printf("modulecache: refresh: load %q: %v", child.ManifestPath, err)
+			c.dropEntry(child.ManifestPath)
 			continue
 		}
 
@@ -365,6 +390,13 @@ func (c *Cache) Refresh(globalSource discovery.Source) (RefreshResult, error) {
 	}
 
 	return result, listErr
+}
+
+// dropEntry удаляет запись модуля из entries и persistentPaths.
+// Должна вызываться под локом.
+func (c *Cache) dropEntry(path string) {
+	delete(c.entries, path)
+	delete(c.persistentPaths, path)
 }
 
 // buildCacheFile строит snapshot cacheFile из persistent entries.

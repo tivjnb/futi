@@ -1,6 +1,7 @@
 package modulecache
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,8 +43,9 @@ func TestParseDurationSupportsDays(t *testing.T) {
 		{"1d4h", 28 * time.Hour},
 		{"1d2h30m", 26*time.Hour + 30*time.Minute},
 		{"3d12h", 84 * time.Hour},
-		{"1d0h", 24 * time.Hour}, // #32: zero-duration rest should be accepted
-		{"1d0m", 24 * time.Hour}, // #32: same for 0m
+		{"1d0h", 24 * time.Hour},  // #32: zero-duration rest should be accepted
+		{"1d0m", 24 * time.Hour},  // #32: same for 0m
+		{"0d12h", 12 * time.Hour}, // audit F42: нулевые дни при ненулевом остатке
 	}
 	for _, tc := range cases {
 		t.Run(tc.input, func(t *testing.T) {
@@ -77,6 +79,8 @@ func TestParseDurationInvalidReturnsError(t *testing.T) {
 		"1.5d",  // не поддерживаем дробные дни (time.ParseDuration не парсит дробные единицы без точки)
 		"-5m",   // отрицательные не имеют смысла для интервала обновления
 		"1d-2h", // отрицательный остаток
+		"0d",    // audit F42: нулевой итог без остатка
+		"0d0h",  // audit F42: нулевой итог с нулевым остатком
 	}
 	for _, tc := range cases {
 		t.Run(tc, func(t *testing.T) {
@@ -85,6 +89,17 @@ func TestParseDurationInvalidReturnsError(t *testing.T) {
 				t.Fatalf("expected error for %q, got nil", tc)
 			}
 		})
+	}
+}
+
+// TestParseDurationZeroSumMessage: нулевой итог (audit F42) даёт сообщение о
+// нуле, а не о переполнении.
+func TestParseDurationZeroSumMessage(t *testing.T) {
+	for _, tc := range []string{"0d0h", "0d0m"} {
+		_, err := parseDuration(tc)
+		if err == nil || !strings.Contains(err.Error(), "must be > 0") || strings.Contains(err.Error(), "too large") {
+			t.Errorf("parseDuration(%q) err = %v, want \"must be > 0\"", tc, err)
+		}
 	}
 }
 

@@ -621,7 +621,7 @@ func TestRunListShowsConflict(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "конфликт: x.yaml и x/config.yaml") {
+	if !strings.Contains(out, "conflict: x.yaml and x/config.yaml") {
 		t.Errorf("нет описания конфликта:\n%s", out)
 	}
 	if strings.Contains(out, "Описание-из") {
@@ -645,7 +645,7 @@ func TestRunListShowsConflict(t *testing.T) {
 		t.Fatalf("list -r: unexpected error: %v", err)
 	}
 	out = buf.String()
-	if !strings.Contains(out, "ns.x") || !strings.Contains(out, "конфликт: x.yaml и x/config.yaml") {
+	if !strings.Contains(out, "ns.x") || !strings.Contains(out, "conflict: x.yaml and x/config.yaml") {
 		t.Errorf("list -r: нет записи ns.x с описанием конфликта по именам файлов:\n%s", out)
 	}
 	if strings.Contains(out, "ns.x.yaml") {
@@ -2483,10 +2483,10 @@ func TestPrintChildrenConflictSources(t *testing.T) {
 	if err := printChildren(&buf, children, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "конфликт: модуль в нескольких sources: /a, /b") {
+	if !strings.Contains(buf.String(), "conflict: module in several sources: /a, /b") {
 		t.Errorf("нет текста конфликта sources:\n%s", buf.String())
 	}
-	if strings.Contains(buf.String(), "x.yaml и") {
+	if strings.Contains(buf.String(), "x.yaml and") {
 		t.Errorf("текст конфликта файлов вместо sources:\n%s", buf.String())
 	}
 }
@@ -2626,5 +2626,26 @@ func TestRunListVerboseStripsControlCharsInPath(t *testing.T) {
 		if strings.Contains(buf.String(), "\x1b") {
 			t.Fatalf("runList(%q) -v output contains ESC: %q", ns, buf.String())
 		}
+	}
+}
+
+// futi.yaml без name: FileSource называется futi, с name: x — x.
+func TestLocalSourceFutiYamlName(t *testing.T) {
+	for _, tt := range []struct{ name, body, ns string }{
+		{"без name", "commands:\n  greet:\n    cmd: echo hi\n", "futi"},
+		{"с name", "name: x\ncommands:\n  greet:\n    cmd: echo hi\n", "x"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+			writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), tt.body)
+			src, err := localSource(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := src.Resolve(tt.ns); err != nil {
+				t.Fatalf("Resolve(%q): %v", tt.ns, err)
+			}
+		})
 	}
 }

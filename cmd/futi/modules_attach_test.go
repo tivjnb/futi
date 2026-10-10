@@ -389,3 +389,114 @@ func TestModulesUpdateHookOutputToWriter(t *testing.T) {
 		t.Fatalf("writer output = %q, want hook stdout", buf.String())
 	}
 }
+
+// hookNameModule — модуль, чьи attach/detach пишут {{.module_name}} и
+// FUTI_MODULE_NAME в файлы-маркеры в каталоге out. nameLine — строка name:
+// (пустая — без неё).
+func hookNameModule(nameLine, out string) string {
+	hook := func(file string) string {
+		return "\"sh -c 'echo {{.module_name}} $FUTI_MODULE_NAME > " + filepath.Join(out, file) + "'\"\n"
+	}
+	return nameLine + "attach: " + hook("attach") + "detach: " + hook("detach") +
+		"commands:\n  run:\n    cmd: echo run\n"
+}
+
+func readTrim(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("hook marker missing: %v", err)
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// Хуки install, update и uninstall получают одно имя модуля: name: из
+// манифеста, а без него — имя каталога установки.
+func TestHooksGetSameModuleName(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		nameLine string
+		ns       string // --namespace установки ("" — корень)
+		dotName  string // имя для update/uninstall
+	}{
+		{"без name", "", "", "qr"},
+		{"с name", "name: qr\n", "", "qr"},
+		{"без name в namespace", "", "ns", "ns.qr"},
+		{"с name в namespace", "name: qr\n", "ns", "ns.qr"},
+	} {
+		const want = "qr qr"
+		t.Run(tt.name, func(t *testing.T) {
+			global := attachEnv(t)
+			out := t.TempDir()
+			srcDir := filepath.Join(t.TempDir(), "qr")
+			if err := os.MkdirAll(srcDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			cfgPath := filepath.Join(srcDir, "config.yaml")
+			writeFile(t, cfgPath, hookNameModule(tt.nameLine, out))
+			cache := newTestCache()
+
+			if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{srcDir, "--yes", "--namespace=" + tt.ns}); err != nil {
+				t.Fatalf("install: %v", err)
+			}
+			if got := readTrim(t, filepath.Join(out, "attach")); got != want {
+				t.Fatalf("install hook name = %q, want %q", got, want)
+			}
+
+			if err := os.Remove(filepath.Join(out, "attach")); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, cfgPath, hookNameModule(tt.nameLine, out)+"description: v2\n")
+			if err := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{tt.dotName, "--yes"}); err != nil {
+				t.Fatalf("update: %v", err)
+			}
+			if got := readTrim(t, filepath.Join(out, "attach")); got != want {
+				t.Fatalf("update hook name = %q, want %q", got, want)
+			}
+
+			if err := runModulesUninstall(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{tt.dotName, "--yes"}); err != nil {
+				t.Fatalf("uninstall: %v", err)
+			}
+			if got := readTrim(t, filepath.Join(out, "detach")); got != want {
+				t.Fatalf("uninstall hook name = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// Модуль с name: x в каталоге y: detach получает x, а не имя из аргумента.
+func TestUninstallDetachGetsManifestName(t *testing.T) {
+	global := attachEnv(t)
+	out := t.TempDir()
+	installRawModule(t, global, hookNameModule("name: x\n", out)) // каталог qr
+
+	err := runModulesUninstall(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "--yes"})
+	if err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if got := readTrim(t, filepath.Join(out, "detach")); got != "x x" {
+		t.Fatalf("detach name = %q, want %q", got, "x x")
+	}
+}
+
+// Источник без name: ставится под fallbackName, а не под именем временного
+// каталога fetch; хук получает то же имя.
+func TestInstallWithoutNameUsesFallbackName(t *testing.T) {
+	global := attachEnv(t)
+	out := t.TempDir()
+	srcDir := filepath.Join(t.TempDir(), "mymod")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(srcDir, "config.yaml"), hookNameModule("", out))
+
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{srcDir, "--yes"}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if !exists(filepath.Join(global, "mymod", "config.yaml")) {
+		t.Fatal("module must be installed under fallbackName")
+	}
+	if got := readTrim(t, filepath.Join(out, "attach")); got != "mymod mymod" {
+		t.Fatalf("hook name = %q, want %q", got, "mymod mymod")
+	}
+}

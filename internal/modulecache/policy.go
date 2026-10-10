@@ -10,7 +10,8 @@ import (
 // Реализации:
 //   - AlwaysPolicy — обновлять при каждом запуске (default).
 //   - EveryTMinPolicy{T} — обновлять раз в T времени.
-//   - ForceOnlyPolicy — никогда автоматически, только futi cache refresh.
+//   - ForceOnlyPolicy — никогда автоматически, только futi cache refresh (в том числе
+//     после сброса кэша пересборкой бинаря).
 //
 // Для будущего HTTP server (ROADMAP): TimerPolicy (раз в N минут) или
 // OnDemandPolicy (по HTTP-ручке) без изменения Cache.
@@ -57,7 +58,9 @@ func (p EveryTMinPolicy) ShouldRefresh(state cacheFile) bool {
 // String возвращает имя политики.
 func (EveryTMinPolicy) String() string { return "every_t_min" }
 
-// ForceOnlyPolicy — никогда автоматически. CLI молча использует кэш как есть.
+// ForceOnlyPolicy — никогда автоматически. CLI молча использует кэш как есть;
+// сброшенный кэш (например, после пересборки бинаря) остаётся пустым до
+// явного futi cache refresh.
 type ForceOnlyPolicy struct{}
 
 // ShouldRefresh всегда возвращает false.
