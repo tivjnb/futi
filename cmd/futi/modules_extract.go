@@ -37,8 +37,12 @@ func extractArchive(path, dest string) error {
 		return err
 	}
 	var magic [4]byte
-	n, _ := io.ReadFull(f, magic[:])
+	n, err := io.ReadFull(f, magic[:])
 	f.Close()
+	// Короткий файл (EOF) — не ошибка чтения: формат определим по тому, что есть.
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return fmt.Errorf("read archive: %w", err)
+	}
 	switch {
 	case n == 4 && magic == [4]byte{'P', 'K', 3, 4}:
 		return extractZip(path, dest)

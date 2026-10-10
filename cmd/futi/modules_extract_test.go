@@ -345,3 +345,15 @@ func TestExtractArchiveByContent(t *testing.T) {
 		}
 	})
 }
+
+// Ошибка чтения (не EOF) возвращается как есть, а не маскируется под
+// «неизвестный формат».
+func TestExtractArchiveReturnsReadError(t *testing.T) {
+	err := extractArchive(t.TempDir(), t.TempDir()) // чтение каталога даёт ошибку, не EOF
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if strings.Contains(err.Error(), "not zip or gzip") {
+		t.Fatalf("err = %v, read error must not be reported as unknown format", err)
+	}
+}

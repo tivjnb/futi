@@ -349,10 +349,16 @@ func TestModulesUninstallHookOutputToWriter(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	moduleDir := filepath.Join(global, "qr")
-	os.MkdirAll(moduleDir, 0o755)
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	body := "name: qr\ndetach: \"echo detach-hook-says-hi\"\ncommands:\n  run:\n    cmd: echo\n"
-	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644)
-	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
+	if err := os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{}); err != nil {
+		t.Fatal(err)
+	}
 
 	var buf bytes.Buffer
 	if err := runModulesUninstall(&buf, strings.NewReader("\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "--yes"}); err != nil {

@@ -21,6 +21,8 @@ type installedEntry struct {
 	Dir     string // каталог модуля (пакет)
 	Meta    *metayaml.Meta
 	ViaLink bool // путь проходит через симлинк-каталог ниже корня
+	// SelfLink — сам каталог модуля (последний элемент пути) симлинк.
+	SelfLink bool
 }
 
 // dotName превращает относительный путь ("images/qr") в dot-имя ("images.qr").
@@ -94,6 +96,7 @@ func (st *scanState) walk(root moduleRoot, dir, rel string, viaLink bool, ancest
 			if meta, err := metayaml.Read(filepath.Join(path, metayaml.FileName)); err == nil {
 				keepPreferred(&st.entries, st.entryIdx, installedEntry{
 					Name: prefixedName(root.Prefix, dotName(childRel)), Dir: path, Meta: meta, ViaLink: childViaLink,
+					SelfLink: child.Type()&fs.ModeSymlink != 0,
 				})
 			}
 			continue // внутрь модуля не спускаемся

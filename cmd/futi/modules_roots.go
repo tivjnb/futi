@@ -106,7 +106,7 @@ func reportSourcesVisibility(w io.Writer, cfg *config.Config, globalDir, name st
 	}
 	fullName, ok := visibleName(cfg.Sources, normalizePath(globalDir), name)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "Warning: %s is not listed in config.yaml sources; add it there to use the module\n", termtext.Line(globalDir))
+		fmt.Fprintf(os.Stderr, "Warning: %s is not listed in config.yaml sources; add it there to use, update or uninstall the module by name\n", termtext.Line(globalDir))
 		return
 	}
 	if fullName != name {

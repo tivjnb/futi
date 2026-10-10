@@ -150,3 +150,18 @@ func TestCleanupEmptyParents_RootNotRemoved(t *testing.T) {
 		})
 	}
 }
+
+// Корень лежит строго внутри цели (source /x, глобальный /x/ns/modules, цель
+// /x/ns): удаление цели снесло бы корень.
+func TestEnsureWithinRootRejectsTargetContainingRoot(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "x")
+	ns := filepath.Join(src, "ns")
+	global := filepath.Join(ns, "modules")
+	if err := os.MkdirAll(global, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureWithinRoot(ns, []string{src, global}); err == nil {
+		t.Error("цель, содержащая корень, должна отвергаться")
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/tivjnb/futi/internal/metayaml"
 	"github.com/tivjnb/futi/internal/modulecache"
 	"github.com/tivjnb/futi/internal/modulerunner"
+	"github.com/tivjnb/futi/internal/termtext"
 )
 
 // writeMeta записывает lockfile при обновлении; переменная — шов для тестов.
@@ -84,13 +85,16 @@ func runModulesUpdate(w io.Writer, stdin io.Reader, source discovery.Source, cac
 		return fmt.Errorf("modules update: %w", err)
 	}
 	scanned, backups := scanRoots(roots)
-	// Модуль, видимый только через симлинк-каталог, не обновляем: замена
-	// дерева превратила бы симлинк в копию, а оригинал остался бы старым.
+	// Модуль, чей каталог сам симлинк, не обновляем: замена дерева превратила
+	// бы симлинк в копию, а оригинал остался бы старым. Симлинк-каталог
+	// namespace выше модуля не мешает (dotfiles-схема).
 	var entries []installedEntry
 	for _, e := range scanned {
-		if !e.ViaLink {
-			entries = append(entries, e)
+		if e.SelfLink {
+			fmt.Fprintf(os.Stderr, "Warning: skipped %s: module directory is a symlink\n", termtext.Line(e.Name))
+			continue
 		}
+		entries = append(entries, e)
 	}
 	for _, b := range backups {
 		fmt.Fprintf(os.Stderr, "Warning: found %s left by an interrupted update; inspect it and remove or restore it manually\n", b)

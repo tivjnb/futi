@@ -506,3 +506,22 @@ func TestModulesInstallRefRequiresGit(t *testing.T) {
 		})
 	}
 }
+
+// https-URL без расширения: формат определяется по содержимому (zip от curl).
+func TestRunModulesInstallFromArchiveURLWithoutExtension(t *testing.T) {
+	zipPath := buildZip(t, []zipEntry{
+		{"qr/config.yaml", 0o644, "name: qr\ncommands:\n  run:\n    cmd: echo run\n"},
+	})
+	fakeBin(t, map[string]string{"curl": "cat '" + zipPath + "'"})
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	var b bytes.Buffer
+	if err := runModulesInstall(&b, strings.NewReader(""), newTestCache(), []string{"https://example.com/download", "--from-archive"}); err != nil {
+		t.Fatalf("runModulesInstall: %v\n%s", err, b.String())
+	}
+	if _, err := os.Stat(filepath.Join(global, "qr", "config.yaml")); err != nil {
+		t.Fatalf("module not installed: %v\n%s", err, b.String())
+	}
+}

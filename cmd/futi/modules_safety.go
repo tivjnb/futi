@@ -116,6 +116,9 @@ func ensureWithinRoot(path string, roots []string) error {
 		if realRoot == real {
 			return fmt.Errorf("path %q is a futi modules directory itself", path)
 		}
+		if strictlyInside(real, realRoot) {
+			return fmt.Errorf("path %q contains a futi modules directory", path)
+		}
 		realRoots = append(realRoots, realRoot)
 	}
 	for _, realRoot := range realRoots {

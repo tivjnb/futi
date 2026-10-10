@@ -214,7 +214,7 @@ func TestModulesInstallWarnsRootNotInSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runModulesInstall: %v", err)
 	}
-	if !strings.Contains(stderr, global+" is not listed in config.yaml sources") {
+	if !strings.Contains(stderr, global+" is not listed in config.yaml sources; add it there to use, update or uninstall the module by name") {
 		t.Fatalf("stderr lacks sources warning:\n%s", stderr)
 	}
 }
@@ -248,7 +248,7 @@ func TestModulesInitGlobalWarnsRootNotInSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runModulesInit: %v", err)
 	}
-	if !strings.Contains(stderr, global+" is not listed in config.yaml sources") {
+	if !strings.Contains(stderr, global+" is not listed in config.yaml sources; add it there to use, update or uninstall the module by name") {
 		t.Fatalf("stderr lacks sources warning:\n%s", stderr)
 	}
 }
@@ -354,8 +354,35 @@ func TestModulesUpdateAllSkipsSymlinkedModules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update must skip alias, err = %v; stderr:\n%s", err, stderr)
 	}
+	if !strings.Contains(stderr, "Warning: skipped alias: module directory is a symlink") {
+		t.Fatalf("stderr must report the skipped module:\n%s", stderr)
+	}
 	if info, lerr := os.Lstat(alias); lerr != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("alias must stay a symlink, lstat = %v, %v", info, lerr)
+	}
+}
+
+// Симлинк-каталог namespace (dotfiles-схема global/images -> ~/dotfiles/images):
+// сам модуль — обычный каталог, update без имени его обновляет.
+func TestModulesUpdateAllUpdatesModuleInsideSymlinkedNamespace(t *testing.T) {
+	skipSymlinksOnWindows(t)
+	writeFutiConfig(t, "")
+	global := t.TempDir()
+	dotfiles := t.TempDir()
+	installFixtureModule(t, filepath.Join(dotfiles, "images"), "qr", &metayaml.Meta{Lockfile: metayaml.Lockfile{Type: "bogus"}})
+	if err := os.Symlink(filepath.Join(dotfiles, "images"), filepath.Join(global, "images")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	var err error
+	stderr := captureStderr(t, func() {
+		err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader(""), discovery.NewGlobalSource(global), newTestCache(), nil)
+	})
+	// Неизвестный тип источника — update дошёл до updateAt, а не пропустил модуль.
+	if err == nil || err.Error() != "failed to update: images.qr" {
+		t.Fatalf("err = %v, want failure of images.qr; stderr:\n%s", err, stderr)
 	}
 }
 
