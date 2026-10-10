@@ -248,11 +248,7 @@ func localSource(loader modulerunner.ModuleLoader) (discovery.Source, error) {
 		if err != nil {
 			return nil, fmt.Errorf("local source: %w", err)
 		}
-		name := mod.Name
-		if name == "" {
-			name = "futi"
-		}
-		layers = append(layers, discovery.NewFileSource(abs, absRoot, name))
+		layers = append(layers, discovery.NewFileSource(abs, absRoot, execmodule.EffectiveName(mod.Name, abs)))
 	}
 
 	if len(layers) == 0 {

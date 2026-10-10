@@ -2628,3 +2628,24 @@ func TestRunListVerboseStripsControlCharsInPath(t *testing.T) {
 		}
 	}
 }
+
+// futi.yaml без name: FileSource называется futi, с name: x — x.
+func TestLocalSourceFutiYamlName(t *testing.T) {
+	for _, tt := range []struct{ name, body, ns string }{
+		{"без name", "commands:\n  greet:\n    cmd: echo hi\n", "futi"},
+		{"с name", "name: x\ncommands:\n  greet:\n    cmd: echo hi\n", "x"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+			writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), tt.body)
+			src, err := localSource(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := src.Resolve(tt.ns); err != nil {
+				t.Fatalf("Resolve(%q): %v", tt.ns, err)
+			}
+		})
+	}
+}

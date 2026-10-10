@@ -1181,3 +1181,43 @@ commands:
 		}
 	}
 }
+
+// TestRunModuleNameDefaultsToPath: без name: {{.module_name}} и
+// FUTI_MODULE_NAME равны имени файла/каталога модуля, с name: — ему.
+func TestRunModuleNameDefaultsToPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell scripts not supported in this test on Windows")
+	}
+	tests := []struct {
+		name  string
+		path  string // относительно каталога модулей
+		extra string
+		want  string
+	}{
+		{"файл без name", "deploy.yaml", "", "deploy deploy\n"},
+		{"пакет без name", "deploy/config.yaml", "", "deploy deploy\n"},
+		{"файл с name", "deploy.yaml", "name: x\n", "x x\n"},
+		{"пакет с name", "deploy/config.yaml", "name: x\n", "x x\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			full := filepath.Join(dir, filepath.FromSlash(tt.path))
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			body := tt.extra + "cmd: \"sh -c 'echo {{.module_name}} $FUTI_MODULE_NAME'\"\n"
+			if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			err := Run(context.Background(), discovery.NewGlobalSource(dir), "deploy", "", nil, "", nil, &out, nil, nil)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if out.String() != tt.want {
+				t.Fatalf("output = %q, want %q", out.String(), tt.want)
+			}
+		})
+	}
+}

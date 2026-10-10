@@ -79,6 +79,7 @@ func Run(
 		return err
 	}
 	cmd, mod, moduleRoot := r.cmd, r.mod, r.moduleRoot
+	moduleName := execmodule.EffectiveName(mod.Name, r.manifestPath)
 
 	resolved, err := cmd.Validate(params)
 	if err != nil {
@@ -90,7 +91,7 @@ func Run(
 		return fmt.Errorf("modulerunner: %w", err)
 	}
 
-	rendered, err := cmd.Render(resolved, args, argsList, execmodule.ModuleRef{Name: mod.Name, Root: moduleRoot})
+	rendered, err := cmd.Render(resolved, args, argsList, execmodule.ModuleRef{Name: moduleName, Root: moduleRoot})
 	if err != nil {
 		return fmt.Errorf("modulerunner: %w", err)
 	}
@@ -114,7 +115,7 @@ func Run(
 	// FUTI_CWD удалён (cwd = cwd вызова, getcwd() в скрипте даёт то же).
 	env := os.Environ()
 	env = append(env,
-		"FUTI_MODULE_NAME="+mod.Name,
+		"FUTI_MODULE_NAME="+moduleName,
 		"FUTI_MODULE_ROOT="+moduleRoot,
 	)
 	cfg := executor.NewConfig().WithEnv(env)
@@ -133,6 +134,8 @@ type resolvedCommand struct {
 	cmd        *execmodule.Command
 	mod        *execmodule.Module
 	moduleRoot string
+	// manifestPath нужен для имени модуля по умолчанию (execmodule.EffectiveName).
+	manifestPath string
 }
 
 // ResolveCommand находит модуль и команду (progressive resolution, как в Run)
@@ -201,15 +204,16 @@ func resolveCommand(
 					Params:     mod.Params,
 					Positional: mod.Positional,
 				},
-				mod:        mod,
-				moduleRoot: moduleRoot,
+				mod:          mod,
+				moduleRoot:   moduleRoot,
+				manifestPath: manifestPath,
 			}, nil
 		}
 		cmd, err := mod.ResolveCommand(commandPath)
 		if err != nil {
 			return nil, fmt.Errorf("modulerunner: %w", err)
 		}
-		return &resolvedCommand{cmd: cmd, mod: mod, moduleRoot: moduleRoot}, nil
+		return &resolvedCommand{cmd: cmd, mod: mod, moduleRoot: moduleRoot, manifestPath: manifestPath}, nil
 	}
 
 	return nil, fmt.Errorf("modulerunner: %w for %v", ErrModuleNotFound, positional)

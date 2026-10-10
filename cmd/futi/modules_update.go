@@ -308,7 +308,7 @@ func updateAt(w io.Writer, gate attachGate, cache *modulecache.Cache, name, labe
 	// Прерывание сигналом возвращаем после Invalidate: дерево уже заменено.
 	var interruptErr error
 	if runAttach {
-		if err := modulerunner.RunHook(context.Background(), mod.Attach, moduleRoot, name, w, os.Stderr); err != nil {
+		if err := modulerunner.RunHook(context.Background(), mod.Attach, moduleRoot, execmodule.EffectiveName(mod.Name, filepath.Join(moduleRoot, "config.yaml")), w, os.Stderr); err != nil {
 			if _, interrupted := interruptSignal(err); interrupted {
 				interruptErr = fmt.Errorf("attach interrupted: %w", err)
 			} else {

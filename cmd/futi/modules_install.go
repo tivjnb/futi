@@ -273,7 +273,7 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 
 	// attach: провал → rollback (rm dest) + error (§3.1, §8 #6).
 	if runAttach {
-		if err := modulerunner.RunHook(context.Background(), mod.Attach, dest, name, w, os.Stderr); err != nil {
+		if err := modulerunner.RunHook(context.Background(), mod.Attach, dest, execmodule.EffectiveName(mod.Name, filepath.Join(dest, "config.yaml")), w, os.Stderr); err != nil {
 			return fmt.Errorf("attach failed, module removed: %w", err)
 		}
 	}
