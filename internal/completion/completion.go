@@ -66,6 +66,12 @@ var completionShells = []string{"bash", "fish", "zsh"}
 // modulesSubcommands — подкоманды `futi modules`.
 var modulesSubcommands = []string{"add_command", "info", "init", "install", "list", "path", "remove_command", "uninstall", "update", "validate"}
 
+// ModulesSubcommands возвращает подкоманды `futi modules`, которые подсказывает
+// completion (для теста согласованности с парсерами в cmd/futi).
+func ModulesSubcommands() []string {
+	return append([]string(nil), modulesSubcommands...)
+}
+
 // modulesAddCommandFlags — флаги `futi modules add_command`.
 var modulesAddCommandFlags = []string{"--cmd", "--desc"}
 

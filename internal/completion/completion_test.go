@@ -919,3 +919,24 @@ func TestCompleteModulesRemoveCommandNoFlags(t *testing.T) {
 		t.Fatalf("remove_command has no flags, got %v", matches)
 	}
 }
+
+// partialChildrenSource — ListChildren возвращает валидных детей вместе с
+// *discovery.PartialError (часть источников не читается).
+type partialChildrenSource struct{ discovery.Source }
+
+func (p partialChildrenSource) ListChildren(ns string) ([]discovery.Child, error) {
+	children, err := p.Source.ListChildren(ns)
+	if err != nil {
+		return nil, err
+	}
+	return children, &discovery.PartialError{Errs: []error{errors.New("unreadable source")}}
+}
+
+func TestCompleteListKeywordPartialListing(t *testing.T) {
+	src := partialChildrenSource{newTestSource(t)}
+	matches, _ := Complete(src, nil, []string{"dev"}, "")
+	want := []string{"deploy", "list"}
+	if got := text(matches); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Complete(dev) with PartialError = %v, want %v", got, want)
+	}
+}

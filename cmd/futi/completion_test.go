@@ -317,10 +317,18 @@ func TestCompletionModulesFlagsAcceptedByParsers(t *testing.T) {
 		"uninstall":   func(a []string) error { _, err := parseUninstallArgs(a); return err },
 		"update":      func(a []string) error { _, err := parseUpdateArgs(a); return err },
 	}
-	for sub, parse := range parsers {
+	for _, sub := range completion.ModulesSubcommands() {
 		flags := completion.ModulesFlags(sub)
-		if len(flags) == 0 {
-			t.Errorf("%s: completion has no flags, but the parser is registered", sub)
+		parse, hasParser := parsers[sub]
+		if flags == nil {
+			if hasParser {
+				t.Errorf("%s: parser registered, but completion suggests no flags", sub)
+			}
+			continue
+		}
+		if !hasParser {
+			t.Errorf("%s: completion suggests flags %v, but no parser is registered in the test", sub, flags)
+			continue
 		}
 		for _, flag := range flags {
 			// Значение и позиционный аргумент: флаг с аргументом забирает "val",
@@ -331,12 +339,6 @@ func TestCompletionModulesFlagsAcceptedByParsers(t *testing.T) {
 					t.Errorf("%s: flag %s suggested by completion, parser rejects args %v: %v", sub, flag, args, err)
 				}
 			}
-		}
-	}
-	// Подкоманды без флагов не должны ничего подсказывать.
-	for _, sub := range []string{"info", "list", "path", "remove_command", "validate"} {
-		if flags := completion.ModulesFlags(sub); flags != nil {
-			t.Errorf("%s: completion suggests flags %v, want none", sub, flags)
 		}
 	}
 }
