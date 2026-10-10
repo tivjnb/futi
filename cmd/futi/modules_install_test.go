@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -392,5 +393,46 @@ func TestRunModulesInstallNonReservedNamespaceOK(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(global, "validate", "help", "qr", "config.yaml")); err != nil {
 		t.Fatalf("module not installed: %v", err)
+	}
+}
+
+// Сбой после переноса дерева не должен оставлять модуль без meta:
+// dest убирается, повторный install проходит.
+func TestInstallRollbackOnMetaWriteFailure(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+
+	orig := writeMeta
+	writeMeta = func(string, *metayaml.Meta) error { return errors.New("disk full") }
+	err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--yes"})
+	writeMeta = orig
+	if err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("err = %v, want disk full", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(global, "qr")); !os.IsNotExist(statErr) {
+		t.Fatalf("dest must be removed after meta write failure, stat err = %v", statErr)
+	}
+	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--yes"}); err != nil {
+		t.Fatalf("repeated install: %v", err)
+	}
+}
+
+func TestInstallRollbackOnHashFailure(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+
+	orig := computeTreeHash
+	computeTreeHash = func(string) (string, error) { return "", errors.New("hash broke") }
+	err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--yes"})
+	computeTreeHash = orig
+	if err == nil || !strings.Contains(err.Error(), "hash broke") {
+		t.Fatalf("err = %v, want hash broke", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(global, "qr")); !os.IsNotExist(statErr) {
+		t.Fatalf("dest must be removed after hash failure, stat err = %v", statErr)
 	}
 }
