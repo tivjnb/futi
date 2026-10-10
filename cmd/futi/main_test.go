@@ -621,7 +621,7 @@ func TestRunListShowsConflict(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "конфликт: x.yaml и x/config.yaml") {
+	if !strings.Contains(out, "conflict: x.yaml and x/config.yaml") {
 		t.Errorf("нет описания конфликта:\n%s", out)
 	}
 	if strings.Contains(out, "Описание-из") {
@@ -645,7 +645,7 @@ func TestRunListShowsConflict(t *testing.T) {
 		t.Fatalf("list -r: unexpected error: %v", err)
 	}
 	out = buf.String()
-	if !strings.Contains(out, "ns.x") || !strings.Contains(out, "конфликт: x.yaml и x/config.yaml") {
+	if !strings.Contains(out, "ns.x") || !strings.Contains(out, "conflict: x.yaml and x/config.yaml") {
 		t.Errorf("list -r: нет записи ns.x с описанием конфликта по именам файлов:\n%s", out)
 	}
 	if strings.Contains(out, "ns.x.yaml") {
@@ -2483,10 +2483,10 @@ func TestPrintChildrenConflictSources(t *testing.T) {
 	if err := printChildren(&buf, children, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "конфликт: модуль в нескольких sources: /a, /b") {
+	if !strings.Contains(buf.String(), "conflict: module in several sources: /a, /b") {
 		t.Errorf("нет текста конфликта sources:\n%s", buf.String())
 	}
-	if strings.Contains(buf.String(), "x.yaml и") {
+	if strings.Contains(buf.String(), "x.yaml and") {
 		t.Errorf("текст конфликта файлов вместо sources:\n%s", buf.String())
 	}
 }

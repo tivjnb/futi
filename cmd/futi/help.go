@@ -82,7 +82,7 @@ func (e *helpModuleNotFoundError) Unwrap() error { return modulerunner.ErrModule
 // Пустой positional (корень) — printUsage.
 func runSystemHelp(w io.Writer, source discovery.Source, loader modulerunner.ModuleLoader, positional []string) error {
 	if len(positional) == 0 {
-		printUsage()
+		printUsage(w)
 		return nil
 	}
 

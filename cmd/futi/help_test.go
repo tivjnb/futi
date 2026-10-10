@@ -126,11 +126,14 @@ func TestRunHelpUserDefinedSubcommandWins(t *testing.T) {
 }
 
 func TestRunHelpRoot(t *testing.T) {
-	// runHelp с пустым positional печатает usage в stderr (printUsage).
+	// runHelp с пустым positional печатает usage в stdout (printUsage).
 	src := helpTestSource(t)
-	// printUsage пишет в os.Stderr напрямую; проверяем только код выхода.
-	if code, _, stderr := runHelpFor(t, src, helpArgs()); code != 0 {
+	code, stdout, stderr := runHelpFor(t, src, helpArgs())
+	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "USAGE") {
+		t.Fatalf("usage не в stdout:\n%s", stdout)
 	}
 }
 
@@ -161,7 +164,9 @@ func TestParseArgsHelpDetection(t *testing.T) {
 
 // Usage перечисляет каждое зарезервированное слово корня в кавычках.
 func TestUsageListsAllReservedWords(t *testing.T) {
-	usage := captureStderr(t, printUsage)
+	var buf bytes.Buffer
+	printUsage(&buf)
+	usage := buf.String()
 	for _, w := range completion.ReservedNames {
 		if !strings.Contains(usage, `"`+w+`"`) {
 			t.Errorf("usage does not mention reserved word %q", w)
