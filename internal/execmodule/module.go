@@ -97,7 +97,22 @@ type paramYAML struct {
 // Возвращает ошибку при невалидной схеме (первая ошибка из Validate).
 // Для получения полного отчёта всех ошибок используйте ParseModule + Validate.
 func LoadModule(manifestPath, moduleRoot string) (*Module, error) {
-	mod, err := ParseModule(manifestPath, moduleRoot)
+	data, err := readManifest(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	return LoadManifest(data, manifestPath, moduleRoot)
+}
+
+// LoadManifest — LoadModule для манифеста, уже лежащего в памяти: проверяет
+// размер (MaxManifestSize), разбирает и возвращает первую ошибку Validate.
+// manifestPath используется только в сообщениях об ошибках (для ещё не
+// записанного файла — будущий путь).
+func LoadManifest(data []byte, manifestPath, moduleRoot string) (*Module, error) {
+	if len(data) > MaxManifestSize {
+		return nil, fmt.Errorf("execmodule: манифест %q: размер %d байт превышает лимит %d", manifestPath, len(data), MaxManifestSize)
+	}
+	mod, err := ParseManifest(data, manifestPath, moduleRoot)
 	if err != nil {
 		return nil, err
 	}

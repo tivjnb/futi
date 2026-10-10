@@ -376,3 +376,23 @@ func TestRemoveCommandInvalidatesCache(t *testing.T) {
 		t.Fatalf("cache must be invalidated after remove_command, got %d entries", got)
 	}
 }
+
+// Результат правки больше MaxManifestSize отвергается, оригинал не меняется.
+func TestAddCommandOversizedResultRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := writeManifestFixture(t, dir, "qr")
+	before, _ := os.ReadFile(path)
+
+	huge := strings.Repeat("x", execmodule.MaxManifestSize)
+	err := addCommandToManifest(path, "scan", "echo scan", huge)
+	if err == nil || !strings.Contains(err.Error(), "превышает лимит") {
+		t.Fatalf("err = %v, want size-limit error", err)
+	}
+	after, _ := os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Fatal("manifest changed")
+	}
+	if got := listDir(t, filepath.Dir(path)); len(got) != 1 {
+		t.Fatalf("dir contents = %v, want only config.yaml", got)
+	}
+}

@@ -150,8 +150,7 @@ func removeCommandFromManifest(path, cmdName string) error {
 //
 // Если path — симлинк, правится его цель (EvalSymlinks): модуль = код, и
 // пользователь сам редактирует свой модуль; rename поверх симлинка заменил бы
-// сам симлинк обычным файлом. Результат проверяется в памяти (ParseManifest +
-// Validate, как LoadModule) до создания temp-файла; в сообщении об ошибке — путь
+// сам симлинк обычным файлом. Результат проверяется в памяти (LoadManifest) до создания temp-файла; в сообщении об ошибке — путь
 // path в том виде, в каком его знает пользователь (для симлинка — сам симлинк),
 // а moduleRoot берётся от настоящего каталога манифеста.
 func writeValidated(path string, doc *yaml.Node) error {
@@ -175,12 +174,8 @@ func writeValidated(path string, doc *yaml.Node) error {
 	}
 	dir := filepath.Dir(real)
 
-	mod, err := execmodule.ParseManifest(buf.Bytes(), path, dir)
-	if err != nil {
+	if _, err := execmodule.LoadManifest(buf.Bytes(), path, dir); err != nil {
 		return fmt.Errorf("edited manifest is invalid, original kept: %w", err)
-	}
-	if errs, _ := mod.Validate(); len(errs) > 0 {
-		return fmt.Errorf("edited manifest is invalid, original kept: execmodule: invalid module %q: %w", path, errs[0])
 	}
 
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(real)+"-*")
