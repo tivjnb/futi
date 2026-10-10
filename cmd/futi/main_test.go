@@ -28,11 +28,24 @@ var (
 	futiBinOnce sync.Once
 	futiBinDir  string // каталог с собранным бинарём futi; удаляется в TestMain
 	futiBinErr  error
+	origHome    string // HOME до подмены в TestMain — для go build
 )
 
-// TestMain удаляет каталог общего бинаря futi, собранного builtFutiBinary.
+// TestMain подменяет HOME временным каталогом: команды modules читают
+// ~/.config/futi/config.yaml, и без подмены тесты (в том числе update без
+// имени) обходили бы sources реального конфига пользователя. В конце удаляет
+// этот каталог и каталог общего бинаря futi, собранного builtFutiBinary.
 func TestMain(m *testing.M) {
+	origHome = os.Getenv("HOME")
+	home, err := os.MkdirTemp("", "futi-test-home-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	os.Setenv("HOME", home)
+	os.Setenv("USERPROFILE", home)
 	code := m.Run()
+	os.RemoveAll(home)
 	if futiBinDir != "" {
 		os.RemoveAll(futiBinDir)
 	}
@@ -51,7 +64,10 @@ func builtFutiBinary(t testing.TB) string {
 			return
 		}
 		futiBinDir = dir
-		if out, err := exec.Command("go", "build", "-o", filepath.Join(dir, "futi"), ".").CombinedOutput(); err != nil {
+		// go build — с настоящим HOME: кэш сборки и модулей Go лежат в нём.
+		build := exec.Command("go", "build", "-o", filepath.Join(dir, "futi"), ".")
+		build.Env = append(os.Environ(), "HOME="+origHome)
+		if out, err := build.CombinedOutput(); err != nil {
 			futiBinErr = fmt.Errorf("go build: %v\n%s", err, out)
 		}
 	})

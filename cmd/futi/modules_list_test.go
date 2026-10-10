@@ -21,7 +21,7 @@ func TestScanInstalledFindsModulesWithMeta(t *testing.T) {
 	// Посторонний каталог с excluded-именем — не должен попасть.
 	os.MkdirAll(filepath.Join(root, ".git"), 0o755)
 
-	got := scanInstalled([]string{root})
+	got := scanInstalled([]moduleRoot{{Dir: root}})
 	if len(got) != 2 {
 		t.Fatalf("expected 2 installed modules, got %d: %+v", len(got), got)
 	}
@@ -72,7 +72,7 @@ func TestScanInstalledSkipsBackupDirs(t *testing.T) {
 	installFixtureModule(t, root, "qr.futi-backup", meta)
 	installFixtureModule(t, root, "other", meta)
 
-	got := scanInstalled([]string{root})
+	got := scanInstalled([]moduleRoot{{Dir: root}})
 	if len(got) != 1 || got[0].Name != "other" {
 		t.Fatalf("want only other, got %+v", got)
 	}

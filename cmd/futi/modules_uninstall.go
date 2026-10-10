@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tivjnb/futi/internal/config"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/metayaml"
@@ -65,26 +64,6 @@ func parseUninstallArgs(args []string) (*uninstallArgs, error) {
 	return cfg, nil
 }
 
-// allowedUninstallRoots — каталоги, внутри которых разрешено удалять:
-// глобальный + ./.futi (если существует).
-func allowedUninstallRoots() ([]string, error) {
-	globalDir := os.Getenv("FUTI_MODULES_DIR")
-	if globalDir == "" {
-		dir, err := config.DefaultModulesDir()
-		if err != nil {
-			return nil, err
-		}
-		globalDir = dir
-	}
-	roots := []string{globalDir}
-	if info, err := os.Stat(".futi"); err == nil && info.IsDir() {
-		if abs, err := filepath.Abs(".futi"); err == nil {
-			roots = append(roots, abs)
-		}
-	}
-	return roots, nil
-}
-
 // runModulesUninstall удаляет установленный модуль (спека §5.2).
 // stdin — для интерактивного подтверждения (os.Stdin из main).
 func runModulesUninstall(w io.Writer, stdin io.Reader, source discovery.Source, cache *modulecache.Cache, args []string) error {
@@ -98,10 +77,11 @@ func runModulesUninstall(w io.Writer, stdin io.Reader, source discovery.Source, 
 		return fmt.Errorf("modules uninstall: %w", err)
 	}
 
-	roots, err := allowedUninstallRoots()
+	readRoots, err := readModuleRoots()
 	if err != nil {
 		return fmt.Errorf("modules uninstall: %w", err)
 	}
+	roots := rootDirs(readRoots)
 
 	// Цель удаления: пакет (каталог с config.yaml) или одиночный yaml-файл.
 	// moduleRoot одиночного yaml — родительский каталог, удалять его нельзя.

@@ -117,13 +117,9 @@ func parseInitArgs(args []string) (*initConfig, error) {
 func targetFilePath(cfg *initConfig) (string, error) {
 	base := ".futi"
 	if cfg.global {
-		modDir := os.Getenv("FUTI_MODULES_DIR")
-		if modDir == "" {
-			dir, err := config.DefaultModulesDir()
-			if err != nil {
-				return "", fmt.Errorf("modules dir: %w", err)
-			}
-			modDir = dir
+		modDir, err := globalModulesDir()
+		if err != nil {
+			return "", fmt.Errorf("modules dir: %w", err)
 		}
 		base = modDir
 	}
@@ -163,6 +159,16 @@ func targetFilePath(cfg *initConfig) (string, error) {
 	}
 
 	return fullPath, nil
+}
+
+// initModuleName — dot-имя, под которым discovery найдёт модуль, созданный
+// по пути path: без расширения, у пакета (<dir>/config.yaml) — имя каталога.
+func initModuleName(path string) string {
+	rel := strings.TrimSuffix(strings.TrimSuffix(filepath.ToSlash(path), ".yaml"), ".yml")
+	if dir, base := filepath.Split(rel); base == "config" && dir != "" {
+		rel = strings.TrimSuffix(dir, "/")
+	}
+	return dotName(rel)
 }
 
 // generateModuleYAML генерирует YAML-шаблон модуля.
@@ -209,6 +215,14 @@ func runModulesInit(w io.Writer, args []string) error {
 	targetPath, err := targetFilePath(cfg)
 	if err != nil {
 		return err
+	}
+	// Невалидный config.yaml — ошибка до записи; нужен для сообщения о
+	// видимости модуля в глобальном каталоге.
+	var futiCfg *config.Config
+	if cfg.global {
+		if futiCfg, err = loadFutiConfig(); err != nil {
+			return err
+		}
 	}
 
 	name := filepath.Base(cfg.path)
@@ -257,5 +271,12 @@ func runModulesInit(w io.Writer, args []string) error {
 		displayPath = resolved
 	}
 	fmt.Fprintf(w, "Created: %s\n", displayPath)
+	if cfg.global {
+		globalDir, err := globalModulesDir()
+		if err != nil {
+			return fmt.Errorf("modules dir: %w", err)
+		}
+		reportSourcesVisibility(w, futiCfg, globalDir, initModuleName(cfg.path))
+	}
 	return nil
 }
