@@ -10,6 +10,7 @@ import (
 
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/modulecache"
 
 	"gopkg.in/yaml.v3"
 )
@@ -100,7 +101,7 @@ func addCommandToManifest(path, cmdName, cmdStr, desc string) error {
 	}
 	commands.Content = append(commands.Content, scalarStr(cmdName), cmdNode)
 
-	return writeValidated(path, data, &doc)
+	return writeValidated(path, &doc)
 }
 
 // removeCommandFromManifest удаляет команду cmdName из commands: манифеста.
@@ -139,12 +140,20 @@ func removeCommandFromManifest(path, cmdName string) error {
 	}
 	commands.Content = kept
 
-	return writeValidated(path, data, &doc)
+	return writeValidated(path, &doc)
 }
 
-// writeValidated сериализует doc в path и проверяет, что результат — валидный
-// манифест (LoadModule). При невалидности восстанавливает оригинал (orig).
-func writeValidated(path string, orig []byte, doc *yaml.Node) error {
+// writeValidated сериализует doc и заменяет манифест path атомарно: данные
+// пишутся во временный файл в том же каталоге, проверяются (LoadModule) и
+// только затем переименовываются поверх оригинала. Оригинал при невалидном
+// результате или сбое записи не трогается; права файла сохраняются.
+//
+// Если path — симлинк, правится его цель (EvalSymlinks): модуль = код, и
+// пользователь сам редактирует свой модуль; rename поверх симлинка заменил бы
+// сам симлинк обычным файлом. Имя временного файла на результат LoadModule не
+// влияет (путь манифеста используется только в сообщениях об ошибках), а
+// moduleRoot берётся от настоящего каталога манифеста.
+func writeValidated(path string, doc *yaml.Node) error {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
@@ -155,15 +164,50 @@ func writeValidated(path string, orig []byte, doc *yaml.Node) error {
 		return fmt.Errorf("encode manifest: %w", err)
 	}
 
-	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("resolve manifest path: %w", err)
+	}
+	info, err := os.Stat(real)
+	if err != nil {
+		return fmt.Errorf("stat manifest: %w", err)
+	}
+	dir := filepath.Dir(real)
+
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(real)+"-*")
+	if err != nil {
+		return fmt.Errorf("create temp manifest: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op после успешного rename
+
+	if _, err := tmp.Write(buf.Bytes()); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write manifest: %w", err)
+	}
+	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write manifest: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write manifest: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
 
-	if _, err := execmodule.LoadModule(path, filepath.Dir(path)); err != nil {
-		if werr := os.WriteFile(path, orig, 0o644); werr != nil {
-			return fmt.Errorf("edited manifest is invalid (%v); restore failed: %v", err, werr)
-		}
-		return fmt.Errorf("edited manifest is invalid, original restored: %w", err)
+	if _, err := execmodule.LoadModule(tmpPath, dir); err != nil {
+		return fmt.Errorf("edited manifest is invalid, original kept: %w", err)
+	}
+	if err := os.Rename(tmpPath, real); err != nil {
+		return fmt.Errorf("write manifest: %w", err)
+	}
+	// fsync каталога фиксирует rename; best-effort: на Windows каталог для
+	// Sync не открыть, ошибки игнорируем (как в metayaml.Write).
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close()
 	}
 	return nil
 }
@@ -234,7 +278,7 @@ func parseAddCommandArgs(args []string) (*addCommandArgs, error) {
 }
 
 // runModulesAddCommand добавляет команду в config.yaml модуля.
-func runModulesAddCommand(w io.Writer, source discovery.Source, args []string) error {
+func runModulesAddCommand(w io.Writer, source discovery.Source, cache *modulecache.Cache, args []string) error {
 	cfg, err := parseAddCommandArgs(args)
 	if err != nil {
 		return err
@@ -251,12 +295,15 @@ func runModulesAddCommand(w io.Writer, source discovery.Source, args []string) e
 	if err := addCommandToManifest(manifestPath, cfg.command, cmdStr, cfg.desc); err != nil {
 		return fmt.Errorf("modules add_command: %w", err)
 	}
+	if err := cache.Invalidate(); err != nil {
+		fmt.Fprintf(os.Stderr, "cache: %v (continuing)\n", err)
+	}
 	fmt.Fprintf(w, "Added command %q to %s\n", cfg.command, manifestPath)
 	return nil
 }
 
 // runModulesRemoveCommand удаляет команду из config.yaml модуля.
-func runModulesRemoveCommand(w io.Writer, source discovery.Source, args []string) error {
+func runModulesRemoveCommand(w io.Writer, source discovery.Source, cache *modulecache.Cache, args []string) error {
 	if len(args) != 2 {
 		return fmt.Errorf("usage: futi modules remove_command <module> <command>")
 	}
@@ -271,6 +318,9 @@ func runModulesRemoveCommand(w io.Writer, source discovery.Source, args []string
 	}
 	if err := removeCommandFromManifest(manifestPath, command); err != nil {
 		return fmt.Errorf("modules remove_command: %w", err)
+	}
+	if err := cache.Invalidate(); err != nil {
+		fmt.Fprintf(os.Stderr, "cache: %v (continuing)\n", err)
 	}
 	fmt.Fprintf(w, "Removed command %q from %s\n", command, manifestPath)
 	return nil
