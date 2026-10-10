@@ -45,9 +45,9 @@ func runBashComplete(t *testing.T, withLib bool, compWords, compLine string, com
 	driver := lib + `source "$SCRIPT"
 futi() { printf '%s\n' "$@" > "$ARGS"; cat "$OUT"; }
 COMP_WORDS=(` + compWords + `)
-COMP_CWORD=` + itoa(cword) + `
+COMP_CWORD=` + strconv.Itoa(cword) + `
 COMP_LINE='` + compLine + `'
-COMP_POINT=` + itoa(compPoint) + `
+COMP_POINT=` + strconv.Itoa(compPoint) + `
 __futi_get_completion_results
 printf 'DIRECTIVE=%s\n' "$directive"
 printf 'REPLY=%s\n' "${COMPREPLY[*]}"
@@ -74,8 +74,6 @@ printf 'REPLY=%s\n' "${COMPREPLY[*]}"
 	}
 	return strings.Split(strings.TrimSuffix(string(a), "\n"), "\n"), reply, directive
 }
-
-func itoa(n int) string { return strconv.Itoa(n) }
 
 func TestBashCompletionScript(t *testing.T) {
 	cases := []struct {
@@ -106,6 +104,18 @@ func TestBashCompletionScript(t *testing.T) {
 			words: `futi a : b`, line: "futi a:b", point: 8, cword: 3,
 			out:      "a:bc\n:0\n",
 			wantArgs: []string{"__complete", "a:b"}, wantReply: []string{"bc"}, wantDir: "0",
+		},
+		{
+			name:  "пустое слово после равенства",
+			words: `futi x --tag = ""`, line: "futi x --tag=", point: 13, cword: 4,
+			out:      ":0\n",
+			wantArgs: []string{"__complete", "x", "--tag="}, wantDir: "0",
+		},
+		{
+			name:  "пустое слово после равенства и пробела",
+			words: `futi x --tag = ""`, line: "futi x --tag= ", point: 14, cword: 4,
+			out:      ":0\n",
+			wantArgs: []string{"__complete", "x", "--tag=", ""}, wantDir: "0",
 		},
 		{
 			name:  "кандидат с двоеточием не директива",

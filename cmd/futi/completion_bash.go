@@ -16,7 +16,7 @@ __futi_debug() {
 # (объявлен в вызывающей функции, dynamic scoping) и __futi_cur.
 __futi_collect_words() {
     local -a words
-    local cur cword i w join=0
+    local cur cword i n w join=0
     __futi_args=()
     if declare -F _get_comp_words_by_ref >/dev/null 2>&1; then
         _get_comp_words_by_ref -n =: cur words cword
@@ -30,28 +30,36 @@ __futi_collect_words() {
     for (( i = 1; i <= cword; i++ )); do
         w="${COMP_WORDS[i]}"
         if [[ "$w" =~ ^[=:]+$ ]]; then
-            if (( ${#__futi_args[@]} )); then
-                __futi_args[-1]+="$w"
+            n=${#__futi_args[@]}
+            if (( n )); then
+                __futi_args[n-1]="${__futi_args[n-1]}$w"
             else
                 __futi_args+=("$w")
             fi
             join=1
-        elif (( join )) && [[ -n "$w" ]]; then
-            __futi_args[-1]+="$w"
+        elif (( join )) && { [[ -n "$w" ]] || [[ "${COMP_LINE:0:COMP_POINT}" != *[[:space:]] ]]; }; then
+            # Пустое слово после "=" склеивается, только если курсор
+            # вплотную к нему (в строке до курсора нет пробела в конце).
+            n=${#__futi_args[@]}
+            __futi_args[n-1]="${__futi_args[n-1]}$w"
             join=0
         else
             __futi_args+=("$w")
             join=0
         fi
     done
-    __futi_cur="${__futi_args[-1]:-}"
+    n=${#__futi_args[@]}
+    __futi_cur=""
+    if (( n )); then
+        __futi_cur="${__futi_args[n-1]}"
+    fi
 }
 
 __futi_get_completion_results() {
     # directive и __futi_args/__futi_cur НЕ local здесь: _futi объявляет
     # directive local и читает после вызова — bash dynamic scoping мутирует
     # переменную вызывающего.
-    local out line cur colon_prefix i
+    local out line cur colon_prefix i n
     local -a lines
     local -a __futi_args
     __futi_collect_words
@@ -63,11 +71,15 @@ __futi_get_completion_results() {
 
     directive=0
     COMPREPLY=()
-    mapfile -t lines <<< "$out"
+    lines=()
+    while IFS= read -r line; do
+        lines+=("$line")
+    done <<< "$out"
     # Директива — только последняя строка вида :N; иначе это кандидат.
-    if (( ${#lines[@]} )) && [[ "${lines[-1]}" =~ ^:[0-9]+$ ]]; then
-        directive="${lines[-1]#:}"
-        unset 'lines[-1]'
+    n=${#lines[@]}
+    if (( n )) && [[ "${lines[n-1]}" =~ ^:[0-9]+$ ]]; then
+        directive="${lines[n-1]#:}"
+        lines=("${lines[@]:0:n-1}")
     fi
     for line in "${lines[@]}"; do
         if [[ -n "$line" ]]; then

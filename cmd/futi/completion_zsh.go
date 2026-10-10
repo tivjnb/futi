@@ -32,7 +32,10 @@ _futi() {
         [[ -z "$comp" ]] && continue
         # _describe использует ':' как разделитель text:description, поэтому
         # '\' и ':' экранируются (сначала '\') в тексте и в описании.
-        if [[ "$comp" == *$'\t'* ]]; then
+        if [[ "$comp" == $'\t'* ]]; then
+            # Tab-prefixed: description-only entry (rare).
+            completions_with_descriptions+=("${comp}")
+        elif [[ "$comp" == *$'\t'* ]]; then
             ctext="${comp%%$'\t'*}"
             cdesc="${comp#*$'\t'}"
             ctext="${ctext//\\/\\\\}"
