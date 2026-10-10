@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -385,7 +386,7 @@ func TestAddCommandOversizedResultRejected(t *testing.T) {
 
 	huge := strings.Repeat("x", execmodule.MaxManifestSize)
 	err := addCommandToManifest(path, "scan", "echo scan", huge)
-	if err == nil || !strings.Contains(err.Error(), "превышает лимит") {
+	if err == nil || !strings.Contains(err.Error(), strconv.Itoa(execmodule.MaxManifestSize)) {
 		t.Fatalf("err = %v, want size-limit error", err)
 	}
 	after, _ := os.ReadFile(path)
