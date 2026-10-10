@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tivjnb/futi/internal/completion"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/modulecache"
 )
@@ -66,7 +67,7 @@ func TestRunCompleteOutputFormat(t *testing.T) {
 	}
 
 	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	if len(lines) != 4 {
+	if len(lines) != 5 {
 		t.Fatalf("unexpected lines: %v", lines)
 	}
 	if lines[0] != "build\tBuild image" {
@@ -153,11 +154,11 @@ func TestRunCompletionUnknownShell(t *testing.T) {
 	}
 }
 
-func TestCompletionNeedsRefreshEmpty(t *testing.T) {
-	// Пустой кэш (не прогревался) → нужен refresh.
+func TestCompletionNeedsRefreshNeverRefreshedEmpty(t *testing.T) {
+	// Кэш, который никогда не обновлялся → нужен refresh.
 	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
 	if !completionNeedsRefresh(cache) {
-		t.Fatal("expected refresh needed for empty cache")
+		t.Fatal("expected refresh needed for never-refreshed cache")
 	}
 }
 
@@ -186,6 +187,36 @@ func TestCompletionNeedsRefreshFresh(t *testing.T) {
 	}
 	if completionNeedsRefresh(cache) {
 		t.Fatal("expected no refresh needed for fresh cache")
+	}
+}
+
+// TestCompletionNoRefreshAfterEmptyRefresh — регрессия F21: при пустом каталоге
+// глобальных модулей первый __complete обновляет кэш, второй (новый Cache,
+// Load с диска) — уже нет, иначе каждый TAB пишет файл кэша.
+func TestCompletionNoRefreshAfterEmptyRefresh(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	src := discovery.NewGlobalSource(t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	if code := runCompleteMain(&stdout, &stderr, nil, src, []string{""}); code != 0 {
+		t.Fatalf("first runCompleteMain code = %d, stderr: %s", code, stderr.String())
+	}
+	cachePath, err := defaultCachePath()
+	if err != nil {
+		t.Fatalf("defaultCachePath: %v", err)
+	}
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Fatalf("cache file should exist after first __complete: %v", err)
+	}
+
+	second := newCacheFromConfig(nil)
+	second.Load()
+	if second.LastRefresh().IsZero() {
+		t.Fatal("LastRefresh should survive Save/Load after refresh of empty modules dir")
+	}
+	if completionNeedsRefresh(second) {
+		t.Fatal("second __complete must not refresh cache again")
 	}
 }
 
@@ -302,5 +333,42 @@ func TestCompletionFishRealShell(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("вывод fish не содержит строки docker: %q", out)
+	}
+}
+
+// TestCompletionModulesFlagsAcceptedByParsers: каждый флаг, который completion
+// подсказывает для `futi modules <sub>`, принимается парсером подкоманды
+// (защита от рассинхрона списков и парсеров).
+func TestCompletionModulesFlagsAcceptedByParsers(t *testing.T) {
+	parsers := map[string]func([]string) error{
+		"add_command": func(a []string) error { _, err := parseAddCommandArgs(a); return err },
+		"init":        func(a []string) error { _, err := parseInitArgs(a); return err },
+		"install":     func(a []string) error { _, err := parseInstallArgs(a); return err },
+		"uninstall":   func(a []string) error { _, err := parseUninstallArgs(a); return err },
+		"update":      func(a []string) error { _, err := parseUpdateArgs(a); return err },
+	}
+	for _, sub := range completion.ModulesSubcommands() {
+		flags := completion.ModulesFlags(sub)
+		parse, hasParser := parsers[sub]
+		if flags == nil {
+			if hasParser {
+				t.Errorf("%s: parser registered, but completion suggests no flags", sub)
+			}
+			continue
+		}
+		if !hasParser {
+			t.Errorf("%s: completion suggests flags %v, but no parser is registered in the test", sub, flags)
+			continue
+		}
+		for _, flag := range flags {
+			// Значение и позиционный аргумент: флаг с аргументом забирает "val",
+			// булев оставляет его позиционным — «unknown flag» бывает только у
+			// флага, которого парсер не знает.
+			for _, args := range [][]string{{"x", flag}, {"x", flag, "val"}} {
+				if err := parse(args); err != nil && strings.Contains(err.Error(), "unknown flag") {
+					t.Errorf("%s: flag %s suggested by completion, parser rejects args %v: %v", sub, flag, args, err)
+				}
+			}
+		}
 	}
 }
