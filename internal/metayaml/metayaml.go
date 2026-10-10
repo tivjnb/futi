@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -205,12 +206,11 @@ func walkTree(root string) (map[string]treeEntry, error) {
 			if err != nil {
 				return err
 			}
-			data, err := osReadFile(path)
+			sum, err := hashFile(path)
 			if err != nil {
 				return err
 			}
-			sum := sha256.Sum256(data)
-			entries[key] = treeEntry{exec: info.Mode()&0o111 != 0, content: hex.EncodeToString(sum[:])}
+			entries[key] = treeEntry{exec: info.Mode()&0o111 != 0, content: sum}
 		}
 		return nil
 	})
@@ -218,6 +218,21 @@ func walkTree(root string) (map[string]treeEntry, error) {
 		return nil, err
 	}
 	return entries, nil
+}
+
+// hashFile возвращает sha256 содержимого файла (hex), читая его потоково:
+// файл модуля может быть большим, целиком в память его не загружаем.
+func hashFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // ComputeTreeHash считает SHA256 дерева модуля (записи walkTree): конкатенация

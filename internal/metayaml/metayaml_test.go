@@ -370,3 +370,28 @@ func TestDiffTrees(t *testing.T) {
 		t.Fatalf("DiffTrees(root, root) = %+v, want empty", same)
 	}
 }
+
+// Write поверх симлинка заменяет сам симлинк обычным файлом, а не пишет в его цель.
+func TestWriteReplacesSymlinkNotTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("симлинки")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "victim.txt")
+	write(t, target, "original\n")
+	path := filepath.Join(dir, FileName)
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Write(path, &Meta{Lockfile: Lockfile{Source: "a"}}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	fi, err := os.Lstat(path)
+	if err != nil || !fi.Mode().IsRegular() {
+		t.Fatalf("path must be a regular file after Write: mode=%v err=%v", fi, err)
+	}
+	if data, _ := os.ReadFile(target); string(data) != "original\n" {
+		t.Fatalf("symlink target modified: %q", data)
+	}
+}
