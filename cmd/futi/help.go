@@ -27,13 +27,7 @@ func runHelp(ctx context.Context, stdout, stderr io.Writer, source discovery.Sou
 	if manifest, root, cmdPath, ok := resolvePositional(source, full); ok {
 		if isExecutableHelp(source, loader, manifest, root, cmdPath) {
 			pa := &parsedArgs{flags: req.flags, args: req.args, argsList: req.argsList}
-			// Как в parseArgs: один сегмент — namespace без команды.
-			if len(full) == 1 {
-				pa.namespace = full[0]
-			} else {
-				pa.namespace = strings.Join(full[:len(full)-1], ".")
-				pa.command = full[len(full)-1]
-			}
+			pa.namespace, pa.command = splitPath(full)
 			return runParsed(ctx, stdout, stderr, source, loader, pa)
 		}
 	}

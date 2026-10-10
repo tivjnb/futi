@@ -294,3 +294,19 @@ func TestParseArgsHelpRequestKeepsFlagsAndArgs(t *testing.T) {
 		t.Fatalf("flags=%v args=%q argsList=%v", hr.flags, hr.args, hr.argsList)
 	}
 }
+
+// `futi help` при модуле help с default cmd: namespace="help", command="".
+func TestRunHelpUserModuleNamedHelp(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "help.yaml"), `
+name: help
+cmd: "echo MODULEHELP"
+`)
+	code, stdout, stderr := runHelpFor(t, discovery.NewGlobalSource(dir), helpArgs())
+	if code != 0 {
+		t.Fatalf("code = %d, stderr: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "MODULEHELP") {
+		t.Fatalf("stdout = %q, want default cmd of module help", stdout)
+	}
+}

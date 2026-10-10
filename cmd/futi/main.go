@@ -122,14 +122,17 @@ func parseArgs(args []string) (*parsedArgs, error) {
 		args:     strings.Join(argsList, " "),
 		argsList: argsList,
 	}
-	if len(path) == 1 {
-		// Один позиционный — namespace без команды (default cmd модуля).
-		pa.namespace = path[0]
-		return pa, nil
-	}
-	pa.namespace = strings.Join(path[:len(path)-1], ".")
-	pa.command = path[len(path)-1]
+	pa.namespace, pa.command = splitPath(path)
 	return pa, nil
+}
+
+// splitPath делит позиционный путь на namespace и команду. Один сегмент —
+// namespace без команды (default cmd модуля); иначе последний сегмент — команда.
+func splitPath(path []string) (namespace, command string) {
+	if len(path) == 1 {
+		return path[0], ""
+	}
+	return strings.Join(path[:len(path)-1], "."), path[len(path)-1]
 }
 
 // isFlagToken: токен — флаг, если начинается с "-" и длиннее одного символа.
