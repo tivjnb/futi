@@ -3,6 +3,7 @@ package metayaml
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -145,5 +146,69 @@ func TestComputeTreeHashDetectsChange(t *testing.T) {
 	}
 	if h1 == h2 {
 		t.Fatal("hash must change when content changes")
+	}
+}
+
+func TestWriteFileMode0644(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("права POSIX на Windows не проверяются")
+	}
+	dir := t.TempDir()
+	m := &Meta{Lockfile: Lockfile{Source: "s", Type: "local", Hash: "sha256:aa"}}
+
+	fresh := filepath.Join(dir, "fresh", FileName)
+	if err := os.MkdirAll(filepath.Dir(fresh), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(fresh, m); err != nil {
+		t.Fatalf("Write fresh: %v", err)
+	}
+	existing := filepath.Join(dir, FileName)
+	if err := os.WriteFile(existing, []byte("old: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(existing, m); err != nil {
+		t.Fatalf("Write existing: %v", err)
+	}
+	for _, p := range []string{fresh, existing} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != 0o644 {
+			t.Errorf("%s: mode = %v, want 0644", p, got)
+		}
+	}
+}
+
+func TestMergeAboutEmptySourceKeepsDest(t *testing.T) {
+	dest := &Meta{About: &About{Author: "keep@example.com"}}
+	merged := MergeAbout(dest, &Meta{About: &About{}})
+	if merged.About == nil || merged.About.Author != "keep@example.com" {
+		t.Fatalf("empty source about must not overwrite dest, got %+v", merged.About)
+	}
+}
+
+func TestReadEmptyFile(t *testing.T) {
+	for name, content := range map[string]string{"zero bytes": "", "newline": "\n"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), FileName)
+			write(t, path, content)
+			if m, err := Read(path); err == nil {
+				t.Fatalf("Read of empty file: want error, got %+v", m)
+			}
+		})
+	}
+}
+
+func TestReadAboutOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	write(t, path, "about: {author: x}\n")
+	m, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if m.About == nil || m.About.Author != "x" {
+		t.Fatalf("About = %+v, want Author x", m.About)
 	}
 }

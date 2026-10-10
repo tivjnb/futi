@@ -61,15 +61,27 @@ func Read(path string) (*Meta, error) {
 	if err != nil {
 		return nil, fmt.Errorf("metayaml: read %q: %w", path, err)
 	}
+	// Документ без содержимого (0 байт, пробелы, только комментарии) — не
+	// валидный sidecar: yaml.Unmarshal принял бы его как нулевой Meta.
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("metayaml: parse %q: %w", path, err)
+	}
+	if doc.Kind == 0 {
+		return nil, fmt.Errorf("metayaml: %q is empty", path)
+	}
 	var m Meta
-	if err := yaml.Unmarshal(data, &m); err != nil {
+	if err := doc.Decode(&m); err != nil {
 		return nil, fmt.Errorf("metayaml: parse %q: %w", path, err)
 	}
 	return &m, nil
 }
 
-// Write атомарно записывает Meta в path (temp + rename — при краше не
-// остаётся частичной записи; тот же приём, что в DiskStorage.Save).
+// Write записывает Meta в path: temp + rename. Атомарна замена файла (при
+// краше не остаётся частичной записи); долговечность — fsync файла до
+// rename и fsync каталога после (best-effort). Файл получает права 0644
+// (CreateTemp даёт 0600). Если path — симлинк, rename заменяет сам симлинк,
+// а не его цель: запись в цель вне каталога модуля опаснее.
 func Write(path string, m *Meta) error {
 	data, err := yaml.Marshal(m)
 	if err != nil {
@@ -88,6 +100,10 @@ func Write(path string, m *Meta) error {
 		tmp.Close()
 		return fmt.Errorf("metayaml: write temp: %w", err)
 	}
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return fmt.Errorf("metayaml: chmod temp: %w", err)
+	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
 		return fmt.Errorf("metayaml: sync temp: %w", err)
@@ -98,17 +114,27 @@ func Write(path string, m *Meta) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("metayaml: rename: %w", err)
 	}
+	// fsync каталога фиксирует rename; best-effort: на Windows каталог для
+	// Sync не открыть, ошибки игнорируем.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
 	return nil
 }
 
 // MergeAbout возвращает Meta с lockfile из dest и about из source
-// (если у source есть About; иначе about из dest). Правила — спека §4.1.
+// (если у source есть непустой About; иначе about из dest). Правила — спека §4.1.
 func MergeAbout(dest, source *Meta) *Meta {
 	merged := &Meta{Lockfile: dest.Lockfile, About: dest.About}
-	if source != nil && source.About != nil {
+	if source != nil && source.About != nil && !isEmptyAbout(source.About) {
 		merged.About = source.About
 	}
 	return merged
+}
+
+func isEmptyAbout(a *About) bool {
+	return a.Author == "" && a.License == "" && a.Homepage == "" && len(a.Tags) == 0
 }
 
 // IsExcluded сообщает, содержит ли относительный путь (слэши) исключённый
