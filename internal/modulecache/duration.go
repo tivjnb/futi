@@ -75,8 +75,8 @@ func parseDuration(s string) (time.Duration, error) {
 		}
 		total += restDur
 		// REV-007: сложение с rest могло переполнить int64 — отрицательный
-		// итог отклоняем.
-		if total <= 0 {
+		// итог отклоняем (ноль ловит проверка ниже).
+		if total < 0 {
 			return 0, fmt.Errorf("modulecache: duration %q too large", s)
 		}
 	}

@@ -583,7 +583,7 @@ func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader
 				// Битый модуль не должен быть неотличим от модуля без описания.
 				// Полную причину (с путём) не печатаем: колонка раздувается, путь
 				// есть в PATH при -v, причину покажет validate.
-				desc = "(error: invalid module; run 'futi modules validate <namespace>')"
+				desc = "(error: cannot load module; run 'futi modules validate <namespace>')"
 			} else {
 				desc = termtext.Line(mod.Description)
 			}

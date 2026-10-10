@@ -1,6 +1,7 @@
 package modulecache
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -88,6 +89,17 @@ func TestParseDurationInvalidReturnsError(t *testing.T) {
 				t.Fatalf("expected error for %q, got nil", tc)
 			}
 		})
+	}
+}
+
+// TestParseDurationZeroSumMessage: нулевой итог (audit F42) даёт сообщение о
+// нуле, а не о переполнении.
+func TestParseDurationZeroSumMessage(t *testing.T) {
+	for _, tc := range []string{"0d0h", "0d0m"} {
+		_, err := parseDuration(tc)
+		if err == nil || !strings.Contains(err.Error(), "must be > 0") || strings.Contains(err.Error(), "too large") {
+			t.Errorf("parseDuration(%q) err = %v, want \"must be > 0\"", tc, err)
+		}
 	}
 }
 

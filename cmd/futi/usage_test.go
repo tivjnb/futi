@@ -127,7 +127,7 @@ func TestPrintChildrenLoadError(t *testing.T) {
 			badLine = line
 		}
 	}
-	const want = "(error: invalid module; run 'futi modules validate <namespace>')"
+	const want = "(error: cannot load module; run 'futi modules validate <namespace>')"
 	if !strings.Contains(badLine, want) {
 		t.Errorf("строка bad без пометки %q:\n%s", want, buf.String())
 	}
