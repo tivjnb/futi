@@ -45,17 +45,13 @@ func extractArchive(path, dest string) error {
 	case n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b:
 		return extractTarGz(path, dest)
 	default:
-		return errUnsupportedArchive("")
+		return errors.New("unsupported archive format: content is not zip or gzip (supported: .tar.gz, .tgz, .zip)")
 	}
 }
 
-// errUnsupportedArchive — ошибка неподдерживаемого формата; ext (может быть
-// пустым) — расширение из URL.
+// errUnsupportedArchive — ошибка неподдерживаемого расширения архива из URL.
 func errUnsupportedArchive(ext string) error {
-	if ext != "" {
-		ext = " " + ext
-	}
-	return fmt.Errorf("unsupported archive format%s (supported: .tar.gz, .tgz, .zip)", ext)
+	return fmt.Errorf("unsupported archive format %s (supported: .tar.gz, .tgz, .zip)", ext)
 }
 
 // safeJoin присоединяет name к dest с защитой от zip-slip: результирующий

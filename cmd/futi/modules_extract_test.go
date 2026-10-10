@@ -321,19 +321,27 @@ func TestExtractArchiveByContent(t *testing.T) {
 		}
 	})
 	t.Run("zip под именем .tar.gz", func(t *testing.T) {
-		data, _ := os.ReadFile(buildZip(t, []zipEntry{{"a.txt", 0o644, "x"}}))
+		data, err := os.ReadFile(buildZip(t, []zipEntry{{"a.txt", 0o644, "x"}}))
+		if err != nil {
+			t.Fatal(err)
+		}
 		p := filepath.Join(t.TempDir(), "m.tar.gz")
-		os.WriteFile(p, data, 0o600)
+		if err := os.WriteFile(p, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
 		if err := extractArchive(p, t.TempDir()); err != nil {
 			t.Fatalf("err = %v, want nil (формат по содержимому)", err)
 		}
 	})
 	t.Run("мусор", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "archive")
-		os.WriteFile(p, []byte("not an archive at all"), 0o600)
+		if err := os.WriteFile(p, []byte("not an archive at all"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		err := extractArchive(p, t.TempDir())
-		if err == nil || !strings.Contains(err.Error(), "unsupported archive format") {
-			t.Fatalf("err = %v, want unsupported archive format", err)
+		if err == nil || !strings.Contains(err.Error(), "unsupported archive format") ||
+			!strings.Contains(err.Error(), "content is not zip or gzip") {
+			t.Fatalf("err = %v, want unsupported archive format: content is not zip or gzip", err)
 		}
 	})
 }
