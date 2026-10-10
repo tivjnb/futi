@@ -570,8 +570,10 @@ func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader
 				base := filepath.Base(c.ManifestPath)
 				desc = termtext.Line("conflict: " + base + " and " + strings.TrimSuffix(base, ".yaml") + "/config.yaml")
 			} else if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err != nil {
-				// Причину не прячем: иначе битый модуль неотличим от модуля без описания.
-				desc = termtext.Line("(error: " + err.Error() + ")")
+				// Битый модуль не должен быть неотличим от модуля без описания.
+				// Полную причину (с путём) не печатаем: колонка раздувается, путь
+				// есть в PATH при -v, причину покажет validate.
+				desc = "(error: invalid module; run 'futi modules validate <namespace>')"
 			} else {
 				desc = termtext.Line(mod.Description)
 			}

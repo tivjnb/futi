@@ -127,8 +127,12 @@ func TestPrintChildrenLoadError(t *testing.T) {
 			badLine = line
 		}
 	}
-	if !strings.Contains(badLine, "(error") {
-		t.Errorf("строка bad без пометки (error:\n%s", buf.String())
+	const want = "(error: invalid module; run 'futi modules validate <namespace>')"
+	if !strings.Contains(badLine, want) {
+		t.Errorf("строка bad без пометки %q:\n%s", want, buf.String())
+	}
+	if strings.Contains(buf.String(), dir) {
+		t.Errorf("в выводе без -v есть путь манифеста:\n%s", buf.String())
 	}
 	if !strings.Contains(buf.String(), "Fine module") {
 		t.Errorf("описание good потеряно:\n%s", buf.String())
