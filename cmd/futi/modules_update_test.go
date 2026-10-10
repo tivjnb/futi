@@ -126,6 +126,22 @@ func TestRunModulesUpdateNoMetaError(t *testing.T) {
 	}
 }
 
+func TestRunModulesUpdateEmptyMetaError(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	installFixtureModule(t, global, "broken", nil)
+	if err := os.WriteFile(filepath.Join(global, "broken", metayaml.FileName), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), newTestCache(), []string{"broken"})
+	if err == nil || !strings.Contains(err.Error(), "invalid "+metayaml.FileName) || strings.Contains(err.Error(), "not installed") {
+		t.Fatalf("expected invalid-meta error, got %v", err)
+	}
+}
+
 // Ребёнок (хук attach), убитый SIGINT, прерывает обновление всех модулей:
 // следующие модули не трогаются.
 func TestRunModulesUpdateAllStopsOnInterrupt(t *testing.T) {

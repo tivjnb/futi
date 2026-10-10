@@ -182,15 +182,19 @@ func TestWriteFileMode0644(t *testing.T) {
 }
 
 func TestMergeAboutEmptySourceKeepsDest(t *testing.T) {
-	dest := &Meta{About: &About{Author: "keep@example.com"}}
-	merged := MergeAbout(dest, &Meta{About: &About{}})
-	if merged.About == nil || merged.About.Author != "keep@example.com" {
-		t.Fatalf("empty source about must not overwrite dest, got %+v", merged.About)
+	for name, src := range map[string]*About{"zero": {}, "empty tags": {Tags: []string{}}} {
+		t.Run(name, func(t *testing.T) {
+			dest := &Meta{About: &About{Author: "keep@example.com"}}
+			merged := MergeAbout(dest, &Meta{About: src})
+			if merged.About == nil || merged.About.Author != "keep@example.com" {
+				t.Fatalf("empty source about must not overwrite dest, got %+v", merged.About)
+			}
+		})
 	}
 }
 
 func TestReadEmptyFile(t *testing.T) {
-	for name, content := range map[string]string{"zero bytes": "", "newline": "\n"} {
+	for name, content := range map[string]string{"zero bytes": "", "newline": "\n", "doc marker": "---\n", "tilde": "~\n"} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), FileName)
 			write(t, path, content)

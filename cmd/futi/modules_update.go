@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,8 +164,11 @@ func updateAt(w io.Writer, gate attachGate, cache *modulecache.Cache, name, labe
 
 	metaPath := filepath.Join(moduleRoot, metayaml.FileName)
 	meta, err := metayaml.Read(metaPath)
-	if err != nil {
+	if errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("not installed via `futi modules install` (no %s): %w", metayaml.FileName, err)
+	}
+	if err != nil {
+		return fmt.Errorf("invalid %s: %w", metayaml.FileName, err)
 	}
 
 	lf := meta.Lockfile

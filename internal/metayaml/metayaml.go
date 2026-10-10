@@ -39,6 +39,7 @@ type Lockfile struct {
 }
 
 // About — раздел автора модуля. Сохраняется из источника при install/update.
+// Новое поле — добавить в isEmptyAbout.
 type About struct {
 	Author   string   `yaml:"author,omitempty"`
 	License  string   `yaml:"license,omitempty"`
@@ -67,7 +68,7 @@ func Read(path string) (*Meta, error) {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("metayaml: parse %q: %w", path, err)
 	}
-	if doc.Kind == 0 {
+	if doc.Kind == 0 || (len(doc.Content) == 1 && doc.Content[0].Tag == "!!null") {
 		return nil, fmt.Errorf("metayaml: %q is empty", path)
 	}
 	var m Meta
