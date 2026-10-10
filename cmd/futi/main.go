@@ -55,9 +55,14 @@ func (e *listRequest) Unwrap() error { return errListCommand }
 // helpRequest сигнализирует, что запрошена справка (последний аргумент "help").
 // positional — все сегменты до "help" (namespace + command path). Диспетчер
 // решает: если "<positional> help" резолвится как user-defined команда —
-// выполнить её, иначе системная справка.
+// выполнить её (с flags/args/argsList, как обычную), иначе системная справка
+// (флаги и args при ней игнорируются). flags — сырые токены после пути, их
+// привязка к параметрам по схеме команды — в bindFlags.
 type helpRequest struct {
 	positional []string
+	flags      []string
+	args       string
+	argsList   []string
 }
 
 func (e *helpRequest) Error() string { return "help requested" }
@@ -101,8 +106,14 @@ func parseArgs(args []string) (*parsedArgs, error) {
 		return nil, parseListRequest(path[:len(path)-1], flags)
 	case "help":
 		// В отличие от list, help НЕ зарезервирован: диспетчер проверяет,
-		// нет ли user-defined команды "help" (см. runHelp). Флаги игнорируются.
-		return nil, &helpRequest{positional: path[:len(path)-1]}
+		// нет ли user-defined команды "help" (см. runHelp). Сырые флаги и args
+		// сохраняются для неё; системная справка их игнорирует.
+		return nil, &helpRequest{
+			positional: path[:len(path)-1],
+			flags:      flags,
+			args:       strings.Join(argsList, " "),
+			argsList:   argsList,
+		}
 	}
 
 	// args строка: join через пробел (сохраняет разделение для шаблона)
@@ -976,15 +987,52 @@ func commandPath(pa *parsedArgs) []string {
 	return path
 }
 
-// exitAfterHelp печатает справку по пути в stdout (код 0); ошибка — в stderr, код 1.
-func exitAfterHelp(source discovery.Source, loader modulerunner.ModuleLoader, path []string) {
-	if err := runSystemHelp(os.Stdout, source, loader, path); err != nil {
-		if printPartialWarnings(os.Stderr, err) {
-			return
+// systemHelpCode печатает справку по пути в stdout и возвращает код выхода:
+// 0 (в том числе при частичном листинге — предупреждения в stderr) или 1 с
+// ошибкой в stderr.
+func systemHelpCode(stdout, stderr io.Writer, source discovery.Source, loader modulerunner.ModuleLoader, path []string) int {
+	if err := runSystemHelp(stdout, source, loader, path); err != nil {
+		if printPartialWarnings(stderr, err) {
+			return 0
 		}
-		fmt.Fprintf(os.Stderr, "%s\n", withValidateHint(err.Error(), err, path, source))
-		os.Exit(1)
+		fmt.Fprintf(stderr, "%s\n", withValidateHint(err.Error(), err, path, source))
+		return 1
 	}
+	return 0
+}
+
+// runParsed — общий путь исполнения команды (ResolveCommand → bindFlags
+// (-h/--help → справка) → Run → formatRunError) для обычной ветки main и
+// пользовательской help. Пишет в переданные stdout/stderr и возвращает код
+// выхода. Второе значение — ошибка запуска (уже напечатанная в stderr): её
+// возвращаем наружу, чтобы вызывающий через exitAfterRunError корректно
+// обработал сигнальный путь (процесс гибнет тем же сигналом), а тесты
+// проверяли код без os.Exit.
+func runParsed(ctx context.Context, stdout, stderr io.Writer, source discovery.Source, loader modulerunner.ModuleLoader, pa *parsedArgs) (int, error) {
+	// Схема команды нужна для привязки флагов (bool/string/int). -h/--help —
+	// справка по пути, в том числе для веток без своей команды (futi docker -h).
+	helpPath := commandPath(pa)
+	cmd, err := modulerunner.ResolveCommand(source, loader, pa.namespace, pa.command)
+	if err != nil {
+		if hasHelpFlag(pa.flags) {
+			return systemHelpCode(stdout, stderr, source, loader, helpPath), nil
+		}
+		fmt.Fprintf(stderr, "%s\n", withPathHint(withValidateHint(formatRunError(err), err, helpPath, source), pa.flags))
+		return exitCodeFromError(err), err
+	}
+	params, help, err := bindFlags(cmd, pa.flags)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s\n", withPathHint(err.Error(), pa.flags))
+		return 1, nil
+	}
+	if help {
+		return systemHelpCode(stdout, stderr, source, loader, helpPath), nil
+	}
+	if err := modulerunner.Run(ctx, source, pa.namespace, pa.command, params, pa.args, pa.argsList, stdout, stderr, loader); err != nil {
+		fmt.Fprintf(stderr, "%s\n", formatRunError(err))
+		return exitCodeFromError(err), err
+	}
+	return 0, nil
 }
 
 func main() {
@@ -1148,9 +1196,12 @@ func main() {
 				fmt.Fprintf(os.Stderr, "source: %v\n", err)
 				os.Exit(1)
 			}
-			if helpErr := runHelp(os.Stdout, source, cache, helpReq.positional); helpErr != nil && !printPartialWarnings(os.Stderr, helpErr) {
-				fmt.Fprintf(os.Stderr, "%s\n", withValidateHint(helpErr.Error(), helpErr, helpReq.positional, source))
-				os.Exit(1)
+			code, runErr := runHelp(context.Background(), os.Stdout, os.Stderr, source, cache, helpReq)
+			if runErr != nil {
+				exitAfterRunError(runErr)
+			}
+			if code != 0 {
+				os.Exit(code)
 			}
 			return
 		case errors.Is(err, errHelp):
@@ -1167,30 +1218,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "source: %v\n", err)
 		os.Exit(1)
 	}
-	// Схема команды нужна для привязки флагов (bool/string/int). -h/--help —
-	// справка по пути, в том числе для веток без своей команды (futi docker -h).
-	helpPath := commandPath(pa)
-	cmd, err := modulerunner.ResolveCommand(source, cache, pa.namespace, pa.command)
-	if err != nil {
-		if hasHelpFlag(pa.flags) {
-			exitAfterHelp(source, cache, helpPath)
-			return
-		}
-		fmt.Fprintf(os.Stderr, "%s\n", withPathHint(withValidateHint(formatRunError(err), err, helpPath, source), pa.flags))
-		exitAfterRunError(err)
+	code, runErr := runParsed(context.Background(), os.Stdout, os.Stderr, source, cache, pa)
+	if runErr != nil {
+		exitAfterRunError(runErr)
 	}
-	params, help, err := bindFlags(cmd, pa.flags)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", withPathHint(err.Error(), pa.flags))
-		os.Exit(1)
-	}
-	if help {
-		exitAfterHelp(source, cache, helpPath)
-		return
-	}
-	if err := modulerunner.Run(context.Background(), source, pa.namespace, pa.command, params, pa.args, pa.argsList, nil, nil, cache); err != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", formatRunError(err))
-		exitAfterRunError(err)
+	if code != 0 {
+		os.Exit(code)
 	}
 }
 
