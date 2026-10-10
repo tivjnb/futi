@@ -130,7 +130,7 @@ func TestCompleteModuleCommands(t *testing.T) {
 	src := newTestSource(t)
 	matches, directive := Complete(src, nil, []string{"docker"}, "")
 	got := text(matches)
-	want := []string{"build", "help", "migrate", "ps"}
+	want := []string{"build", "help", "list", "migrate", "ps"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected matches: %v, want %v", got, want)
 	}
@@ -153,7 +153,7 @@ func TestCompleteSubcommands(t *testing.T) {
 	src := newTestSource(t)
 	matches, _ := Complete(src, nil, []string{"docker", "migrate"}, "")
 	got := text(matches)
-	want := []string{"down", "help", "up"}
+	want := []string{"down", "help", "list", "up"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected matches: %v, want %v", got, want)
 	}
@@ -299,7 +299,7 @@ func TestCompleteNestedNamespace(t *testing.T) {
 	src := newTestSource(t)
 	matches, _ := Complete(src, nil, []string{"dev"}, "")
 	got := text(matches)
-	want := []string{"deploy"}
+	want := []string{"deploy", "list"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected matches: %v, want %v", got, want)
 	}
@@ -309,7 +309,7 @@ func TestCompleteNamespaceModuleCommands(t *testing.T) {
 	src := newTestSource(t)
 	matches, _ := Complete(src, nil, []string{"dev", "deploy"}, "")
 	got := text(matches)
-	want := []string{"help", "staging"}
+	want := []string{"help", "list", "staging"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected matches: %v, want %v", got, want)
 	}
@@ -497,7 +497,7 @@ func TestCompleteHelpNotDuplicatedWithUserCommand(t *testing.T) {
 	src := newHelpSource(t)
 	matches, _ := Complete(src, nil, []string{"mod"}, "")
 	got := text(matches)
-	want := []string{"help", "run"}
+	want := []string{"help", "list", "run"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected matches: %v, want %v", got, want)
 	}
@@ -539,7 +539,7 @@ func TestCompleteModuleDefaultCmdParams(t *testing.T) {
 	src := newTestSource(t)
 	matches, directive := Complete(src, nil, []string{"meta"}, "")
 	got := text(matches)
-	want := []string{"--json", "help"}
+	want := []string{"--json", "help", "list"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected matches: %v, want %v", got, want)
 	}
@@ -857,5 +857,65 @@ func TestCompleteModulesValidatePartialListing(t *testing.T) {
 	}
 	if directive != ShellCompDirectiveNoFileComp {
 		t.Fatalf("directive = %v, want NoFileComp", directive)
+	}
+}
+
+// TestCompleteListKeyword фиксирует уровни, где `futi <path> list` выполняется
+// успешно (проверено сборкой бинаря): namespace, модуль, ветка с подкомандами,
+// модуль с default cmd. На листовой команде list даёт ошибку — не подсказываем.
+func TestCompleteListKeyword(t *testing.T) {
+	src := newTestSource(t)
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"namespace без модуля", []string{"dev"}, true},
+		{"пустой namespace", []string{"tools"}, true},
+		{"модуль с командами", []string{"docker"}, true},
+		{"модуль в namespace", []string{"dev", "deploy"}, true},
+		{"ветка с подкомандами", []string{"docker", "migrate"}, true},
+		{"модуль с default cmd", []string{"meta"}, true},
+		{"листовая команда", []string{"docker", "ps"}, false},
+		{"листовая подкоманда", []string{"docker", "migrate", "up"}, false},
+		{"несуществующий namespace", []string{"nope"}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			matches, _ := Complete(src, nil, tc.args, "")
+			got := text(matches)
+			if has := contains(got, "list"); has != tc.want {
+				t.Fatalf("Complete(%v): list present = %v, want %v (matches %v)", tc.args, has, tc.want, got)
+			}
+		})
+	}
+}
+
+func TestCompleteListKeywordDescription(t *testing.T) {
+	src := newTestSource(t)
+	matches, _ := Complete(src, nil, []string{"docker"}, "li")
+	if len(matches) != 1 || matches[0].Text != "list" || matches[0].Description != "List commands" {
+		t.Fatalf("got %+v, want single list with description %q", matches, "List commands")
+	}
+}
+
+func TestCompleteModulesAddCommandFlags(t *testing.T) {
+	src := newTestSource(t)
+	matches, directive := Complete(src, nil, []string{"modules", "add_command", "docker"}, "--")
+	got := text(matches)
+	want := []string{"--cmd", "--desc"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected matches: %v, want %v", got, want)
+	}
+	if directive != ShellCompDirectiveNoFileComp {
+		t.Fatalf("unexpected directive: %v", directive)
+	}
+}
+
+func TestCompleteModulesRemoveCommandNoFlags(t *testing.T) {
+	src := newTestSource(t)
+	matches, _ := Complete(src, nil, []string{"modules", "remove_command", "docker"}, "--")
+	if len(matches) != 0 {
+		t.Fatalf("remove_command has no flags, got %v", matches)
 	}
 }

@@ -66,6 +66,28 @@ var completionShells = []string{"bash", "fish", "zsh"}
 // modulesSubcommands — подкоманды `futi modules`.
 var modulesSubcommands = []string{"add_command", "info", "init", "install", "list", "path", "remove_command", "uninstall", "update", "validate"}
 
+// modulesAddCommandFlags — флаги `futi modules add_command`.
+var modulesAddCommandFlags = []string{"--cmd", "--desc"}
+
+// ModulesFlags возвращает флаги подкоманды `futi modules <sub>`, которые
+// подсказывает completion (nil — у подкоманды флагов нет). Экспортируется
+// для теста согласованности с парсерами в cmd/futi.
+func ModulesFlags(sub string) []string {
+	switch sub {
+	case "add_command":
+		return modulesAddCommandFlags
+	case "init":
+		return modulesInitFlags
+	case "install":
+		return modulesInstallFlags
+	case "uninstall":
+		return modulesUninstallFlags
+	case "update":
+		return modulesUpdateFlags
+	}
+	return nil
+}
+
 // modulesInitFlags — флаги `futi modules init` (бывший futi init).
 var modulesInitFlags = []string{"--command", "--default-cmd", "--desc", "--global"}
 
@@ -83,6 +105,12 @@ var modulesUpdateFlags = []string{"--skip-attach", "--yes"}
 // команда "help", она уже входит в commandMatches; здесь добавляем системную
 // только если её нет.
 const helpKeyword = "help"
+
+// listKeyword — системная команда списка, подсказывается там, где
+// `futi <path> list` выполняется успешно: namespace, модуль, ветка с
+// subcommands. На листовой команде list даёт ошибку — не подсказываем.
+// Имя "list" в командах модуля запрещено схемой, но дубль всё равно исключаем.
+const listKeyword = "list"
 
 // Complete возвращает подсказки для заданной позиции ввода.
 //
@@ -151,18 +179,7 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 		}
 		// Флаги `futi modules <sub>` (модуль не задействован).
 		if len(positionals) >= 2 && positionals[0] == "modules" {
-			var flags []string
-			switch positionals[1] {
-			case "init":
-				flags = modulesInitFlags
-			case "install":
-				flags = modulesInstallFlags
-			case "uninstall":
-				flags = modulesUninstallFlags
-			case "update":
-				flags = modulesUpdateFlags
-			}
-			if flags != nil {
+			if flags := ModulesFlags(positionals[1]); flags != nil {
 				return filterMatches(withoutUsed(flagMatches(flags, toComplete), flagArgs), toComplete), ShellCompDirectiveNoFileComp
 			}
 		}
@@ -296,9 +313,9 @@ func moduleMatches(loader modulerunner.ModuleLoader, manifest, root string, comm
 	// подсказываем параметры default-команды.
 	if len(commandPath) == 0 {
 		if len(mod.Commands) == 0 && mod.Cmd != "" {
-			return filterMatches(withHelp(paramMatches(&execmodule.Command{Params: mod.Params}, "")), toComplete), ShellCompDirectiveNoFileComp
+			return filterMatches(withList(withHelp(paramMatches(&execmodule.Command{Params: mod.Params}, ""))), toComplete), ShellCompDirectiveNoFileComp
 		}
-		return filterMatches(withHelp(commandMatches(mod.Commands)), toComplete), ShellCompDirectiveNoFileComp
+		return filterMatches(withList(withHelp(commandMatches(mod.Commands))), toComplete), ShellCompDirectiveNoFileComp
 	}
 
 	cmd, err := mod.ResolveCommandPath(commandPath)
@@ -309,7 +326,7 @@ func moduleMatches(loader modulerunner.ModuleLoader, manifest, root string, comm
 
 	// Ветка с subcommands → подсказываем их (+ системную help).
 	if len(cmd.Commands) > 0 {
-		return filterMatches(withHelp(commandMatches(cmd.Commands)), toComplete), ShellCompDirectiveNoFileComp
+		return filterMatches(withList(withHelp(commandMatches(cmd.Commands))), toComplete), ShellCompDirectiveNoFileComp
 	}
 
 	// Листовая команда — подсказываем все параметры (--name) даже без
@@ -327,6 +344,16 @@ func withHelp(matches []Match) []Match {
 		}
 	}
 	return append(matches, Match{Text: helpKeyword, Description: "Show help"})
+}
+
+// withList добавляет системную подсказку "list" (без дубля).
+func withList(matches []Match) []Match {
+	for _, m := range matches {
+		if m.Text == listKeyword {
+			return matches
+		}
+	}
+	return append(matches, Match{Text: listKeyword, Description: "List commands"})
 }
 
 // namespaceMatches формирует подсказки, когда модуль не зарезолвлен:
@@ -378,6 +405,11 @@ func namespaceMatches(source discovery.Source, loader modulerunner.ModuleLoader,
 				}
 			}
 			matches = append(matches, m)
+		}
+		// Существующий namespace ниже корня: `futi <ns> list` работает.
+		// На корне list уже среди builtins.
+		if len(positionals) > 0 {
+			matches = withList(matches)
 		}
 	}
 

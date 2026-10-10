@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tivjnb/futi/internal/completion"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/modulecache"
 )
@@ -66,7 +67,7 @@ func TestRunCompleteOutputFormat(t *testing.T) {
 	}
 
 	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	if len(lines) != 4 {
+	if len(lines) != 5 {
 		t.Fatalf("unexpected lines: %v", lines)
 	}
 	if lines[0] != "build\tBuild image" {
@@ -302,5 +303,40 @@ func TestCompletionFishRealShell(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("вывод fish не содержит строки docker: %q", out)
+	}
+}
+
+// TestCompletionModulesFlagsAcceptedByParsers: каждый флаг, который completion
+// подсказывает для `futi modules <sub>`, принимается парсером подкоманды
+// (защита от рассинхрона списков и парсеров).
+func TestCompletionModulesFlagsAcceptedByParsers(t *testing.T) {
+	parsers := map[string]func([]string) error{
+		"add_command": func(a []string) error { _, err := parseAddCommandArgs(a); return err },
+		"init":        func(a []string) error { _, err := parseInitArgs(a); return err },
+		"install":     func(a []string) error { _, err := parseInstallArgs(a); return err },
+		"uninstall":   func(a []string) error { _, err := parseUninstallArgs(a); return err },
+		"update":      func(a []string) error { _, err := parseUpdateArgs(a); return err },
+	}
+	for sub, parse := range parsers {
+		flags := completion.ModulesFlags(sub)
+		if len(flags) == 0 {
+			t.Errorf("%s: completion has no flags, but the parser is registered", sub)
+		}
+		for _, flag := range flags {
+			// Значение и позиционный аргумент: флаг с аргументом забирает "val",
+			// булев оставляет его позиционным — «unknown flag» бывает только у
+			// флага, которого парсер не знает.
+			for _, args := range [][]string{{"x", flag}, {"x", flag, "val"}} {
+				if err := parse(args); err != nil && strings.Contains(err.Error(), "unknown flag") {
+					t.Errorf("%s: flag %s suggested by completion, parser rejects args %v: %v", sub, flag, args, err)
+				}
+			}
+		}
+	}
+	// Подкоманды без флагов не должны ничего подсказывать.
+	for _, sub := range []string{"info", "list", "path", "remove_command", "validate"} {
+		if flags := completion.ModulesFlags(sub); flags != nil {
+			t.Errorf("%s: completion suggests flags %v, want none", sub, flags)
+		}
 	}
 }
