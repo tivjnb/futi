@@ -144,7 +144,11 @@ func runModulesList(w io.Writer, args []string) error {
 
 	var rows [][]string
 	for _, e := range entries {
-		version := e.Meta.Lockfile.Ref
+		// Ref осмыслен только для git; в старых lockfile local/archive он мог остаться.
+		version := ""
+		if e.Meta.Lockfile.Type == "git" {
+			version = e.Meta.Lockfile.Ref
+		}
 		if version == "" {
 			version = e.Meta.Lockfile.Commit
 			if len(version) > 12 {

@@ -129,7 +129,7 @@ func runModulesUninstall(w io.Writer, stdin io.Reader, source discovery.Source, 
 			}
 			fmt.Fprintf(os.Stderr, "Warning: cannot load manifest, detach skipped: %v\n", err)
 		} else if mod.Detach != "" {
-			if err := modulerunner.RunHook(context.Background(), mod.Detach, moduleRoot, cfg.name, os.Stdout, os.Stderr); err != nil {
+			if err := modulerunner.RunHook(context.Background(), mod.Detach, moduleRoot, cfg.name, w, os.Stderr); err != nil {
 				if _, interrupted := interruptSignal(err); interrupted {
 					return fmt.Errorf("detach interrupted, nothing deleted: %w", err)
 				}

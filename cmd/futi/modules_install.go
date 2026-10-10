@@ -138,6 +138,11 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 		return err
 	}
 
+	// F62: --ref осмыслен только для git; отказ до временных каталогов и сети.
+	if cfg.ref != "" && kind != kindGit {
+		return fmt.Errorf("modules install: --ref is only supported for git sources")
+	}
+
 	// Относительный local-источник привязываем к cwd установки: update
 	// может запускаться из другого каталога. Считаем до переноса, чтобы ошибка
 	// не оставила модуль без meta.
@@ -268,7 +273,7 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 
 	// attach: провал → rollback (rm dest) + error (§3.1, §8 #6).
 	if runAttach {
-		if err := modulerunner.RunHook(context.Background(), mod.Attach, dest, name, os.Stdout, os.Stderr); err != nil {
+		if err := modulerunner.RunHook(context.Background(), mod.Attach, dest, name, w, os.Stderr); err != nil {
 			return fmt.Errorf("attach failed, module removed: %w", err)
 		}
 	}

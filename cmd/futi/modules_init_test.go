@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/google/shlex"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
 )
@@ -318,8 +320,13 @@ func TestRunInitPathTraversalError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for path traversal")
 	}
-	if !strings.Contains(err.Error(), "outside") {
-		t.Fatalf("expected error about path outside base dir, got: %v", err)
+	if !strings.Contains(err.Error(), "invalid module name") {
+		t.Fatalf("expected invalid module name error, got: %v", err)
+	}
+	// Защитный барьер targetFilePath срабатывает и без проверки имени.
+	_, err = targetFilePath(&initConfig{path: "../../etc/passwd", global: true}, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Fatalf("targetFilePath err = %v, want path outside", err)
 	}
 }
 
@@ -631,5 +638,43 @@ func TestRunInitConfigConflictsWithYamlFile(t *testing.T) {
 	}
 	if _, err := os.Stat(".futi/x/config.yaml"); err == nil {
 		t.Fatal(".futi/x/config.yaml must not be created")
+	}
+}
+
+// F62: имя в позиционном аргументе проходит validateModuleName.
+func TestModulesInitRejectsInvalidName(t *testing.T) {
+	for _, name := range []string{"foo bar", "-x", "a//b", "a/.", "a;b"} {
+		t.Run(name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			err := runModulesInit(&bytes.Buffer{}, []string{name})
+			if err == nil || !strings.Contains(err.Error(), "invalid module name") {
+				t.Fatalf("err = %v, want invalid module name", err)
+			}
+			if _, statErr := os.Stat(".futi"); statErr == nil {
+				t.Fatal(".futi must not be created")
+			}
+		})
+	}
+}
+
+// F62: cmd сгенерированной команды разбирается shlex в [echo, <имя>].
+func TestGenerateModuleYAMLQuotesCommand(t *testing.T) {
+	for _, name := range []string{`a"b`, `it's`, `x\y`, `$HOME`, "plain"} {
+		t.Run(name, func(t *testing.T) {
+			yaml := generateModuleYAML("m", "d", "", []string{name})
+			mod, err := execmodule.ParseManifest([]byte(yaml), "/x/m.yaml", "/x")
+			if err != nil {
+				t.Fatalf("ParseManifest: %v\n%s", err, yaml)
+			}
+			cmd := mod.Commands[name].Cmd
+			got, err := shlex.Split(cmd)
+			if err != nil {
+				t.Fatalf("shlex.Split(%q): %v", cmd, err)
+			}
+			want := []string{"echo", name}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("argv = %q, want %q", got, want)
+			}
+		})
 	}
 }

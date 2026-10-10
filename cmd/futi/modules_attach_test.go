@@ -354,3 +354,18 @@ func TestUpdateAllAsksPerModule(t *testing.T) {
 		})
 	}
 }
+
+// F62: stdout хука attach идёт в writer вызывающей функции, а не в os.Stdout.
+func TestModulesInstallHookOutputToWriter(t *testing.T) {
+	attachEnv(t)
+	setStdinTerminal(t, true)
+	src := makeSourceModule(t, t.TempDir(), "qr", "attach: \"echo hook-says-hi\"\n")
+
+	var buf bytes.Buffer
+	if err := runModulesInstall(&buf, unreadableStdin{t}, newTestCache(), []string{src, "--yes"}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if !strings.Contains(buf.String(), "hook-says-hi") {
+		t.Fatalf("writer output = %q, want hook stdout", buf.String())
+	}
+}

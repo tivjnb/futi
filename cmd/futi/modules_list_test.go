@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/metayaml"
 )
 
@@ -82,7 +83,7 @@ func TestScanInstalledSkipsBackupDirs(t *testing.T) {
 func TestRunModulesListStripsControlChars(t *testing.T) {
 	root := t.TempDir()
 	installFixtureModule(t, root, "qr", &metayaml.Meta{Lockfile: metayaml.Lockfile{
-		Source: "/src\x1b]0;pwned\x07/qr", Ref: "v1\x1b[2J",
+		Source: "/src\x1b]0;pwned\x07/qr", Type: "git", Ref: "v1\x1b[2J",
 	}})
 	t.Setenv("FUTI_MODULES_DIR", root)
 	t.Chdir(t.TempDir())
@@ -97,5 +98,36 @@ func TestRunModulesListStripsControlChars(t *testing.T) {
 	}
 	if !strings.Contains(out, "/src]0;pwned/qr") || !strings.Contains(out, "v1[2J") {
 		t.Fatalf("output lost visible text:\n%s", out)
+	}
+}
+
+// F62: ref из lockfile не-git источника не показывается как версия.
+func TestModulesListRefOnlyForGit(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", root)
+	t.Chdir(t.TempDir())
+	installFixtureModule(t, root, "old", &metayaml.Meta{Lockfile: metayaml.Lockfile{Source: "/src/old", Type: "local", Ref: "v9"}})
+	installFixtureModule(t, root, "gitm", &metayaml.Meta{Lockfile: metayaml.Lockfile{Source: "https://h/r.git", Type: "git", Ref: "v7"}})
+
+	var b bytes.Buffer
+	if err := runModulesList(&b, nil); err != nil {
+		t.Fatalf("runModulesList: %v", err)
+	}
+	if strings.Contains(b.String(), "v9") {
+		t.Fatalf("list shows ref of local module:\n%s", b.String())
+	}
+	if !strings.Contains(b.String(), "v7") {
+		t.Fatalf("list must show ref of git module:\n%s", b.String())
+	}
+}
+
+func TestModulesInfoRefOnlyForGit(t *testing.T) {
+	root := installFixtureModule(t, t.TempDir(), "old", &metayaml.Meta{Lockfile: metayaml.Lockfile{Source: "/src/old", Type: "archive", Ref: "v9"}})
+	var b bytes.Buffer
+	if err := runModulesInfo(&b, discovery.NewGlobalSource(root), []string{"old"}); err != nil {
+		t.Fatalf("runModulesInfo: %v", err)
+	}
+	if strings.Contains(b.String(), "v9") {
+		t.Fatalf("info shows ref of archive module:\n%s", b.String())
 	}
 }

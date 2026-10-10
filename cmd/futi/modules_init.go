@@ -98,6 +98,9 @@ func parseInitArgs(args []string) (*initConfig, error) {
 	} else {
 		trimmed = strings.TrimSuffix(trimmed, ".yml")
 	}
+	if err := validateModuleName(filepath.ToSlash(trimmed)); err != nil {
+		return nil, err
+	}
 	if err := checkReservedSegments(filepath.ToSlash(trimmed), "/"); err != nil {
 		return nil, err
 	}
@@ -133,7 +136,7 @@ func targetFilePath(cfg *initConfig, globalDir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("path: %w", err)
 	}
-	if strings.HasPrefix(rel, "..") {
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path %q is outside the modules directory", cfg.path)
 	}
 	if err := validateSegmentsNoDot(strings.TrimSuffix(strings.TrimSuffix(rel, ".yaml"), ".yml")); err != nil {
@@ -172,7 +175,8 @@ func initModuleName(path string) string {
 // description — описание (квотируется для безопасности — фикс #41).
 // defaultCmd — cmd на уровне модуля (пусто = не добавлять).
 // commands — имена команд (если пусто — одна команда hello по умолчанию).
-// #46: name квотируется. #47: ключи команд квотируются.
+// #46: name квотируется. #47: ключи команд квотируются. F62: имя команды в
+// cmd квотируется для shlex — argv всегда [echo, <имя>].
 func generateModuleYAML(name, description, defaultCmd string, commands []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "name: %s\n", quoteYAMLValue(name))
@@ -183,7 +187,7 @@ func generateModuleYAML(name, description, defaultCmd string, commands []string)
 	b.WriteString("commands:\n")
 	if len(commands) > 0 {
 		for _, cmd := range commands {
-			fmt.Fprintf(&b, "  %s:\n    cmd: %s\n", quoteYAMLValue(cmd), quoteYAMLValue("echo "+cmd))
+			fmt.Fprintf(&b, "  %s:\n    cmd: %s\n", quoteYAMLValue(cmd), quoteYAMLValue("echo "+execmodule.QuoteShlex(cmd)))
 		}
 	} else {
 		b.WriteString("  \"hello\":\n    cmd: \"echo hello\"\n")

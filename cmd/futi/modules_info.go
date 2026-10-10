@@ -58,7 +58,7 @@ func runModulesInfo(w io.Writer, source discovery.Source, args []string) error {
 	lf := meta.Lockfile
 	fmt.Fprintf(w, "Source: %s\n", termtext.Line(lf.Source))
 	fmt.Fprintf(w, "Type: %s\n", termtext.Line(lf.Type))
-	if lf.Ref != "" {
+	if lf.Type == "git" && lf.Ref != "" {
 		fmt.Fprintf(w, "Ref: %s\n", termtext.Line(lf.Ref))
 	}
 	if lf.Commit != "" {

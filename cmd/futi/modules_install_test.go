@@ -485,3 +485,24 @@ func TestInstallSucceedsWhenSrcRemoveFails(t *testing.T) {
 		t.Fatalf("meta missing: %v", err)
 	}
 }
+
+// F62: --ref имеет смысл только для git; ошибка до временных каталогов и сети.
+func TestModulesInstallRefRequiresGit(t *testing.T) {
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	t.Chdir(t.TempDir())
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+
+	for _, args := range [][]string{
+		{src, "--ref", "v1"},
+		{src, "--from-local", "--ref=v1"},
+		{"https://h/x.zip", "--ref", "v1"},
+		{"https://h/x", "--from-archive", "--ref", "v1"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			err := runModulesInstall(&bytes.Buffer{}, strings.NewReader(""), newTestCache(), args)
+			if err == nil || !strings.Contains(err.Error(), "--ref is only supported for git sources") {
+				t.Fatalf("err = %v, want --ref is only supported for git sources", err)
+			}
+		})
+	}
+}
