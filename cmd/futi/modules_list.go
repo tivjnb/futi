@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,9 +17,10 @@ import (
 
 // installedEntry — установленный модуль, найденный сканированием.
 type installedEntry struct {
-	Name string // dot-имя (namespace.name)
-	Dir  string // каталог модуля (пакет)
-	Meta *metayaml.Meta
+	Name    string // dot-имя (namespace.name)
+	Dir     string // каталог модуля (пакет)
+	Meta    *metayaml.Meta
+	ViaLink bool // путь проходит через симлинк-каталог ниже корня
 }
 
 // dotName превращает относительный путь ("images/qr") в dot-имя ("images.qr").
@@ -35,21 +37,36 @@ const backupSuffix = ".futi-backup"
 // найденного модуля не спускаемся. Имя модуля — с префиксом корня, как его
 // резолвит discovery. Симлинки на каталоги (и корень-симлинк) раскрываются,
 // как в discovery; один реальный каталог модуля или backup попадает в
-// результат один раз — update не обновит его дважды. Ошибки чтения
-// отдельного модуля или каталога не фатальны — он пропускается.
+// результат один раз — update не обновит его дважды. Из нескольких путей к
+// нему выбирается найденный без симлинк-каталога (ViaLink == false), иначе —
+// первый по обходу; порядок — по первому появлению, он детерминирован
+// (корни по порядку, записи каталога по имени). Ошибки чтения отдельного
+// модуля или каталога не фатальны — он пропускается.
 func scanRoots(roots []moduleRoot) (entries []installedEntry, backups []string) {
-	seen := make(map[string]bool)
+	st := scanState{entryIdx: make(map[string]int), backupIdx: make(map[string]int)}
 	for _, root := range roots {
-		walkInstalled(root, root.Dir, "", make(map[string]bool), seen, &entries, &backups)
+		st.walk(root, root.Dir, "", false, make(map[string]bool))
 	}
-	return entries, backups
+	for _, b := range st.backups {
+		backups = append(backups, b.Dir)
+	}
+	return st.entries, backups
 }
 
-// walkInstalled обходит каталог dir корня root (rel — его путь от корня).
-// ancestors — реальные пути каталогов текущего пути обхода: симлинк на
-// предка (цикл) не раскрывается. seen — реальные пути уже найденных модулей
-// и backup-каталогов во всех корнях.
-func walkInstalled(root moduleRoot, dir, rel string, ancestors, seen map[string]bool, entries *[]installedEntry, backups *[]string) {
+// scanState — накопленный результат scanRoots; *Idx — реальный путь
+// каталога → индекс записи (Name и Meta у backup-записей не заполняются).
+type scanState struct {
+	entries   []installedEntry
+	entryIdx  map[string]int
+	backups   []installedEntry
+	backupIdx map[string]int
+}
+
+// walk обходит каталог dir корня root (rel — его путь от корня, viaLink —
+// путь уже прошёл через симлинк-каталог ниже корня). ancestors — реальные
+// пути каталогов текущего пути обхода: симлинк на предка (цикл) не
+// раскрывается.
+func (st *scanState) walk(root moduleRoot, dir, rel string, viaLink bool, ancestors map[string]bool) {
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil || ancestors[real] {
 		return
@@ -68,31 +85,37 @@ func walkInstalled(root moduleRoot, dir, rel string, ancestors, seen map[string]
 		if err != nil || !info.IsDir() || metayaml.IsExcluded(childRel) {
 			continue
 		}
+		childViaLink := viaLink || child.Type()&fs.ModeSymlink != 0
 		if strings.HasSuffix(child.Name(), backupSuffix) {
-			if markSeen(seen, path) {
-				*backups = append(*backups, path)
-			}
+			keepPreferred(&st.backups, st.backupIdx, installedEntry{Dir: path, ViaLink: childViaLink})
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(path, "config.yaml")); err == nil {
-			meta, metaErr := metayaml.Read(filepath.Join(path, metayaml.FileName))
-			if metaErr == nil && markSeen(seen, path) {
-				*entries = append(*entries, installedEntry{Name: prefixedName(root.Prefix, dotName(childRel)), Dir: path, Meta: meta})
+			if meta, err := metayaml.Read(filepath.Join(path, metayaml.FileName)); err == nil {
+				keepPreferred(&st.entries, st.entryIdx, installedEntry{
+					Name: prefixedName(root.Prefix, dotName(childRel)), Dir: path, Meta: meta, ViaLink: childViaLink,
+				})
 			}
 			continue // внутрь модуля не спускаемся
 		}
-		walkInstalled(root, path, childRel, ancestors, seen, entries, backups)
+		st.walk(root, path, childRel, childViaLink, ancestors)
 	}
 }
 
-// markSeen отмечает реальный путь path в seen; false — уже был отмечен.
-func markSeen(seen map[string]bool, path string) bool {
-	real := normalizePath(path)
-	if seen[real] {
-		return false
+// keepPreferred добавляет e в *list, если его реальный каталог ещё не
+// встречался; встречался через симлинк-каталог, а e найден без него — e
+// заменяет прежнюю запись на её месте.
+func keepPreferred(list *[]installedEntry, idx map[string]int, e installedEntry) {
+	real := normalizePath(e.Dir)
+	i, ok := idx[real]
+	if !ok {
+		idx[real] = len(*list)
+		*list = append(*list, e)
+		return
 	}
-	seen[real] = true
-	return true
+	if (*list)[i].ViaLink && !e.ViaLink {
+		(*list)[i] = e
+	}
 }
 
 // scanInstalled — установленные модули из корней (без backup-каталогов).

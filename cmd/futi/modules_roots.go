@@ -97,23 +97,44 @@ func prefixedName(prefix, rel string) string {
 
 // reportSourcesVisibility сообщает, как discovery увидит модуль name (dot-имя
 // внутри глобального каталога globalDir), если в config.yaml заданы sources:
-// при них глобальный каталог сам по себе не читается. Каталог не входит в
-// sources — предупреждение в stderr; входит с префиксом — полное имя в w.
+// при них глобальный каталог сам по себе не читается. Каталог совпадает с
+// source или лежит внутри него — полное имя в w (если оно отличается от
+// name); не входит ни в один source — предупреждение в stderr.
 func reportSourcesVisibility(w io.Writer, cfg *config.Config, globalDir, name string) {
 	if cfg == nil || len(cfg.Sources) == 0 {
 		return
 	}
-	realGlobal := normalizePath(globalDir)
-	for _, sc := range cfg.Sources {
-		if normalizePath(sc.Path) != realGlobal {
-			continue
-		}
-		if prefix := sc.FullPrefix(); prefix != "" {
-			fmt.Fprintf(w, "Module is available as %s\n", termtext.Line(prefixedName(prefix, name)))
-		}
+	fullName, ok := visibleName(cfg.Sources, normalizePath(globalDir), name)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Warning: %s is not listed in config.yaml sources; add it there to use the module\n", termtext.Line(globalDir))
 		return
 	}
-	fmt.Fprintf(os.Stderr, "Warning: %s is not listed in config.yaml sources; add it there to use the module\n", termtext.Line(globalDir))
+	if fullName != name {
+		fmt.Fprintf(w, "Module is available as %s\n", termtext.Line(fullName))
+	}
+}
+
+// visibleName — имя, под которым discovery найдёт модуль name глобального
+// каталога с реальным путём realGlobal: source с тем же путём важнее source,
+// внутри которого каталог лежит (тогда к имени добавляется путь от source).
+func visibleName(sources []config.SourceConfig, realGlobal, name string) (string, bool) {
+	for _, sc := range sources {
+		if normalizePath(sc.Path) == realGlobal {
+			return prefixedName(sc.FullPrefix(), name), true
+		}
+	}
+	for _, sc := range sources {
+		realSource := normalizePath(sc.Path)
+		if !strictlyInside(realSource, realGlobal) {
+			continue
+		}
+		rel, err := filepath.Rel(realSource, realGlobal)
+		if err != nil {
+			continue
+		}
+		return prefixedName(sc.FullPrefix(), dotName(rel)+"."+name), true
+	}
+	return "", false
 }
 
 // stripRootPrefix возвращает имя модуля name относительно корня с префиксом

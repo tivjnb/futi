@@ -111,17 +111,13 @@ func parseInitArgs(args []string) (*initConfig, error) {
 
 // targetFilePath возвращает путь к файлу модуля.
 // Локально: ./.futi/<path>.yaml (доступен через auto-discovery).
-// Глобально: ~/.config/futi/modules/<path>.yaml.
+// Глобально: <globalDir>/<path>.yaml (globalDir — из globalModulesDir).
 // #40: отклоняет path с .. (path traversal за пределы base).
 // #45: не добавляет .yaml, если path уже заканчивается на .yaml/.yml.
-func targetFilePath(cfg *initConfig) (string, error) {
+func targetFilePath(cfg *initConfig, globalDir string) (string, error) {
 	base := ".futi"
 	if cfg.global {
-		modDir, err := globalModulesDir()
-		if err != nil {
-			return "", fmt.Errorf("modules dir: %w", err)
-		}
-		base = modDir
+		base = globalDir
 	}
 
 	// #45: не добавляем .yaml, если уже есть расширение.
@@ -212,17 +208,21 @@ func runModulesInit(w io.Writer, args []string) error {
 		return err
 	}
 
-	targetPath, err := targetFilePath(cfg)
-	if err != nil {
-		return err
-	}
-	// Невалидный config.yaml — ошибка до записи; нужен для сообщения о
-	// видимости модуля в глобальном каталоге.
+	// Глобальный каталог и config.yaml — до записи: ошибка не должна
+	// прийти после «Created:». Конфиг нужен для сообщения о видимости модуля.
+	var globalDir string
 	var futiCfg *config.Config
 	if cfg.global {
+		if globalDir, err = globalModulesDir(); err != nil {
+			return fmt.Errorf("modules dir: %w", err)
+		}
 		if futiCfg, err = loadFutiConfig(); err != nil {
 			return err
 		}
+	}
+	targetPath, err := targetFilePath(cfg, globalDir)
+	if err != nil {
+		return err
 	}
 
 	name := filepath.Base(cfg.path)
@@ -272,10 +272,6 @@ func runModulesInit(w io.Writer, args []string) error {
 	}
 	fmt.Fprintf(w, "Created: %s\n", displayPath)
 	if cfg.global {
-		globalDir, err := globalModulesDir()
-		if err != nil {
-			return fmt.Errorf("modules dir: %w", err)
-		}
 		reportSourcesVisibility(w, futiCfg, globalDir, initModuleName(cfg.path))
 	}
 	return nil

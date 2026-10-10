@@ -83,7 +83,15 @@ func runModulesUpdate(w io.Writer, stdin io.Reader, source discovery.Source, cac
 	if err != nil {
 		return fmt.Errorf("modules update: %w", err)
 	}
-	entries, backups := scanRoots(roots)
+	scanned, backups := scanRoots(roots)
+	// Модуль, видимый только через симлинк-каталог, не обновляем: замена
+	// дерева превратила бы симлинк в копию, а оригинал остался бы старым.
+	var entries []installedEntry
+	for _, e := range scanned {
+		if !e.ViaLink {
+			entries = append(entries, e)
+		}
+	}
 	for _, b := range backups {
 		fmt.Fprintf(os.Stderr, "Warning: found %s left by an interrupted update; inspect it and remove or restore it manually\n", b)
 	}

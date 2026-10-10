@@ -19,7 +19,6 @@ func writeFutiConfig(t *testing.T, body string) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_CONFIG_HOME", "")
 	dir := filepath.Join(home, ".config", "futi")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -281,7 +280,8 @@ func TestModulesRootsInvalidConfig(t *testing.T) {
 }
 
 // Модуль, доступный из двух корней (./.futi/qr — симлинк на пакет в
-// глобальном каталоге), обходится один раз: update не обновит его дважды.
+// глобальном каталоге), обходится один раз и под путём без симлинка, даже
+// если корень с симлинком обходится первым.
 func TestScanRootsDedupsModuleAcrossRoots(t *testing.T) {
 	skipSymlinksOnWindows(t)
 	global := t.TempDir()
@@ -291,8 +291,149 @@ func TestScanRootsDedupsModuleAcrossRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entries := scanInstalled([]moduleRoot{{Dir: global}, {Dir: local}})
+	entries := scanInstalled([]moduleRoot{{Dir: local}, {Dir: global}})
 	if len(entries) != 1 || entries[0].Dir != filepath.Join(global, "qr") {
 		t.Fatalf("entries = %+v, want one qr in %s", entries, global)
+	}
+}
+
+// В одном корне alias -> qr: list показывает qr (путь без симлинка), а
+// update без имени обновляет qr и не трогает alias — он остаётся симлинком.
+func TestModulesSymlinkAliasPrefersRealPath(t *testing.T) {
+	skipSymlinksOnWindows(t)
+	writeFutiConfig(t, "")
+	global := t.TempDir()
+	installFixtureModule(t, global, "qr", &metayaml.Meta{Lockfile: metayaml.Lockfile{Source: "/src/qr", Type: "bogus"}})
+	alias := filepath.Join(global, "alias")
+	if err := os.Symlink(filepath.Join(global, "qr"), alias); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	var list bytes.Buffer
+	if err := runModulesList(&list, nil); err != nil {
+		t.Fatalf("runModulesList: %v", err)
+	}
+	if !strings.Contains(list.String(), "qr") || strings.Contains(list.String(), "alias") {
+		t.Fatalf("list must show qr and not alias:\n%s", list.String())
+	}
+
+	var err error
+	stderr := captureStderr(t, func() {
+		err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader(""), discovery.NewGlobalSource(global), newTestCache(), nil)
+	})
+	if err == nil || err.Error() != "failed to update: qr" {
+		t.Fatalf("err = %v, want failure of qr only; stderr:\n%s", err, stderr)
+	}
+	if info, lerr := os.Lstat(alias); lerr != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("alias must stay a symlink, lstat = %v, %v", info, lerr)
+	}
+}
+
+// Модуль, видимый только через симлинк-каталог, list показывает, а update без
+// имени пропускает: замена дерева превратила бы симлинк в копию.
+func TestModulesUpdateAllSkipsSymlinkedModules(t *testing.T) {
+	skipSymlinksOnWindows(t)
+	writeFutiConfig(t, "")
+	global := t.TempDir()
+	pkgs := t.TempDir()
+	installFixtureModule(t, pkgs, "linked", &metayaml.Meta{Lockfile: metayaml.Lockfile{Type: "bogus"}})
+	alias := filepath.Join(global, "alias")
+	if err := os.Symlink(filepath.Join(pkgs, "linked"), alias); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	var out bytes.Buffer
+	var err error
+	stderr := captureStderr(t, func() {
+		err = runModulesUpdate(&out, strings.NewReader(""), discovery.NewGlobalSource(global), newTestCache(), nil)
+	})
+	if err != nil {
+		t.Fatalf("update must skip alias, err = %v; stderr:\n%s", err, stderr)
+	}
+	if info, lerr := os.Lstat(alias); lerr != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("alias must stay a symlink, lstat = %v, %v", info, lerr)
+	}
+}
+
+func TestModulesUpdateByNameThroughCompositeSource(t *testing.T) {
+	src := t.TempDir()
+	installFixtureModule(t, src, "qr", &metayaml.Meta{Lockfile: metayaml.Lockfile{Type: "bogus"}})
+	writeFutiConfig(t, sourceConfig(src, "dev", "tools"))
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	t.Chdir(t.TempDir())
+
+	cfg, err := loadFutiConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader(""), discovery.NewCompositeSource(cfg), newTestCache(), []string{"dev.tools.qr"})
+	// Неизвестный тип источника — значит, Resolve нашёл модуль и update дошёл до lockfile.
+	if err == nil || !strings.Contains(err.Error(), `unknown source type "bogus"`) {
+		t.Fatalf("err = %v, want unknown source type from updateAt", err)
+	}
+}
+
+// Глобальный каталог строго внутри source: модуль виден с относительным путём.
+func TestModulesInstallReportsNameWhenRootInsideSource(t *testing.T) {
+	src := t.TempDir()
+	global := filepath.Join(src, "modules")
+	writeFutiConfig(t, sourceConfig(src, "dev", ""))
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+	pkg := makeSourceModule(t, t.TempDir(), "qr", "")
+
+	var b bytes.Buffer
+	var err error
+	stderr := captureStderr(t, func() {
+		err = runModulesInstall(&b, nil, newTestCache(), []string{pkg})
+	})
+	if err != nil {
+		t.Fatalf("runModulesInstall: %v", err)
+	}
+	if strings.Contains(stderr, "is not listed") {
+		t.Fatalf("unexpected sources warning:\n%s", stderr)
+	}
+	if !strings.Contains(b.String(), "Module is available as dev.modules.qr") {
+		t.Fatalf("output lacks dev.modules.qr:\n%s", b.String())
+	}
+}
+
+func TestModulesInstallReportsNameWhenRootInsideUnprefixedSource(t *testing.T) {
+	src := t.TempDir()
+	global := filepath.Join(src, "modules")
+	writeFutiConfig(t, sourceConfig(src, "", ""))
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+	pkg := makeSourceModule(t, t.TempDir(), "qr", "")
+
+	var b bytes.Buffer
+	if err := runModulesInstall(&b, nil, newTestCache(), []string{pkg}); err != nil {
+		t.Fatalf("runModulesInstall: %v", err)
+	}
+	if !strings.Contains(b.String(), "Module is available as modules.qr\n") {
+		t.Fatalf("output lacks modules.qr:\n%s", b.String())
+	}
+}
+
+// Корень, вложенный в другой корень, — не цель удаления: source /x и
+// глобальный каталог /x/y с config.yaml; uninstall y удалил бы корень.
+func TestModulesUninstallRefusesNestedRoot(t *testing.T) {
+	src := t.TempDir()
+	installFixtureModule(t, src, "y", &metayaml.Meta{})
+	global := filepath.Join(src, "y")
+	writeFutiConfig(t, sourceConfig(src, "", ""))
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader(""), discovery.NewGlobalSource(src), newTestCache(), []string{"y", "--yes"})
+	if err == nil {
+		t.Fatal("uninstall of a modules root must be refused")
+	}
+	if _, statErr := os.Stat(filepath.Join(global, "config.yaml")); statErr != nil {
+		t.Fatalf("root %s must survive: %v", global, statErr)
 	}
 }
