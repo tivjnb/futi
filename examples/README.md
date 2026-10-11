@@ -18,10 +18,11 @@ mkdir -p ~/.config/futi/modules
 cp -r examples/* ~/.config/futi/modules/
 ```
 
-Or point futi at this directory in `~/.config/futi/config.yaml`:
+Or point futi at this directory in `~/.config/futi/config.yaml`. Once `sources` is non-empty, futi no longer reads `~/.config/futi/modules` on its own, so list it first to keep your existing modules:
 
 ```yaml
 sources:
+  - path: ~/.config/futi/modules   # your own modules (the default root)
   - path: /path/to/futi/examples
 ```
 

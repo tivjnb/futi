@@ -24,16 +24,16 @@ func runHelp(ctx context.Context, stdout, stderr io.Writer, source discovery.Sou
 	copy(full, req.positional)
 	full[len(req.positional)] = "help"
 
-	if manifest, root, cmdPath, ok := resolvePositional(source, full); ok {
-		if isExecutableHelp(source, loader, manifest, root, cmdPath) {
-			pa := &parsedArgs{flags: req.flags, args: req.args, argsList: req.argsList, dryRun: req.dryRun}
-			pa.namespace, pa.command = splitPath(full)
-			return runParsed(ctx, stdout, stderr, source, loader, pa)
-		}
+	manifest, root, cmdPath, resolved := resolvePositional(source, full)
+	if resolved && isExecutableHelp(source, loader, manifest, root, cmdPath) {
+		pa := &parsedArgs{flags: req.flags, args: req.args, argsList: req.argsList, dryRun: req.dryRun}
+		pa.namespace, pa.command = splitPath(full)
+		return runParsed(ctx, stdout, stderr, source, loader, pa)
 	}
 
-	if req.dryRun {
-		// Системная справка — не команда модуля: печатать нечего.
+	if req.dryRun && resolved {
+		// Системная справка — не команда модуля: печатать нечего. Для
+		// неразрешённого пути отказа нет: нужна обычная ошибка «не найден».
 		fmt.Fprintln(stderr, errDryRunScope)
 		return 1, nil
 	}

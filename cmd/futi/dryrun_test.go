@@ -37,6 +37,10 @@ func dryRunEnv(t *testing.T) (modules, workdir string) {
         required: true
     cmd: "echo {{quote .file}} {{.args}}"
 `
+	plain := "commands:\n  go:\n    cmd: \"echo go\"\n"
+	if err := os.WriteFile(filepath.Join(modules, "plain.yaml"), []byte(plain), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(modules, "m.yaml"), []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +94,17 @@ func TestFutiDryRun(t *testing.T) {
 		}
 	})
 
+	t.Run("несуществующий путь — ошибка как без dry-run", func(t *testing.T) {
+		_, wantErr, wantCode := run("nope", "help")
+		stdout, stderr, code := run("--dry-run", "nope", "help")
+		if wantCode != 1 || code != wantCode || stderr != wantErr || stdout != "" {
+			t.Fatalf("dry: code=%d stderr=%q stdout=%q; обычный: code=%d stderr=%q", code, stderr, stdout, wantCode, wantErr)
+		}
+		if strings.Contains(stderr, "applies only") {
+			t.Fatalf("ошибка отказа dry-run вместо «не найден»: %q", stderr)
+		}
+	})
+
 	const wantMsg = "--dry-run applies only to module commands"
 	for _, args := range [][]string{
 		{"--dry-run"},
@@ -104,7 +119,7 @@ func TestFutiDryRun(t *testing.T) {
 		{"--dry-run", "cache", "status"},
 		{"--dry-run", "completion", "bash"},
 		{"--dry-run", "__complete", ""},
-		{"--dry-run", "nope", "help"},
+		{"--dry-run", "plain", "help"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			stdout, stderr, code := run(args...)
@@ -116,7 +131,7 @@ func TestFutiDryRun(t *testing.T) {
 
 	t.Run("не первый аргумент — обычный флаг модуля", func(t *testing.T) {
 		_, stderr, code := run("m", "mk", "--dry-run")
-		if code == 0 || strings.Contains(stderr, wantMsg) {
+		if code == 0 || strings.Contains(stderr, wantMsg) || !strings.Contains(stderr, `unknown param "dry-run"`) {
 			t.Fatalf("code=%d stderr=%q", code, stderr)
 		}
 	})

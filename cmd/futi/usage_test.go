@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -136,5 +137,36 @@ func TestPrintChildrenLoadError(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "Fine module") {
 		t.Errorf("описание good потеряно:\n%s", buf.String())
+	}
+}
+
+// Описания в секции USAGE выровнены по одной колонке (строка --dry-run — тоже).
+func TestUsageDescriptionsAligned(t *testing.T) {
+	var buf bytes.Buffer
+	printUsage(&buf)
+	re := regexp.MustCompile(`^(  futi \S.*?\S)( {2,})(\S.*)$`)
+	col := -1
+	var sawDryRun bool
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if strings.HasPrefix(line, "The last positional") {
+			break
+		}
+		m := re.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		c := len(m[1]) + len(m[2])
+		if col == -1 {
+			col = c
+		}
+		if c != col {
+			t.Errorf("описание в колонке %d, want %d: %q", c, col, line)
+		}
+		if strings.Contains(line, "--dry-run") {
+			sawDryRun = true
+		}
+	}
+	if !sawDryRun {
+		t.Error("строка --dry-run с описанием не найдена в USAGE")
 	}
 }

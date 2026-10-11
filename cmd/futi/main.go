@@ -639,7 +639,7 @@ USAGE
   futi modules <subcommand>           Manage modules (install, uninstall, ...)
   futi cache refresh                  Refresh module cache
   futi completion <bash|zsh|fish>     Generate a shell completion script
-  futi --dry-run <namespace...> <command> ...  Print the command without running it
+  futi --dry-run <path...> <command>  Print the command without running it
   futi -h | --help
   futi --version                      Print version
 

@@ -17,7 +17,7 @@ if [ ! -d "$src" ]; then
 fi
 
 mkdir -p -- "$dest"
-name=$(basename -- "$(cd -- "$src" && pwd)")
+name=$(basename -- "$(CDPATH= cd -- "$src" && pwd)")
 archive="$name-$(date +%Y%m%d-%H%M%S).tar.gz"
 
 # Архив собираем вне src: dest может лежать внутри src.
