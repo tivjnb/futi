@@ -1066,10 +1066,18 @@ commands:
 
 func TestCompleteDryRunPrefix(t *testing.T) {
 	src := newTestSource(t)
-	want, wantDir := Complete(src, nil, nil, "")
 	got, gotDir := Complete(src, nil, []string{"--dry-run"}, "")
-	if !reflect.DeepEqual(got, want) || gotDir != wantDir {
-		t.Fatalf("Complete после --dry-run = %v/%v, want %v/%v", got, gotDir, want, wantDir)
+	var gotTexts []string
+	for _, m := range got {
+		gotTexts = append(gotTexts, m.Text)
+	}
+	// Корень без builtins (cache, completion, list, modules): модули на месте.
+	wantTexts := []string{"dev", "docker", "git", "meta", "tools"}
+	if !reflect.DeepEqual(gotTexts, wantTexts) || gotDir != ShellCompDirectiveNoFileComp {
+		t.Fatalf("Complete после --dry-run = %v/%v, want %v", gotTexts, gotDir, wantTexts)
+	}
+	if m, _ := Complete(src, nil, []string{"--dry-run", "cache"}, ""); len(m) != 0 {
+		t.Fatalf("подкоманды builtin с --dry-run не подсказываются, got %v", m)
 	}
 
 	matches, _ := Complete(src, nil, nil, "--d")

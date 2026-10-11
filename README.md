@@ -1093,7 +1093,7 @@ futi completion fish > ~/.config/fish/completions/futi.fish
 - **Пути в значениях флагов** — при вводе значения не-bool флага (`--out ~/<TAB>`, `--out=~/<TAB>`) shell предлагает файлы/директории; в будущем — только для параметров типа `path` (ROADMAP)
 - **Параметры default-команды** — модуль-однокоманда (`cmd` + `params`, без `commands`) подсказывает свои флаги: `futi meta <TAB>` → `--json`
 - **После bool-флага** — `futi docker build --force <TAB>` подсказывает оставшиеся (ещё не введённые) флаги (`--tag`); значения `true`/`false` не предлагаются: bool-флаг значения не берёт, `false` задаётся как `--force=false`
-- **Глобальные флаги** — `futi --<TAB>` → `--dry-run`, `--help`, `--version`; после ведущего `--dry-run` подсказки как для обычного вызова (`futi --dry-run dev <TAB>`)
+- **Глобальные флаги** — `futi --<TAB>` → `--dry-run`, `--help`, `--version`; после ведущего `--dry-run` подсказки как для обычного вызова, но без builtins (`cache`, `completion`, `list`, `modules`): `futi --dry-run <TAB>` показывает только модули и namespaces, `futi --dry-run dev <TAB>` — как обычно
 - **Builtins** — `futi cache <TAB>` → `refresh`/`status`/`clear`; `futi completion <TAB>` → `bash`/`zsh`/`fish`
 - **Валидация модуля** — `futi modules validate <TAB>` подсказывает полные имена модулей (`dev.deploy`), после первого аргумента подсказок нет
 - **Приоритет builtins** — на корне `cache`, `completion`, `list`, `modules` подсказываются как builtins даже при одноимённом модуле (CLI исполнит builtin); `futi cache <TAB>` не показывает команды такого модуля

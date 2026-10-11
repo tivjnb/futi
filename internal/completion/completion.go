@@ -184,6 +184,12 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 		}
 	}
 
+	// С --dry-run builtins (cache, modules, list, ...) недопустимы: ни их
+	// самих, ни их подкоманд не подсказываем.
+	if dryRunGiven && len(positionals) > 0 && IsReservedName(positionals[0]) {
+		return nil, ShellCompDirectiveNoFileComp
+	}
+
 	// Резолвим модуль progressive-ом. commandPath — остаток после namespace.
 	// Зарезервированное первое слово — builtin: CLI исполнит его до резолва
 	// модулей, поэтому одноимённый модуль не подсказываем.
@@ -252,7 +258,11 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 	}
 
 	// Модуль не зарезолвен — подсказываем children namespace и/или builtins.
-	return namespaceMatches(source, loader, positionals, toComplete)
+	matches, dir := namespaceMatches(source, loader, positionals, toComplete)
+	if dryRunGiven && len(positionals) == 0 {
+		matches = slices.DeleteFunc(matches, func(m Match) bool { return IsReservedName(m.Text) })
+	}
+	return matches, dir
 }
 
 // modulesBoolFlagNext сообщает, что последний токен flagArgs — булев флаг

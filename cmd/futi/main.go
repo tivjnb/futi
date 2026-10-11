@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tivjnb/futi/internal/completion"
 	"github.com/tivjnb/futi/internal/config"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
@@ -1109,10 +1110,10 @@ func dryRunRejected(args []string) bool {
 		return true
 	}
 	switch args[1] {
-	case "-h", "--help", "--version", "list", "modules", "completion", "__complete", "cache":
+	case "-h", "--help", "--version":
 		return true
 	}
-	return false
+	return completion.IsReservedName(args[1])
 }
 
 func main() {

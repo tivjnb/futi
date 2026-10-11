@@ -31,6 +31,11 @@ func dryRunEnv(t *testing.T) (modules, workdir string) {
     cmd: "touch {{quote .file}}"
   help:
     cmd: "echo helped"
+  say:
+    params:
+      - name: file
+        required: true
+    cmd: "echo {{quote .file}} {{.args}}"
 `
 	if err := os.WriteFile(filepath.Join(modules, "m.yaml"), []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
@@ -51,6 +56,13 @@ func TestFutiDryRun(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(workdir, "x y")); err == nil {
 			t.Fatal("файл создан: команда исполнилась")
+		}
+	})
+
+	t.Run("args после -- попадают в argv", func(t *testing.T) {
+		stdout, stderr, code := run("--dry-run", "m", "say", "--file", "x", "--", "extra", "more")
+		if code != 0 || stdout != "echo x extra more\n" {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 		}
 	})
 
