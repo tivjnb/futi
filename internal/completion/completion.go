@@ -284,7 +284,7 @@ func trimCommandPath(mod *execmodule.Module, commandPath []string) []string {
 // При пустом commandPath возвращает default-команду модуля (cmd + params),
 // если она есть (модуль-однокоманда); иначе notFoundError.
 func currentCommand(loader modulerunner.ModuleLoader, manifest, root string, commandPath []string) (*execmodule.Command, error) {
-	mod, err := modulerunner.LoadModule(loader, manifest, root)
+	mod, err := modulerunner.LoadModuleVerified(loader, manifest, root)
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +309,7 @@ func (e *notFoundError) Error() string { return e.msg }
 
 // moduleMatches формирует подсказки для зарезолвленного модуля.
 func moduleMatches(loader modulerunner.ModuleLoader, manifest, root string, commandPath []string, toComplete string) ([]Match, Directive) {
-	mod, err := modulerunner.LoadModule(loader, manifest, root)
+	mod, err := modulerunner.LoadModuleVerified(loader, manifest, root)
 	if err != nil {
 		// Невалидный/незагружаемый модуль — не падаем, просто ничего не подсказываем
 		// (консистентно с runList через ParseModule).

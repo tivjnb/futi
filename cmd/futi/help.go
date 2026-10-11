@@ -53,7 +53,7 @@ func resolvePositional(source discovery.Source, positional []string) (manifest, 
 // команда "help" (листовая с Cmd) или модуль с default cmd. Возвращает false
 // для веток без Cmd и несуществующих команд — тогда показываем системную справку.
 func isExecutableHelp(source discovery.Source, loader modulerunner.ModuleLoader, manifest, root string, cmdPath []string) bool {
-	mod, err := modulerunner.LoadModule(loader, manifest, root)
+	mod, err := modulerunner.LoadModuleVerified(loader, manifest, root)
 	if err != nil {
 		return false
 	}
@@ -107,7 +107,7 @@ func runSystemHelp(w io.Writer, source discovery.Source, loader modulerunner.Mod
 		return &helpModuleNotFoundError{path: strings.Join(positional, " ")}
 	}
 
-	mod, err := modulerunner.LoadModule(loader, manifest, root)
+	mod, err := modulerunner.LoadModuleVerified(loader, manifest, root)
 	if err != nil {
 		return fmt.Errorf("help: %w", err)
 	}

@@ -27,7 +27,8 @@ type ModuleLoader interface {
 // свежести/аутентичности модуля относительно файла манифеста (проверка SHA-256).
 // Реализует *modulecache.Cache (LoadModuleVerified). Используется при ИСПОЛНЕНИИ
 // команды (run), где отравленный/устаревший кэш мог бы привести к выполнению
-// чужого кода. list/completion/help используют обычный LoadModule (быстрый).
+// чужого кода, а также в системной справке и completion (иначе они показывают
+// устаревший манифест). list использует обычный LoadModule (быстрый).
 type VerifiedLoader interface {
 	LoadModuleVerified(manifestPath, moduleRoot string) (*execmodule.Module, error)
 }
@@ -74,7 +75,8 @@ func Run(
 	loader ModuleLoader,
 ) error {
 	// Исполняемый модуль загружаем со строгой проверкой свежести/аутентичности
-	// (SHA-256). list/completion/help используют обычный LoadModule (быстрый).
+	// (SHA-256); так же — системная справка и completion. list использует
+	// обычный LoadModule (быстрый).
 	r, err := resolveCommand(source, namespace, command, loader)
 	if err != nil {
 		return err

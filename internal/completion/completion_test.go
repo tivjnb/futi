@@ -9,6 +9,7 @@ import (
 
 	"github.com/tivjnb/futi/internal/config"
 	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/modulecache"
 )
 
 func writeFile(t *testing.T, path, content string) {
@@ -963,5 +964,41 @@ func TestModulesFlagsReturnsCopy(t *testing.T) {
 	first[0] = "--mutated"
 	if got := ModulesFlags("init")[0]; got != want {
 		t.Errorf("ModulesFlags(init)[0] = %q, want %q", got, want)
+	}
+}
+
+func TestCompleteReloadsChangedManifest(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stale.yaml")
+	writeFile(t, path, `
+name: stale
+commands:
+  run:
+    params:
+      - name: old
+        type: string
+    cmd: "echo {{.old}}"
+`)
+	src := discovery.NewGlobalSource(dir)
+	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
+	manifest, root, err := src.Resolve("stale")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if _, err := cache.LoadModule(manifest, root); err != nil {
+		t.Fatalf("warm cache: %v", err)
+	}
+	writeFile(t, path, `
+name: stale
+commands:
+  run:
+    params:
+      - name: fresh
+        type: string
+    cmd: "echo {{.fresh}}"
+`)
+	matches, _ := Complete(src, cache, []string{"stale", "run"}, "--")
+	if got := text(matches); !contains(got, "--fresh") || contains(got, "--old") {
+		t.Errorf("Complete = %v, want --fresh and no --old", got)
 	}
 }
