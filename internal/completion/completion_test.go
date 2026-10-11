@@ -1063,3 +1063,36 @@ commands:
 		t.Errorf("Complete = %v, want newcmd and no oldcmd", got)
 	}
 }
+
+func TestCompleteDryRunPrefix(t *testing.T) {
+	src := newTestSource(t)
+	want, wantDir := Complete(src, nil, nil, "")
+	got, gotDir := Complete(src, nil, []string{"--dry-run"}, "")
+	if !reflect.DeepEqual(got, want) || gotDir != wantDir {
+		t.Fatalf("Complete после --dry-run = %v/%v, want %v/%v", got, gotDir, want, wantDir)
+	}
+
+	matches, _ := Complete(src, nil, nil, "--d")
+	var texts []string
+	for _, m := range matches {
+		texts = append(texts, m.Text)
+	}
+	if !reflect.DeepEqual(texts, []string{"--dry-run"}) {
+		t.Fatalf("кандидаты на --d = %v, want [--dry-run]", texts)
+	}
+	matches, _ = Complete(src, nil, nil, "--")
+	texts = nil
+	for _, m := range matches {
+		texts = append(texts, m.Text)
+	}
+	if !reflect.DeepEqual(texts, []string{"--dry-run", "--help", "--version"}) {
+		t.Fatalf("кандидаты на -- = %v", texts)
+	}
+}
+
+func TestCompleteAfterDryRunNoGlobalFlags(t *testing.T) {
+	src := newTestSource(t)
+	if matches, _ := Complete(src, nil, []string{"--dry-run"}, "--"); len(matches) != 0 {
+		t.Fatalf("после --dry-run глобальные флаги не подсказываются, got %v", matches)
+	}
+}

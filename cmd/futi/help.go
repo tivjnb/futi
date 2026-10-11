@@ -26,12 +26,17 @@ func runHelp(ctx context.Context, stdout, stderr io.Writer, source discovery.Sou
 
 	if manifest, root, cmdPath, ok := resolvePositional(source, full); ok {
 		if isExecutableHelp(source, loader, manifest, root, cmdPath) {
-			pa := &parsedArgs{flags: req.flags, args: req.args, argsList: req.argsList}
+			pa := &parsedArgs{flags: req.flags, args: req.args, argsList: req.argsList, dryRun: req.dryRun}
 			pa.namespace, pa.command = splitPath(full)
 			return runParsed(ctx, stdout, stderr, source, loader, pa)
 		}
 	}
 
+	if req.dryRun {
+		// Системная справка — не команда модуля: печатать нечего.
+		fmt.Fprintln(stderr, errDryRunScope)
+		return 1, nil
+	}
 	return systemHelpCode(stdout, stderr, source, loader, req.positional), nil
 }
 

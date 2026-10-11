@@ -58,6 +58,9 @@ func IsReservedName(name string) bool {
 	return false
 }
 
+// globalFlags — глобальные флаги futi, подсказываются на позиции 0.
+var globalFlags = []string{"--dry-run", "--help", "--version"}
+
 // cacheSubcommands — подкоманды `futi cache`.
 var cacheSubcommands = []string{"clear", "refresh", "status"}
 
@@ -150,6 +153,23 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 		if a == "--" {
 			return nil, ShellCompDirectiveDefault
 		}
+	}
+
+	// Ведущий глобальный --dry-run — не часть пути: снимаем до разбора
+	// positionals (иначе токен с "-" сочтётся началом флагов).
+	dryRunGiven := len(args) > 0 && args[0] == "--dry-run"
+	if dryRunGiven {
+		args = args[1:]
+	}
+
+	// На позиции 0 слово с "-" — глобальный флаг futi.
+	if len(args) == 0 && strings.HasPrefix(toComplete, "-") {
+		flags := globalFlags
+		if dryRunGiven {
+			// --dry-run уже введён, а --help/--version с ним невозможны.
+			flags = nil
+		}
+		return filterMatches(strMatches(flags), toComplete), ShellCompDirectiveNoFileComp
 	}
 
 	// Путь (namespace + command) — слова от начала до первого флагового токена,
