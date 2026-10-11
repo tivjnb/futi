@@ -1063,3 +1063,44 @@ commands:
 		t.Errorf("Complete = %v, want newcmd and no oldcmd", got)
 	}
 }
+
+func TestCompleteDryRunPrefix(t *testing.T) {
+	src := newTestSource(t)
+	got, gotDir := Complete(src, nil, []string{"--dry-run"}, "")
+	var gotTexts []string
+	for _, m := range got {
+		gotTexts = append(gotTexts, m.Text)
+	}
+	// Корень без builtins (cache, completion, list, modules): модули на месте.
+	wantTexts := []string{"dev", "docker", "git", "meta", "tools"}
+	if !reflect.DeepEqual(gotTexts, wantTexts) || gotDir != ShellCompDirectiveNoFileComp {
+		t.Fatalf("Complete после --dry-run = %v/%v, want %v", gotTexts, gotDir, wantTexts)
+	}
+	if m, _ := Complete(src, nil, []string{"--dry-run", "cache"}, ""); len(m) != 0 {
+		t.Fatalf("подкоманды builtin с --dry-run не подсказываются, got %v", m)
+	}
+
+	matches, _ := Complete(src, nil, nil, "--d")
+	var texts []string
+	for _, m := range matches {
+		texts = append(texts, m.Text)
+	}
+	if !reflect.DeepEqual(texts, []string{"--dry-run"}) {
+		t.Fatalf("кандидаты на --d = %v, want [--dry-run]", texts)
+	}
+	matches, _ = Complete(src, nil, nil, "--")
+	texts = nil
+	for _, m := range matches {
+		texts = append(texts, m.Text)
+	}
+	if !reflect.DeepEqual(texts, []string{"--dry-run", "--help", "--version"}) {
+		t.Fatalf("кандидаты на -- = %v", texts)
+	}
+}
+
+func TestCompleteAfterDryRunNoGlobalFlags(t *testing.T) {
+	src := newTestSource(t)
+	if matches, _ := Complete(src, nil, []string{"--dry-run"}, "--"); len(matches) != 0 {
+		t.Fatalf("после --dry-run глобальные флаги не подсказываются, got %v", matches)
+	}
+}

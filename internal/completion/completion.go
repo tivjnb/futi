@@ -58,6 +58,9 @@ func IsReservedName(name string) bool {
 	return false
 }
 
+// globalFlags — глобальные флаги futi, подсказываются на позиции 0.
+var globalFlags = []string{"--dry-run", "--help", "--version"}
+
 // cacheSubcommands — подкоманды `futi cache`.
 var cacheSubcommands = []string{"clear", "refresh", "status"}
 
@@ -152,6 +155,23 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 		}
 	}
 
+	// Ведущий глобальный --dry-run — не часть пути: снимаем до разбора
+	// positionals (иначе токен с "-" сочтётся началом флагов).
+	dryRunGiven := len(args) > 0 && args[0] == "--dry-run"
+	if dryRunGiven {
+		args = args[1:]
+	}
+
+	// На позиции 0 слово с "-" — глобальный флаг futi.
+	if len(args) == 0 && strings.HasPrefix(toComplete, "-") {
+		flags := globalFlags
+		if dryRunGiven {
+			// --dry-run уже введён, а --help/--version с ним невозможны.
+			flags = nil
+		}
+		return filterMatches(strMatches(flags), toComplete), ShellCompDirectiveNoFileComp
+	}
+
 	// Путь (namespace + command) — слова от начала до первого флагового токена,
 	// как в parseArgs (cmd/futi/main.go): флаг — токен с "-" и длиннее 1 символа.
 	// Всё после первого флага — флаги и их значения, не слова пути.
@@ -162,6 +182,12 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 			positionals, flagArgs = args[:i], args[i:]
 			break
 		}
+	}
+
+	// С --dry-run builtins (cache, modules, list, ...) недопустимы: ни их
+	// самих, ни их подкоманд не подсказываем.
+	if dryRunGiven && len(positionals) > 0 && IsReservedName(positionals[0]) {
+		return nil, ShellCompDirectiveNoFileComp
 	}
 
 	// Резолвим модуль progressive-ом. commandPath — остаток после namespace.
@@ -232,7 +258,11 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 	}
 
 	// Модуль не зарезолвен — подсказываем children namespace и/или builtins.
-	return namespaceMatches(source, loader, positionals, toComplete)
+	matches, dir := namespaceMatches(source, loader, positionals, toComplete)
+	if dryRunGiven && len(positionals) == 0 {
+		matches = slices.DeleteFunc(matches, func(m Match) bool { return IsReservedName(m.Text) })
+	}
+	return matches, dir
 }
 
 // modulesBoolFlagNext сообщает, что последний токен flagArgs — булев флаг

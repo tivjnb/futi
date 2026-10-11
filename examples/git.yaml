@@ -1,0 +1,24 @@
+name: git
+description: Everyday git shortcuts
+commands:
+  status:
+    description: Short status of the working tree
+    cmd: "git status --short --branch"
+  log:
+    description: Compact commit history
+    params:
+      - name: count
+        type: int
+        default: "10"
+        description: Number of commits to show
+    cmd: "git log --oneline -n {{.count}}"
+  switch:
+    description: Switch to an existing branch
+    params:
+      - name: branch
+        required: true
+        description: Branch name
+    cmd: "git switch -- {{quote .branch}}"
+  amend-noedit:
+    description: Add staged changes to the last commit, keeping its message
+    cmd: "git commit --amend --no-edit"

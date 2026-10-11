@@ -1,0 +1,18 @@
+name: files
+description: File search and counting helpers
+commands:
+  large:
+    description: Find files larger than a given size
+    params:
+      - name: dir
+        default: "."
+        description: Directory to search
+      - name: size
+        default: "100M"
+        description: Minimum size in find(1) notation, for example 100M or 2G
+    cmd: "find {{quote .dir}} -type f -size +{{quote .size}}"
+  count:
+    description: Count lines in the given files
+    positional:
+      min: 1
+    cmd: "wc -l --{{range .args_list}} {{quote .}}{{end}}"

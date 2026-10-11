@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tivjnb/futi/internal/completion"
 	"github.com/tivjnb/futi/internal/config"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
@@ -40,6 +41,7 @@ type parsedArgs struct {
 	flags     []string // сырые флаги между путём и `--` (привязка — bindFlags)
 	args      string   // строка после -- (как есть, joined)
 	argsList  []string // args после shlex-разбора
+	dryRun    bool     // глобальный --dry-run: напечатать команду, не исполняя
 }
 
 // listRequest сигнализирует, что запрошен листинг namespace или модуля.
@@ -63,6 +65,7 @@ type helpRequest struct {
 	flags      []string
 	args       string
 	argsList   []string
+	dryRun     bool // глобальный --dry-run (переносится в пользовательскую help)
 }
 
 func (e *helpRequest) Error() string { return "help requested" }
@@ -636,6 +639,7 @@ USAGE
   futi modules <subcommand>           Manage modules (install, uninstall, ...)
   futi cache refresh                  Refresh module cache
   futi completion <bash|zsh|fish>     Generate a shell completion script
+  futi --dry-run <path...> <command>  Print the command without running it
   futi -h | --help
   futi --version                      Print version
 
@@ -1069,6 +1073,17 @@ func runParsed(ctx context.Context, stdout, stderr io.Writer, source discovery.S
 	if help {
 		return systemHelpCode(stdout, stderr, source, loader, helpPath), nil
 	}
+	if pa.dryRun {
+		// Только Prepare: команда и хуки не исполняются. Ошибки печатаем и
+		// кодируем так же, как ошибки Run.
+		p, err := modulerunner.Prepare(source, pa.namespace, pa.command, params, pa.args, pa.argsList, loader)
+		if err != nil {
+			fmt.Fprintf(stderr, "%s\n", formatRunError(err))
+			return exitCodeFromError(err), err
+		}
+		fmt.Fprintln(stdout, shellJoin(p.Argv))
+		return 0, nil
+	}
 	if err := modulerunner.Run(ctx, source, pa.namespace, pa.command, params, pa.args, pa.argsList, stdout, stderr, loader); err != nil {
 		fmt.Fprintf(stderr, "%s\n", formatRunError(err))
 		return exitCodeFromError(err), err
@@ -1076,7 +1091,40 @@ func runParsed(ctx context.Context, stdout, stderr io.Writer, source discovery.S
 	return 0, nil
 }
 
+// errDryRunScope — текст ошибки: --dry-run применим только к командам модулей.
+const errDryRunScope = "futi: --dry-run applies only to module commands"
+
+// stripDryRun снимает ведущий --dry-run из args (args[0] — имя программы).
+// Флаг распознаётся только первым аргументом: дальше он обычный флаг модуля.
+func stripDryRun(args []string) (rest []string, dryRun bool) {
+	if len(args) > 1 && args[1] == "--dry-run" {
+		return append([]string{args[0]}, args[2:]...), true
+	}
+	return args, false
+}
+
+// dryRunRejected сообщает, что при --dry-run первый аргумент относится к
+// встроенным командам и быстрым путям, а не к командам модулей.
+func dryRunRejected(args []string) bool {
+	if len(args) < 2 {
+		return true
+	}
+	switch args[1] {
+	case "-h", "--help", "--version":
+		return true
+	}
+	return completion.IsReservedName(args[1])
+}
+
 func main() {
+	// --dry-run снимается первым, до всех быстрых путей.
+	var dryRun bool
+	os.Args, dryRun = stripDryRun(os.Args)
+	if dryRun && dryRunRejected(os.Args) {
+		fmt.Fprintln(os.Stderr, errDryRunScope)
+		os.Exit(1)
+	}
+
 	if len(os.Args) < 2 {
 		printUsage(os.Stderr)
 		os.Exit(1)
@@ -1220,6 +1268,9 @@ func main() {
 		var listReq *listRequest
 		var helpReq *helpRequest
 		switch {
+		case dryRun && (errors.As(err, &listReq) || errors.Is(err, errHelp)):
+			fmt.Fprintln(os.Stderr, errDryRunScope)
+			os.Exit(1)
 		case errors.As(err, &listReq):
 			source, err := createSource(cache, globalSource)
 			if err != nil {
@@ -1237,6 +1288,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "source: %v\n", err)
 				os.Exit(1)
 			}
+			helpReq.dryRun = dryRun
 			code, runErr := runHelp(context.Background(), os.Stdout, os.Stderr, source, cache, helpReq)
 			if runErr != nil {
 				exitAfterRunError(runErr)
@@ -1259,6 +1311,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "source: %v\n", err)
 		os.Exit(1)
 	}
+	pa.dryRun = dryRun
 	code, runErr := runParsed(context.Background(), os.Stdout, os.Stderr, source, cache, pa)
 	if runErr != nil {
 		exitAfterRunError(runErr)
