@@ -21,7 +21,7 @@ commands:
         type: int
         default: "100"
         description: Number of lines from the end of the logs
-    cmd: "docker logs --tail {{.tail}}{{if .follow}} --follow{{end}} {{quote .container}}"
+    cmd: "docker logs --tail {{.tail}}{{if .follow}} --follow{{end}} -- {{quote .container}}"
   prune:
-    description: "Remove ALL unused containers, networks and dangling images. IRREVERSIBLE: removed data cannot be restored"
+    description: "Remove ALL stopped containers, unused networks, dangling images and build cache. IRREVERSIBLE: removed data cannot be restored"
     cmd: "docker system prune --force"

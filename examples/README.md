@@ -39,7 +39,7 @@ futi files count -- "my file.txt" other.txt
 
 ```bash
 futi --dry-run git switch --branch feat/x
-# git switch feat/x
+# git switch -- feat/x
 futi --dry-run docker logs --container web --follow
-# docker logs --tail 100 --follow web
+# docker logs --tail 100 --follow -- web
 ```

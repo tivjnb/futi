@@ -12,7 +12,7 @@ commands:
         description: Minimum size in find(1) notation, for example 100M or 2G
     cmd: "find {{quote .dir}} -type f -size +{{quote .size}}"
   count:
-    description: Count the arguments passed after --
+    description: Count lines in the given files
     positional:
       min: 1
-    cmd: "sh -c 'echo \"$#\"' sh{{range .args_list}} {{quote .}}{{end}}"
+    cmd: "wc -l --{{range .args_list}} {{quote .}}{{end}}"

@@ -18,7 +18,7 @@ commands:
       - name: branch
         required: true
         description: Branch name
-    cmd: "git switch {{quote .branch}}"
+    cmd: "git switch -- {{quote .branch}}"
   amend-noedit:
     description: Add staged changes to the last commit, keeping its message
     cmd: "git commit --amend --no-edit"

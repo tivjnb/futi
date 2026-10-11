@@ -18,7 +18,12 @@ fi
 
 mkdir -p -- "$dest"
 name=$(basename -- "$(cd -- "$src" && pwd)")
-archive="$dest/$name-$(date +%Y%m%d-%H%M%S).tar.gz"
+archive="$name-$(date +%Y%m%d-%H%M%S).tar.gz"
 
-tar -czf "$archive" -C "$src" .
-echo "created $archive"
+# Архив собираем вне src: dest может лежать внутри src.
+tmp=$(mktemp -d)
+trap 'rm -rf -- "$tmp"' EXIT
+
+tar -czf "$tmp/$archive" -C "$src" .
+mv -- "$tmp/$archive" "$dest/$archive"
+echo "created $dest/$archive"
