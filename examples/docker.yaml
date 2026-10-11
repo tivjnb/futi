@@ -1,0 +1,27 @@
+name: docker
+description: Docker shortcuts
+commands:
+  ps:
+    description: List containers
+    params:
+      - name: all
+        type: bool
+        description: Include stopped containers
+    cmd: "docker ps{{if .all}} --all{{end}}"
+  logs:
+    description: Show container logs
+    params:
+      - name: container
+        required: true
+        description: Container name or ID
+      - name: follow
+        type: bool
+        description: Follow log output
+      - name: tail
+        type: int
+        default: "100"
+        description: Number of lines from the end of the logs
+    cmd: "docker logs --tail {{.tail}}{{if .follow}} --follow{{end}} {{quote .container}}"
+  prune:
+    description: "Remove ALL unused containers, networks and dangling images. IRREVERSIBLE: removed data cannot be restored"
+    cmd: "docker system prune --force"
