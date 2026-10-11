@@ -967,7 +967,7 @@ func TestModulesFlagsReturnsCopy(t *testing.T) {
 	}
 }
 
-func TestCompleteReloadsChangedManifest(t *testing.T) {
+func TestCompleteParamsReloadsChangedManifest(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "stale.yaml")
 	writeFile(t, path, `
@@ -1000,5 +1000,36 @@ commands:
 	matches, _ := Complete(src, cache, []string{"stale", "run"}, "--")
 	if got := text(matches); !contains(got, "--fresh") || contains(got, "--old") {
 		t.Errorf("Complete = %v, want --fresh and no --old", got)
+	}
+}
+
+// Путь moduleMatches (подсказка команд модуля без "--") при устаревшей записи.
+func TestCompleteCommandsReloadsChangedManifest(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stale.yaml")
+	writeFile(t, path, `
+name: stale
+commands:
+  oldcmd:
+    cmd: "echo old"
+`)
+	src := discovery.NewGlobalSource(dir)
+	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
+	manifest, root, err := src.Resolve("stale")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if _, err := cache.LoadModule(manifest, root); err != nil {
+		t.Fatalf("warm cache: %v", err)
+	}
+	writeFile(t, path, `
+name: stale
+commands:
+  newcmd:
+    cmd: "echo new"
+`)
+	matches, _ := Complete(src, cache, []string{"stale"}, "")
+	if got := text(matches); !contains(got, "newcmd") || contains(got, "oldcmd") {
+		t.Errorf("Complete = %v, want newcmd and no oldcmd", got)
 	}
 }

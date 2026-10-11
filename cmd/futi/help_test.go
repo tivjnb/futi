@@ -337,7 +337,7 @@ func TestParseArgsHelpDotNamespaceMatchesSpacedPath(t *testing.T) {
 
 // staleCacheSource создаёт глобальный модуль stale.yaml, прогревает кэш через
 // быстрый LoadModule и затем переписывает манифест на диске. Возвращает source,
-// кэш с устаревшей записью и путь к манифесту.
+// кэш с устаревшей записью.
 func staleCacheSource(t *testing.T, before, after string) (discovery.Source, *modulecache.Cache) {
 	t.Helper()
 	dir := t.TempDir()
