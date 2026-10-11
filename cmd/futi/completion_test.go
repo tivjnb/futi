@@ -360,7 +360,18 @@ func TestCompletionModulesFlagsAcceptedByParsers(t *testing.T) {
 			t.Errorf("%s: completion suggests flags %v, but no parser is registered in the test", sub, flags)
 			continue
 		}
+		valueFlags := make(map[string]bool)
+		for _, f := range completion.ModulesValueFlags(sub) {
+			valueFlags[f] = true
+		}
 		for _, flag := range flags {
+			// Разбиение на булевы и со значением совпадает с парсером: флаг со
+			// значением без значения — ошибка "requires a value", булев — нет.
+			err := parse([]string{"x", flag})
+			needsValue := err != nil && strings.Contains(err.Error(), "requires a value")
+			if needsValue != valueFlags[flag] {
+				t.Errorf("%s: flag %s: completion value-flag=%v, parser requires value=%v (err=%v)", sub, flag, valueFlags[flag], needsValue, err)
+			}
 			// Значение и позиционный аргумент: флаг с аргументом забирает "val",
 			// булев оставляет его позиционным — «unknown flag» бывает только у
 			// флага, которого парсер не знает.

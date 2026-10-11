@@ -628,15 +628,14 @@ func TestCompleteStringFlagValuePathStaysResolved(t *testing.T) {
 }
 
 func TestCompleteBuiltinFlagsKeepBehavior(t *testing.T) {
-	// Builtins с флагами (модуль не зарезолвен): поведение то же, что до F70.
+	// Builtins с флагами (модуль не зарезолвен).
 	src := newTestSource(t)
 	cases := []struct {
 		args []string
 		want Directive
 	}{
-		// после флага без "=" — значение user-supplied: файлы
+		// флаг подкоманды, неизвестный completion — значение user-supplied: файлы
 		{[]string{"modules", "update", "--all"}, ShellCompDirectiveDefault},
-		{[]string{"modules", "install", "x", "--local"}, ShellCompDirectiveDefault},
 		// после завершённого значения/короткого флага — подсказок нет
 		{[]string{"modules", "update", "--skip-attach", "foo"}, ShellCompDirectiveNoFileComp},
 		{[]string{"cache", "refresh", "-v"}, ShellCompDirectiveNoFileComp},
@@ -645,6 +644,37 @@ func TestCompleteBuiltinFlagsKeepBehavior(t *testing.T) {
 		matches, directive := Complete(src, nil, c.args, "")
 		if len(matches) != 0 || directive != c.want {
 			t.Errorf("args=%v: matches=%v directive=%v, want none/%v", c.args, text(matches), directive, c.want)
+		}
+	}
+}
+
+// TestCompleteModulesAfterFlag: после флага `futi modules <sub>` без "=":
+// флаг со значением и источник install — файлы; булев флаг — оставшиеся флаги.
+func TestCompleteModulesAfterFlag(t *testing.T) {
+	src := newTestSource(t)
+	cases := []struct {
+		args []string
+		want []string
+		dir  Directive
+	}{
+		{[]string{"modules", "install", "x", "--local"},
+			[]string{"--from-archive", "--from-git", "--from-local", "--namespace", "--ref", "--skip-attach", "--yes"}, ShellCompDirectiveNoFileComp},
+		{[]string{"modules", "install", "--local"}, nil, ShellCompDirectiveDefault},
+		{[]string{"modules", "install", "--namespace"}, nil, ShellCompDirectiveDefault},
+		{[]string{"modules", "install", "--namespace", "ns", "--yes"}, nil, ShellCompDirectiveDefault},
+		{[]string{"modules", "install", "x", "--namespace", "ns", "--yes"},
+			[]string{"--from-archive", "--from-git", "--from-local", "--local", "--ref", "--skip-attach"}, ShellCompDirectiveNoFileComp},
+		{[]string{"modules", "install", "--namespace", "ns", "src", "--yes"},
+			[]string{"--from-archive", "--from-git", "--from-local", "--local", "--ref", "--skip-attach"}, ShellCompDirectiveNoFileComp},
+		{[]string{"modules", "uninstall", "foo", "--force"},
+			[]string{"--skip-detach", "--strict-detach", "--yes"}, ShellCompDirectiveNoFileComp},
+		{[]string{"modules", "init", "--global"},
+			[]string{"--command", "--default-cmd", "--desc"}, ShellCompDirectiveNoFileComp},
+	}
+	for _, c := range cases {
+		matches, directive := Complete(src, nil, c.args, "")
+		if got := text(matches); !reflect.DeepEqual(got, c.want) && !(len(got) == 0 && len(c.want) == 0) || directive != c.dir {
+			t.Errorf("args=%v: matches=%v directive=%v, want %v/%v", c.args, got, directive, c.want, c.dir)
 		}
 	}
 }
