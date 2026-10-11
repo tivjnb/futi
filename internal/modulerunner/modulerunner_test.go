@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1303,12 +1304,9 @@ func TestListCommandsSortedByName(t *testing.T) {
 	}
 }
 
-// TestPrepareReturnsArgvWithoutExec: Prepare отдаёт argv и метаданные модуля,
-// ничего не исполняя.
-func TestPrepareReturnsArgvWithoutExec(t *testing.T) {
-	dir := t.TempDir()
-	work := t.TempDir()
-	target := filepath.Join(work, "a b'c")
+// writePrepFixture пишет модуль prep с командой mk (required-параметр file) в dir.
+func writePrepFixture(t *testing.T, dir string) discovery.Source {
+	t.Helper()
 	manifest := []byte(`
 name: prep
 commands:
@@ -1322,14 +1320,23 @@ commands:
 	if err := os.WriteFile(filepath.Join(dir, "prep.yaml"), manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
-	source := discovery.NewGlobalSource(dir)
+	return discovery.NewGlobalSource(dir)
+}
+
+// TestPrepareReturnsArgvWithoutExec: Prepare отдаёт argv и метаданные модуля,
+// ничего не исполняя.
+func TestPrepareReturnsArgvWithoutExec(t *testing.T) {
+	dir := t.TempDir()
+	work := t.TempDir()
+	target := filepath.Join(work, "a b'c")
+	source := writePrepFixture(t, dir)
 
 	p, err := Prepare(source, "prep", "mk", map[string]string{"file": target}, "", nil, nil)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 	want := []string{"touch", target}
-	if len(p.Argv) != 2 || p.Argv[0] != want[0] || p.Argv[1] != want[1] {
+	if !slices.Equal(p.Argv, want) {
 		t.Fatalf("Argv = %q, want %q", p.Argv, want)
 	}
 	if p.ModuleName != "prep" {
@@ -1347,24 +1354,14 @@ commands:
 
 func TestPrepareValidationError(t *testing.T) {
 	dir := t.TempDir()
-	manifest := []byte(`
-name: prep
-commands:
-  mk:
-    params:
-      - name: file
-        type: string
-        required: true
-    cmd: "touch {{quote .file}}"
-`)
-	if err := os.WriteFile(filepath.Join(dir, "prep.yaml"), manifest, 0o644); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
-	source := discovery.NewGlobalSource(dir)
+	source := writePrepFixture(t, dir)
 
 	p, err := Prepare(source, "prep", "mk", map[string]string{}, "", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for missing required param")
+	}
+	if !strings.Contains(err.Error(), `required param "file" missing`) {
+		t.Errorf("err = %v, want mention of missing required param \"file\"", err)
 	}
 	if p != nil {
 		t.Errorf("Prepared = %+v, want nil", p)
