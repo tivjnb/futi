@@ -7,6 +7,7 @@ package completion
 
 import (
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 
@@ -94,6 +95,20 @@ func ModulesFlags(sub string) []string {
 	return nil
 }
 
+// modulesValueFlags — флаги `futi modules <sub>`, берущие значение (остальные
+// флаги подкоманды булевы).
+var modulesValueFlags = map[string][]string{
+	"add_command": {"--cmd", "--desc"},
+	"init":        {"--command", "--default-cmd", "--desc"},
+	"install":     {"--namespace", "--ref"},
+}
+
+// ModulesValueFlags возвращает флаги подкоманды `futi modules <sub>`, берущие
+// значение. Экспортируется для теста согласованности с парсерами в cmd/futi.
+func ModulesValueFlags(sub string) []string {
+	return append([]string(nil), modulesValueFlags[sub]...)
+}
+
 // modulesInitFlags — флаги `futi modules init` (бывший futi init).
 var modulesInitFlags = []string{"--command", "--default-cmd", "--desc", "--global"}
 
@@ -167,7 +182,15 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 	// user-supplied: разрешаем шеллу файловое дополнение (пути в значениях).
 	// В будущем ограничим параметрами типа path (ROADMAP в README).
 	if len(args) > 0 && strings.HasPrefix(args[len(args)-1], "--") && !strings.Contains(args[len(args)-1], "=") && !strings.HasPrefix(toComplete, "--") {
-		if !moduleFound || !isBoolFlag(loader, manifest, root, commandPath, flagName(args[len(args)-1])) {
+		if !moduleFound {
+			if !modulesBoolFlagNext(positionals, flagArgs) {
+				return nil, ShellCompDirectiveDefault
+			}
+			// Булев флаг `futi modules <sub>`: подсказываем оставшиеся флаги.
+			flags := ModulesFlags(positionals[1])
+			return filterMatches(withoutUsed(flagMatches(flags, toComplete), flagArgs), toComplete), ShellCompDirectiveNoFileComp
+		}
+		if !isBoolFlag(loader, manifest, root, commandPath, flagName(args[len(args)-1])) {
 			return nil, ShellCompDirectiveDefault
 		}
 	}
@@ -210,6 +233,48 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 
 	// Модуль не зарезолвен — подсказываем children namespace и/или builtins.
 	return namespaceMatches(source, loader, positionals, toComplete)
+}
+
+// modulesBoolFlagNext сообщает, что последний токен flagArgs — булев флаг
+// подкоманды `futi modules <sub>`, после которого нужно подсказывать флаги, а
+// не файлы. Для install при ещё не введённом <source> — false: источник это
+// путь/URL, нужно файловое дополнение.
+func modulesBoolFlagNext(positionals, flagArgs []string) bool {
+	if len(positionals) < 2 || positionals[0] != "modules" || len(flagArgs) == 0 {
+		return false
+	}
+	sub := positionals[1]
+	if ModulesFlags(sub) == nil {
+		return false
+	}
+	valueFlags := make(map[string]bool)
+	for _, f := range modulesValueFlags[sub] {
+		valueFlags[f] = true
+	}
+	last := flagArgs[len(flagArgs)-1]
+	if !slices.Contains(ModulesFlags(sub), last) || valueFlags[last] {
+		return false
+	}
+	if sub != "install" {
+		return true
+	}
+	// <source> уже введён: позиционный после install или среди флагов
+	// (значения флагов со значением не считаются).
+	if len(positionals) > 2 {
+		return true
+	}
+	rest := flagArgs[:len(flagArgs)-1]
+	for i := 0; i < len(rest); i++ {
+		a := rest[i]
+		if len(a) > 1 && a[0] == '-' {
+			if valueFlags[a] {
+				i++
+			}
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // withoutUsed убирает из подсказок параметры, уже введённые как --name или
@@ -284,7 +349,7 @@ func trimCommandPath(mod *execmodule.Module, commandPath []string) []string {
 // При пустом commandPath возвращает default-команду модуля (cmd + params),
 // если она есть (модуль-однокоманда); иначе notFoundError.
 func currentCommand(loader modulerunner.ModuleLoader, manifest, root string, commandPath []string) (*execmodule.Command, error) {
-	mod, err := modulerunner.LoadModule(loader, manifest, root)
+	mod, err := modulerunner.LoadModuleVerified(loader, manifest, root)
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +374,7 @@ func (e *notFoundError) Error() string { return e.msg }
 
 // moduleMatches формирует подсказки для зарезолвленного модуля.
 func moduleMatches(loader modulerunner.ModuleLoader, manifest, root string, commandPath []string, toComplete string) ([]Match, Directive) {
-	mod, err := modulerunner.LoadModule(loader, manifest, root)
+	mod, err := modulerunner.LoadModuleVerified(loader, manifest, root)
 	if err != nil {
 		// Невалидный/незагружаемый модуль — не падаем, просто ничего не подсказываем
 		// (консистентно с runList через ParseModule).

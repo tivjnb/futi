@@ -981,6 +981,16 @@ func formatRunError(err error) string {
 	return fmt.Sprintf("run: %v", err)
 }
 
+// runErrorText — текст ошибки запуска: короткий, если причина уже напечатана
+// предупреждением, иначе formatRunError. Ошибки шаблона не сокращаются.
+func runErrorText(err error, path []string) string {
+	var tmplErr *execmodule.TemplateError
+	if !errors.As(err, &tmplErr) && coveredByWarning(err) {
+		return coveredReadMessage("run", strings.Join(path, "."))
+	}
+	return formatRunError(err)
+}
+
 // withValidateHint дописывает к ошибке резолва подсказку о переезде validate
 // (`futi <ns> validate` → `futi modules validate <ns>`), если путь оканчивается
 // словом validate и команда/модуль не найдены. Конкретный <ns> подставляется,
@@ -1022,7 +1032,11 @@ func systemHelpCode(stdout, stderr io.Writer, source discovery.Source, loader mo
 		if printPartialWarnings(stderr, err) {
 			return 0
 		}
-		fmt.Fprintf(stderr, "%s\n", withValidateHint(err.Error(), err, path, source))
+		msg := err.Error()
+		if coveredByWarning(err) {
+			msg = coveredReadMessage("help", strings.Join(path, "."))
+		}
+		fmt.Fprintf(stderr, "%s\n", withValidateHint(msg, err, path, source))
 		return 1
 	}
 	return 0
@@ -1044,7 +1058,7 @@ func runParsed(ctx context.Context, stdout, stderr io.Writer, source discovery.S
 		if hasHelpFlag(pa.flags) {
 			return systemHelpCode(stdout, stderr, source, loader, helpPath), nil
 		}
-		fmt.Fprintf(stderr, "%s\n", withPathHint(withValidateHint(formatRunError(err), err, helpPath, source), pa.flags))
+		fmt.Fprintf(stderr, "%s\n", withPathHint(withValidateHint(runErrorText(err, helpPath), err, helpPath, source), pa.flags))
 		return exitCodeFromError(err), err
 	}
 	params, help, err := bindFlags(cmd, pa.flags)
@@ -1213,7 +1227,7 @@ func main() {
 				os.Exit(1)
 			}
 			if listErr := runList(os.Stdout, source, listReq.namespace, listReq.verbose, listReq.recurse, cache); listErr != nil && !printPartialWarnings(os.Stderr, listErr) {
-				fmt.Fprintln(os.Stderr, listErr)
+				fmt.Fprintln(os.Stderr, listErrorText(listErr, listReq.namespace))
 				os.Exit(1)
 			}
 			return
@@ -1259,6 +1273,9 @@ func main() {
 var (
 	printedWarningsMu sync.Mutex
 	printedWarnings   = map[string]bool{}
+	// warnedReads — первые *fs.PathError напечатанных предупреждений (под тем же
+	// мьютексом): по ним итоговая ошибка с той же причиной сокращается.
+	warnedReads []*fs.PathError
 )
 
 // printPartialWarnings печатает в w по строке `warning: <ошибка>` для каждой
@@ -1279,6 +1296,10 @@ func printPartialWarnings(w io.Writer, err error) bool {
 			continue
 		}
 		printedWarnings[key] = true
+		var pathErr *fs.PathError
+		if errors.As(e, &pathErr) {
+			warnedReads = append(warnedReads, pathErr)
+		}
 		fmt.Fprintf(w, "warning: %s\n", msg)
 	}
 	return true
@@ -1291,6 +1312,48 @@ func warningKey(err error) string {
 	var pathErr *fs.PathError
 	if errors.As(err, &pathErr) {
 		return pathErr.Op + "\x00" + pathErr.Path + "\x00" + pathErr.Err.Error()
+	}
+	return err.Error()
+}
+
+// coveredByWarning сообщает, что ошибка уже объяснена напечатанным
+// предупреждением: первый *fs.PathError в цепочке err имеет ту же причину, что и
+// предупреждение, а пути совпадают или один лежит внутри другого. Операция
+// (stat/open) не учитывается. Без *fs.PathError ошибка не покрыта.
+func coveredByWarning(err error) bool {
+	var pathErr *fs.PathError
+	if !errors.As(err, &pathErr) {
+		return false
+	}
+	printedWarningsMu.Lock()
+	defer printedWarningsMu.Unlock()
+	for _, w := range warnedReads {
+		if w.Err.Error() != pathErr.Err.Error() {
+			continue
+		}
+		if pathWithin(w.Path, pathErr.Path) || pathWithin(pathErr.Path, w.Path) {
+			return true
+		}
+	}
+	return false
+}
+
+// pathWithin сообщает, что path совпадает с root или лежит внутри root.
+func pathWithin(path, root string) bool {
+	path, root = filepath.Clean(path), filepath.Clean(root)
+	return path == root || strings.HasPrefix(path, strings.TrimRight(root, "/\\")+string(filepath.Separator))
+}
+
+// coveredReadMessage — короткое сообщение вместо ошибки, объяснённой предупреждением.
+func coveredReadMessage(prefix, path string) string {
+	return fmt.Sprintf("%s: cannot read namespace %q (see warning above)", prefix, path)
+}
+
+// listErrorText — текст итоговой ошибки list: короткий, если причина уже
+// напечатана предупреждением, иначе полный.
+func listErrorText(err error, namespace string) string {
+	if coveredByWarning(err) {
+		return coveredReadMessage("list", namespace)
 	}
 	return err.Error()
 }

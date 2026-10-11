@@ -90,7 +90,8 @@ func (c *Cache) LoadModule(manifestPath, moduleRoot string) (*execmodule.Module,
 
 // LoadModuleVerified возвращает модуль, гарантируя его свежесть и аутентичность
 // относительно файла манифеста на диске. Используется при ИСПОЛНЕНИИ команды
-// (run), где отравленный/устаревший кэш мог бы привести к выполнению чужого кода.
+// (run), где отравленный/устаревший кэш мог бы привести к выполнению чужого кода,
+// а также в системной справке и completion.
 //
 // Механизм «чексумма как замок»: на cache-hit читается содержимое файла,
 // считается SHA-256 и сравнивается с сохранённым в entry.Hash.
@@ -100,8 +101,8 @@ func (c *Cache) LoadModule(manifestPath, moduleRoot string) (*execmodule.Module,
 //   - Hash пуст (старый формат кэша, запись добавлена через LoadModule) → запись
 //     недоверенна, модуль перечитывается с диска.
 //
-// В отличие от LoadModule (быстрый, для list/completion/help), эта проверка
-// читает файл при каждом cache-hit — применима только на горячем пути исполнения.
+// В отличие от LoadModule (быстрый, для list), эта проверка читает файл при
+// каждом cache-hit.
 func (c *Cache) LoadModuleVerified(manifestPath, moduleRoot string) (*execmodule.Module, error) {
 	h, err := hashFile(manifestPath)
 	if err != nil {

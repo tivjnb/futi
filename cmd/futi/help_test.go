@@ -10,6 +10,7 @@ import (
 
 	"github.com/tivjnb/futi/internal/completion"
 	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/modulecache"
 )
 
 // helpTestSource создаёт GlobalSource с модулями для тестов help:
@@ -331,5 +332,72 @@ func TestParseArgsHelpDotNamespaceMatchesSpacedPath(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "Greet someone") || !strings.Contains(stdout, "--name") {
 		t.Fatalf("expected help of command greet, got:\n%s", stdout)
+	}
+}
+
+// staleCacheSource создаёт глобальный модуль stale.yaml, прогревает кэш через
+// быстрый LoadModule и затем переписывает манифест на диске. Возвращает source,
+// кэш с устаревшей записью.
+func staleCacheSource(t *testing.T, before, after string) (discovery.Source, *modulecache.Cache) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stale.yaml")
+	writeFile(t, path, before)
+	src := discovery.NewGlobalSource(dir)
+	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
+	manifest, root, err := src.Resolve("stale")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if _, err := cache.LoadModule(manifest, root); err != nil {
+		t.Fatalf("warm cache: %v", err)
+	}
+	writeFile(t, path, after)
+	return src, cache
+}
+
+func TestRunSystemHelpReloadsChangedManifest(t *testing.T) {
+	src, cache := staleCacheSource(t, `
+name: stale
+description: Old description
+commands:
+  run:
+    cmd: "echo run"
+`, `
+name: stale
+description: New description
+commands:
+  run:
+    cmd: "echo run"
+`)
+	var out bytes.Buffer
+	if err := runSystemHelp(&out, src, cache, []string{"stale"}); err != nil {
+		t.Fatalf("runSystemHelp: %v", err)
+	}
+	if !strings.Contains(out.String(), "New description") {
+		t.Errorf("help output = %q, want it to contain %q", out.String(), "New description")
+	}
+}
+
+func TestIsExecutableHelpReloadsChangedManifest(t *testing.T) {
+	src, cache := staleCacheSource(t, `
+name: stale
+commands:
+  run:
+    cmd: "echo run"
+`, `
+name: stale
+commands:
+  run:
+    cmd: "echo run"
+  help:
+    cmd: "echo CUSTOM"
+`)
+	manifest, root, err := src.Resolve("stale")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !isExecutableHelp(src, cache, manifest, root, []string{"help"}) {
+		t.Error("isExecutableHelp = false, want true (help добавлена на диске)")
 	}
 }

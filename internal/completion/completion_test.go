@@ -9,6 +9,7 @@ import (
 
 	"github.com/tivjnb/futi/internal/config"
 	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/modulecache"
 )
 
 func writeFile(t *testing.T, path, content string) {
@@ -627,15 +628,14 @@ func TestCompleteStringFlagValuePathStaysResolved(t *testing.T) {
 }
 
 func TestCompleteBuiltinFlagsKeepBehavior(t *testing.T) {
-	// Builtins с флагами (модуль не зарезолвен): поведение то же, что до F70.
+	// Builtins с флагами (модуль не зарезолвен).
 	src := newTestSource(t)
 	cases := []struct {
 		args []string
 		want Directive
 	}{
-		// после флага без "=" — значение user-supplied: файлы
+		// флаг подкоманды, неизвестный completion — значение user-supplied: файлы
 		{[]string{"modules", "update", "--all"}, ShellCompDirectiveDefault},
-		{[]string{"modules", "install", "x", "--local"}, ShellCompDirectiveDefault},
 		// после завершённого значения/короткого флага — подсказок нет
 		{[]string{"modules", "update", "--skip-attach", "foo"}, ShellCompDirectiveNoFileComp},
 		{[]string{"cache", "refresh", "-v"}, ShellCompDirectiveNoFileComp},
@@ -644,6 +644,37 @@ func TestCompleteBuiltinFlagsKeepBehavior(t *testing.T) {
 		matches, directive := Complete(src, nil, c.args, "")
 		if len(matches) != 0 || directive != c.want {
 			t.Errorf("args=%v: matches=%v directive=%v, want none/%v", c.args, text(matches), directive, c.want)
+		}
+	}
+}
+
+// TestCompleteModulesAfterFlag: после флага `futi modules <sub>` без "=":
+// флаг со значением и источник install — файлы; булев флаг — оставшиеся флаги.
+func TestCompleteModulesAfterFlag(t *testing.T) {
+	src := newTestSource(t)
+	cases := []struct {
+		args []string
+		want []string
+		dir  Directive
+	}{
+		{[]string{"modules", "install", "x", "--local"},
+			[]string{"--from-archive", "--from-git", "--from-local", "--namespace", "--ref", "--skip-attach", "--yes"}, ShellCompDirectiveNoFileComp},
+		{[]string{"modules", "install", "--local"}, nil, ShellCompDirectiveDefault},
+		{[]string{"modules", "install", "--namespace"}, nil, ShellCompDirectiveDefault},
+		{[]string{"modules", "install", "--namespace", "ns", "--yes"}, nil, ShellCompDirectiveDefault},
+		{[]string{"modules", "install", "x", "--namespace", "ns", "--yes"},
+			[]string{"--from-archive", "--from-git", "--from-local", "--local", "--ref", "--skip-attach"}, ShellCompDirectiveNoFileComp},
+		{[]string{"modules", "install", "--namespace", "ns", "src", "--yes"},
+			[]string{"--from-archive", "--from-git", "--from-local", "--local", "--ref", "--skip-attach"}, ShellCompDirectiveNoFileComp},
+		{[]string{"modules", "uninstall", "foo", "--force"},
+			[]string{"--skip-detach", "--strict-detach", "--yes"}, ShellCompDirectiveNoFileComp},
+		{[]string{"modules", "init", "--global"},
+			[]string{"--command", "--default-cmd", "--desc"}, ShellCompDirectiveNoFileComp},
+	}
+	for _, c := range cases {
+		matches, directive := Complete(src, nil, c.args, "")
+		if got := text(matches); !reflect.DeepEqual(got, c.want) && !(len(got) == 0 && len(c.want) == 0) || directive != c.dir {
+			t.Errorf("args=%v: matches=%v directive=%v, want %v/%v", c.args, got, directive, c.want, c.dir)
 		}
 	}
 }
@@ -963,5 +994,72 @@ func TestModulesFlagsReturnsCopy(t *testing.T) {
 	first[0] = "--mutated"
 	if got := ModulesFlags("init")[0]; got != want {
 		t.Errorf("ModulesFlags(init)[0] = %q, want %q", got, want)
+	}
+}
+
+func TestCompleteParamsReloadsChangedManifest(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stale.yaml")
+	writeFile(t, path, `
+name: stale
+commands:
+  run:
+    params:
+      - name: old
+        type: string
+    cmd: "echo {{.old}}"
+`)
+	src := discovery.NewGlobalSource(dir)
+	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
+	manifest, root, err := src.Resolve("stale")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if _, err := cache.LoadModule(manifest, root); err != nil {
+		t.Fatalf("warm cache: %v", err)
+	}
+	writeFile(t, path, `
+name: stale
+commands:
+  run:
+    params:
+      - name: fresh
+        type: string
+    cmd: "echo {{.fresh}}"
+`)
+	matches, _ := Complete(src, cache, []string{"stale", "run"}, "--")
+	if got := text(matches); !contains(got, "--fresh") || contains(got, "--old") {
+		t.Errorf("Complete = %v, want --fresh and no --old", got)
+	}
+}
+
+// Путь moduleMatches (подсказка команд модуля без "--") при устаревшей записи.
+func TestCompleteCommandsReloadsChangedManifest(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stale.yaml")
+	writeFile(t, path, `
+name: stale
+commands:
+  oldcmd:
+    cmd: "echo old"
+`)
+	src := discovery.NewGlobalSource(dir)
+	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
+	manifest, root, err := src.Resolve("stale")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if _, err := cache.LoadModule(manifest, root); err != nil {
+		t.Fatalf("warm cache: %v", err)
+	}
+	writeFile(t, path, `
+name: stale
+commands:
+  newcmd:
+    cmd: "echo new"
+`)
+	matches, _ := Complete(src, cache, []string{"stale"}, "")
+	if got := text(matches); !contains(got, "newcmd") || contains(got, "oldcmd") {
+		t.Errorf("Complete = %v, want newcmd and no oldcmd", got)
 	}
 }
