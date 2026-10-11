@@ -55,15 +55,70 @@ func LoadModuleVerified(loader ModuleLoader, manifestPath, moduleRoot string) (*
 	return LoadModule(loader, manifestPath, moduleRoot)
 }
 
-// Run находит модуль через source, загружает его, валидирует параметры,
-// рендерит cmd-шаблон и выполняет команду.
+// Prepared — команда, готовая к исполнению.
+type Prepared struct {
+	Argv       []string // argv[0] — исполняемый файл
+	ModuleName string
+	ModuleRoot string
+}
+
+// Prepare находит модуль через source, загружает его, валидирует параметры,
+// рендерит cmd-шаблон и разбирает результат в argv, ничего не исполняя.
 // Поддерживает subcommands: progressive resolution пробует резолвить модуль
 // от длиннейшего namespace к коротчайшему; остаток = command path.
 // args — строка после `--` (для {{.args}}), argsList — массив (для {{.args_list}}).
 // command="" означает вызов default cmd модуля (Module.Cmd).
+// loader — опциональный загрузчик модулей с кэшем (nil = без кэша, прямой LoadModule).
+func Prepare(
+	source discovery.Source,
+	namespace, command string,
+	params map[string]string,
+	args string,
+	argsList []string,
+	loader ModuleLoader,
+) (*Prepared, error) {
+	// Исполняемый модуль загружаем со строгой проверкой свежести/аутентичности
+	// (SHA-256); так же — системная справка и completion. list использует
+	// обычный LoadModule (быстрый).
+	r, err := resolveCommand(source, namespace, command, loader)
+	if err != nil {
+		return nil, err
+	}
+	cmd, mod, moduleRoot := r.cmd, r.mod, r.moduleRoot
+	moduleName := execmodule.EffectiveName(mod.Name, r.manifestPath)
+
+	resolved, err := cmd.Validate(params)
+	if err != nil {
+		return nil, fmt.Errorf("modulerunner: %w", err)
+	}
+
+	// Проверка обязательного минимума позиционных аргументов (после "--").
+	if err := cmd.ValidatePositional(argsList); err != nil {
+		return nil, fmt.Errorf("modulerunner: %w", err)
+	}
+
+	rendered, err := cmd.Render(resolved, args, argsList, execmodule.ModuleRef{Name: moduleName, Root: moduleRoot})
+	if err != nil {
+		return nil, fmt.Errorf("modulerunner: %w", err)
+	}
+
+	parts, err := shlex.Split(rendered)
+	if err != nil {
+		// Отрендеренную строку не выводим: в ней могут быть значения секретов
+		// ({{.env.X}}, параметры); причина shlex сохраняется.
+		return nil, fmt.Errorf("modulerunner: command %q: split rendered cmd: %w", strings.TrimSpace(namespace+" "+command), err)
+	}
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("modulerunner: empty command after render")
+	}
+
+	return &Prepared{Argv: parts, ModuleName: moduleName, ModuleRoot: moduleRoot}, nil
+}
+
+// Run готовит команду через Prepare и выполняет её.
 // stdout/stderr — опциональные writers для перехвата вывода (nil = os.Stdout/os.Stderr).
 // stdin команды всегда наследуется от futi (os.Stdin).
-// loader — опциональный загрузчик модулей с кэшем (nil = без кэша, прямой LoadModule).
+// Остальные параметры — как у Prepare.
 func Run(
 	ctx context.Context,
 	source discovery.Source,
@@ -74,39 +129,9 @@ func Run(
 	stdout, stderr io.Writer,
 	loader ModuleLoader,
 ) error {
-	// Исполняемый модуль загружаем со строгой проверкой свежести/аутентичности
-	// (SHA-256); так же — системная справка и completion. list использует
-	// обычный LoadModule (быстрый).
-	r, err := resolveCommand(source, namespace, command, loader)
+	p, err := Prepare(source, namespace, command, params, args, argsList, loader)
 	if err != nil {
 		return err
-	}
-	cmd, mod, moduleRoot := r.cmd, r.mod, r.moduleRoot
-	moduleName := execmodule.EffectiveName(mod.Name, r.manifestPath)
-
-	resolved, err := cmd.Validate(params)
-	if err != nil {
-		return fmt.Errorf("modulerunner: %w", err)
-	}
-
-	// Проверка обязательного минимума позиционных аргументов (после "--").
-	if err := cmd.ValidatePositional(argsList); err != nil {
-		return fmt.Errorf("modulerunner: %w", err)
-	}
-
-	rendered, err := cmd.Render(resolved, args, argsList, execmodule.ModuleRef{Name: moduleName, Root: moduleRoot})
-	if err != nil {
-		return fmt.Errorf("modulerunner: %w", err)
-	}
-
-	parts, err := shlex.Split(rendered)
-	if err != nil {
-		// Отрендеренную строку не выводим: в ней могут быть значения секретов
-		// ({{.env.X}}, параметры); причина shlex сохраняется.
-		return fmt.Errorf("modulerunner: command %q: split rendered cmd: %w", strings.TrimSpace(namespace+" "+command), err)
-	}
-	if len(parts) == 0 {
-		return fmt.Errorf("modulerunner: empty command after render")
 	}
 
 	// Unix-семантика для первого токена cmd: относительные пути резолвятся
@@ -118,8 +143,8 @@ func Run(
 	// FUTI_CWD удалён (cwd = cwd вызова, getcwd() в скрипте даёт то же).
 	env := os.Environ()
 	env = append(env,
-		"FUTI_MODULE_NAME="+moduleName,
-		"FUTI_MODULE_ROOT="+moduleRoot,
+		"FUTI_MODULE_NAME="+p.ModuleName,
+		"FUTI_MODULE_ROOT="+p.ModuleRoot,
 	)
 	cfg := executor.NewConfig().WithEnv(env)
 	if stdout != nil {
@@ -129,7 +154,7 @@ func Run(
 		cfg = cfg.WithStderr(stderr)
 	}
 
-	return executor.RunWithConfig(ctx, cfg, parts[0], parts[1:]...)
+	return executor.RunWithConfig(ctx, cfg, p.Argv[0], p.Argv[1:]...)
 }
 
 // resolvedCommand — результат резолва команды: сама команда, модуль и корень модуля.

@@ -1302,3 +1302,71 @@ func TestListCommandsSortedByName(t *testing.T) {
 		}
 	}
 }
+
+// TestPrepareReturnsArgvWithoutExec: Prepare отдаёт argv и метаданные модуля,
+// ничего не исполняя.
+func TestPrepareReturnsArgvWithoutExec(t *testing.T) {
+	dir := t.TempDir()
+	work := t.TempDir()
+	target := filepath.Join(work, "a b'c")
+	manifest := []byte(`
+name: prep
+commands:
+  mk:
+    params:
+      - name: file
+        type: string
+        required: true
+    cmd: "touch {{quote .file}}"
+`)
+	if err := os.WriteFile(filepath.Join(dir, "prep.yaml"), manifest, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	source := discovery.NewGlobalSource(dir)
+
+	p, err := Prepare(source, "prep", "mk", map[string]string{"file": target}, "", nil, nil)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	want := []string{"touch", target}
+	if len(p.Argv) != 2 || p.Argv[0] != want[0] || p.Argv[1] != want[1] {
+		t.Fatalf("Argv = %q, want %q", p.Argv, want)
+	}
+	if p.ModuleName != "prep" {
+		t.Errorf("ModuleName = %q, want %q", p.ModuleName, "prep")
+	}
+	gotRoot, _ := filepath.EvalSymlinks(p.ModuleRoot)
+	wantRoot, _ := filepath.EvalSymlinks(dir)
+	if gotRoot != wantRoot {
+		t.Errorf("ModuleRoot = %q, want %q", p.ModuleRoot, dir)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Errorf("файл создан, Prepare не должен исполнять команду (stat err = %v)", err)
+	}
+}
+
+func TestPrepareValidationError(t *testing.T) {
+	dir := t.TempDir()
+	manifest := []byte(`
+name: prep
+commands:
+  mk:
+    params:
+      - name: file
+        type: string
+        required: true
+    cmd: "touch {{quote .file}}"
+`)
+	if err := os.WriteFile(filepath.Join(dir, "prep.yaml"), manifest, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	source := discovery.NewGlobalSource(dir)
+
+	p, err := Prepare(source, "prep", "mk", map[string]string{}, "", nil, nil)
+	if err == nil {
+		t.Fatal("expected error for missing required param")
+	}
+	if p != nil {
+		t.Errorf("Prepared = %+v, want nil", p)
+	}
+}
