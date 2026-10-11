@@ -111,12 +111,20 @@ func TestListErrorShortWhenCoveredByWarning(t *testing.T) {
 }
 
 func TestListErrorFullWhenDifferentCause(t *testing.T) {
-	src, _ := unreadableNamespace(t)
-	err := errors.New("list: something else")
-	if got := listErrorText(err, "ok"); got != "list: something else" {
-		t.Errorf("listErrorText = %q, want полное сообщение", got)
+	_, mods := unreadableNamespace(t)
+	for _, tt := range []struct {
+		name string
+		err  error
+	}{
+		{"та же причина, несвязанный путь", fmt.Errorf("list: %w", &fs.PathError{Op: "stat", Path: filepath.Join(mods, "other", "config.yaml"), Err: fs.ErrPermission})},
+		{"другая причина, путь внутри нечитаемого a", fmt.Errorf("list: %w", &fs.PathError{Op: "stat", Path: filepath.Join(mods, "a", "config.yaml"), Err: fs.ErrNotExist})},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := listErrorText(tt.err, "a"); got != tt.err.Error() {
+				t.Errorf("listErrorText = %q, want полное %q", got, tt.err.Error())
+			}
+		})
 	}
-	_ = src
 }
 
 func TestHelpErrorShortWhenCoveredByWarning(t *testing.T) {
