@@ -1070,7 +1070,7 @@ func runParsed(ctx context.Context, stdout, stderr io.Writer, source discovery.S
 		return systemHelpCode(stdout, stderr, source, loader, helpPath), nil
 	}
 	if err := modulerunner.Run(ctx, source, pa.namespace, pa.command, params, pa.args, pa.argsList, stdout, stderr, loader); err != nil {
-		fmt.Fprintf(stderr, "%s\n", runErrorText(err, helpPath))
+		fmt.Fprintf(stderr, "%s\n", formatRunError(err))
 		return exitCodeFromError(err), err
 	}
 	return 0, nil
@@ -1340,6 +1340,7 @@ func coveredByWarning(err error) bool {
 
 // pathWithin сообщает, что path совпадает с root или лежит внутри root.
 func pathWithin(path, root string) bool {
+	path, root = filepath.Clean(path), filepath.Clean(root)
 	return path == root || strings.HasPrefix(path, strings.TrimRight(root, "/\\")+string(filepath.Separator))
 }
 

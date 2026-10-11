@@ -101,8 +101,8 @@ func (c *Cache) LoadModule(manifestPath, moduleRoot string) (*execmodule.Module,
 //   - Hash пуст (старый формат кэша, запись добавлена через LoadModule) → запись
 //     недоверенна, модуль перечитывается с диска.
 //
-// В отличие от LoadModule (быстрый, для list), эта проверка
-// читает файл при каждом cache-hit.
+// В отличие от LoadModule (быстрый, для list), эта проверка читает файл при
+// каждом cache-hit.
 func (c *Cache) LoadModuleVerified(manifestPath, moduleRoot string) (*execmodule.Module, error) {
 	h, err := hashFile(manifestPath)
 	if err != nil {

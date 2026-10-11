@@ -46,6 +46,8 @@ func TestCoveredByWarning(t *testing.T) {
 			fmt.Errorf("help: %w", &fs.PathError{Op: "open", Path: "/m/a", Err: fs.ErrPermission}), true},
 		{"путь ошибки внутри пути предупреждения", &fs.PathError{Op: "open", Path: "/m/a", Err: fs.ErrPermission},
 			fmt.Errorf("run: %w", &fs.PathError{Op: "stat", Path: "/m/a/b.yaml", Err: fs.ErrPermission}), true},
+		{"путь с // и /./ нормализуется", warn,
+			fmt.Errorf("list: %w", &fs.PathError{Op: "open", Path: "/m//a/./config.yaml", Err: fs.ErrPermission}), true},
 		{"другая причина", warn,
 			&fs.PathError{Op: "stat", Path: "/m/a/config.yaml", Err: fs.ErrNotExist}, false},
 		{"несвязанный путь", warn,
@@ -163,5 +165,39 @@ func TestRunErrorFullWhenNotFoundInReadableDir(t *testing.T) {
 	code, _ := runParsed(t.Context(), &stdout, &stderr, src, nil, &parsedArgs{namespace: "nope", command: "x"})
 	if code != 1 || !strings.HasPrefix(stderr.String(), "run: ") || strings.Contains(stderr.String(), "see warning above") {
 		t.Errorf("code=%d stderr=%q, want полное сообщение без сокращения", code, stderr.String())
+	}
+}
+
+func TestRunErrorFullWhenExecFailsUnderWarnedDir(t *testing.T) {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("права на исполнение не проверяются для root и в Windows")
+	}
+	resetPrintedWarnings(t)
+	mods := t.TempDir()
+	// Каталог скрипта без права x: stat скрипта при запуске даёт PathError EACCES.
+	scriptDir := filepath.Join(mods, "scripts")
+	if err := os.MkdirAll(scriptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(scriptDir, "run.sh")
+	writeMainTestFile(t, script, "#!/bin/sh\necho hi\n")
+	if err := os.Chmod(script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMainTestFile(t, filepath.Join(mods, "m.yaml"), "cmd: "+script+"\n")
+	if err := os.Chmod(scriptDir, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(scriptDir, 0o755) })
+	var warn bytes.Buffer
+	pe := &fs.PathError{Op: "stat", Path: scriptDir, Err: fs.ErrPermission}
+	if !printPartialWarnings(&warn, partialWith(pe)) {
+		t.Fatal("printPartialWarnings = false")
+	}
+	src := discovery.NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: mods}}})
+	var stdout, stderr bytes.Buffer
+	code, runErr := runParsed(t.Context(), &stdout, &stderr, src, nil, &parsedArgs{command: "m"})
+	if runErr == nil || strings.Contains(stderr.String(), "see warning above") || !strings.Contains(stderr.String(), script) {
+		t.Errorf("code=%d runErr=%v stderr=%q, want полная ошибка exec с путём %s", code, runErr, stderr.String(), script)
 	}
 }
