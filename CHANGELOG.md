@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Namespaces and layered discovery: global, local (`./.futi`) and `config.yaml` sources.
 - Module cache for global modules with update policies and integrity checks.
 - Shell completion for bash, zsh and fish.
-- Module management: `modules install`, `update`, `uninstall`, `info`, `list`, `path`, `init`, `validate`.
+- Module management: `modules install`, `update`, `uninstall`, `info`, `list`, `path`, `init`, `add_command`, `remove_command`, `validate`.
 - `--dry-run` to print the command that would be executed.
 - `--version`.
 - `examples/` with sample modules.
@@ -53,4 +53,4 @@ Other behavior changes:
 ### Notes
 
 - The 0.x format of modules and `config.yaml` may change between releases.
-- Supported platforms: Linux and macOS (amd64, arm64). Windows builds, but is not supported.
+- Supported platforms: Linux and macOS (amd64, arm64). Windows: builds, not supported.

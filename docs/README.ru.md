@@ -122,7 +122,7 @@ $ futi --dry-run hello greet --name 'big world'
 echo hello 'big world'
 ```
 
-Готовые рабочие модули лежат в [`examples/`](../examples/):
+Готовые рабочие модули лежат в [`examples/`](../examples/); команды `cp` ниже работают из клона репозитория (в релизные архивы `examples/` не входит):
 
 ```bash
 mkdir -p ~/.config/futi/modules

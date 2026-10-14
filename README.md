@@ -122,7 +122,7 @@ $ futi --dry-run hello greet --name 'big world'
 echo hello 'big world'
 ```
 
-Ready-to-use modules are in [`examples/`](examples/):
+Ready-to-use modules are in [`examples/`](examples/); the `cp` commands below work from a clone of the repository (release archives do not include `examples/`):
 
 ```bash
 mkdir -p ~/.config/futi/modules
