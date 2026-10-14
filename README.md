@@ -1261,7 +1261,7 @@ futi deploy rollback --target production
 
 ## Roadmap
 
-futi is early-stage software (v0.1.0). Everything below is a plan, not a promise: none of it is implemented yet.
+futi is early-stage software (0.x): the module format may change between minor versions. Everything below is a plan, not a promise: none of it is implemented yet.
 
 - **Module schema** — richer parameter types (`file`, `json`, `secret`), `choices`, annotations, and hybrid argument parsing (positional args for leaf commands without an explicit `--`). Path-style completion will then be offered only for `file`/`path` parameters.
 - **Server mode** — a remote MCP server over HTTP so that AI agents can call module commands on the machine where futi runs, plus a REST API for CI/CD. Auth, a namespace allowlist, output and time limits and an audit log are part of the plan.
