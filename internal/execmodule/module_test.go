@@ -451,8 +451,8 @@ func TestParseModuleRejectsFIFOAndHugeFile(t *testing.T) {
 			t.Fatalf("размер файла %d, нужно > %d", info.Size(), limit)
 		}
 		_, err := ParseModule(path, filepath.Dir(path))
-		if err == nil || !strings.Contains(err.Error(), "размер") {
-			t.Fatalf("ParseModule(файл > 1 МиБ): err = %v, want ошибка с \"размер\"", err)
+		if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+			t.Fatalf("ParseModule(файл > 1 МиБ): err = %v, want ошибка с \"exceeds limit\"", err)
 		}
 	})
 
