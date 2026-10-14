@@ -1,8 +1,10 @@
+English | [Русский](docs/README.ru.md)
+
 # futi
 
-**futi** — глобальный менеджер консольных утилит. Объединяет разрозненные команды, скрипты и инструменты в модули с единым CLI-интерфейсом.
+**futi** is a global manager for console utilities. It brings scattered commands, scripts and tools together into modules with a single CLI.
 
-Вместо десятков скриптов с разным синтаксисом — один YAML-файл на модуль и единый способ вызова:
+Instead of dozens of scripts with different syntax, you get one YAML file per module and one way to call it:
 
 ```bash
 futi docker build --tag myapp
@@ -12,30 +14,40 @@ futi deploy staging
 
 ---
 
-## Содержание
+## Contents
 
-- [Установка](#установка)
-- [Быстрый старт](#быстрый-старт)
-- [Структура модуля](#структура-модуля)
-- [Discovery и namespaces](#discovery-и-namespaces)
-- [Параметры и шаблонизация](#параметры-и-шаблонизация)
-- [Модуль-пакет со скриптами](#модуль-пакет-со-скриптами)
-- [Команды CLI](#команды-cli)
-- [Валидация](#валидация)
-- [Создание модулей](#создание-модулей)
-- [Управление модулями](#управление-модулями)
-- [Кэш модулей](#кэш-модулей)
-- [Автодополнение](#автодополнение)
-- [Безопасность](#безопасность)
-- [Примеры](#примеры)
-- [ROADMAP](#roadmap)
-- [Лицензия](#лицензия)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Module structure](#module-structure)
+- [Discovery and namespaces](#discovery-and-namespaces)
+- [Parameters and templating](#parameters-and-templating)
+- [Module package with scripts](#module-package-with-scripts)
+- [CLI commands](#cli-commands)
+- [Validation](#validation)
+- [Creating modules](#creating-modules)
+- [Managing modules](#managing-modules)
+- [Module cache](#module-cache)
+- [Shell completion](#shell-completion)
+- [Security](#security)
+- [Examples](#examples)
+- [Roadmap](#roadmap)
+- [License](#license)
 
 ---
 
-## Установка
+## Installation
 
-Сборка из исходников:
+Supported platforms: Linux and macOS. Windows: builds, not supported.
+
+With the Go toolchain:
+
+```bash
+go install github.com/tivjnb/futi/cmd/futi@latest
+```
+
+Prebuilt binaries (linux and darwin, amd64 and arm64) are published on the GitHub Releases page together with a `checksums.txt` file. Download the archive for your platform, verify it against `checksums.txt` and put `futi` somewhere on your `PATH`.
+
+Building from source:
 
 ```bash
 git clone https://github.com/tivjnb/futi futi
@@ -43,37 +55,53 @@ cd futi
 go build -o futi ./cmd/futi
 ```
 
-Проверка:
+Check the installation:
 
 ```bash
+futi --version
 futi list
 # No modules found.
 ```
 
-futi хранит модули в `~/.config/futi/modules/` (при наличии `config.yaml` модули читаются из путей, указанных в конфиге; `modules install` при этом всё равно пишет в этот каталог). Переопределить каталог для fallback без конфига:
+futi keeps modules in `~/.config/futi/modules/` (if a `config.yaml` exists, modules are read from the paths listed in it; `modules install` still writes to this directory). To override the directory when there is no config:
 
 ```bash
 export FUTI_MODULES_DIR=/path/to/modules
 ```
 
+To enable shell completion (bash, zsh, fish), see [Shell completion](#shell-completion).
+
 ---
 
-## Быстрый старт
+## Quick start
 
-Создайте первый модуль:
-
-```bash
-mkdir -p ~/.config/futi
-cp -r examples/modules ~/.config/futi/
-```
-
-Или через `futi modules init` (создаёт модуль с шаблоном):
+Create a module template in the current project (it lands in `./.futi/`):
 
 ```bash
 futi modules init hello --desc "Demo module" --command greet
 ```
 
-Вызовите (модуль, созданный вручную, принимает `--name`):
+A module from `futi modules init` has stub commands without parameters:
+
+```bash
+$ futi hello greet
+greet
+```
+
+Add parameters to the YAML by hand (see [Module structure](#module-structure)). Replace the contents of `.futi/hello.yaml`:
+
+```yaml
+name: hello
+description: Demo module
+commands:
+  greet:
+    params:
+      - name: name
+        required: true
+    cmd: "echo hello {{quote .name}}"
+```
+
+Run it and look at the list:
 
 ```bash
 $ futi hello greet --name world
@@ -87,43 +115,50 @@ $ futi list
 └────────┴───────┴─────────────┘
 ```
 
-Модуль из `futi modules init` создаёт команды-заглушки без параметров — параметры
-дописываются в YAML вручную (см. [Структура модуля](#структура-модуля)):
+To see the assembled command without running it, use `--dry-run`:
 
 ```bash
-$ futi hello greet
-greet
+$ futi --dry-run hello greet --name 'big world'
+echo hello 'big world'
+```
+
+Ready-to-use modules are in [`examples/`](examples/):
+
+```bash
+mkdir -p ~/.config/futi/modules
+cp -r examples/git.yaml examples/docker.yaml examples/files.yaml examples/backup ~/.config/futi/modules/
+futi list
 ```
 
 ---
 
-## Структура модуля
+## Module structure
 
-Модуль — это YAML-файл с описанием команд.
+A module is a YAML file that describes commands.
 
 ```yaml
-name: docker                    # опционально, по умолчанию = имя файла
-description: Docker management  # опционально
-cmd: "docker ps"                # опционально: команда по умолчанию (без явной команды)
+name: docker                    # optional, defaults to the file name
+description: Docker management  # optional
+cmd: "docker ps"                # optional: default command (when no command is given)
 
 commands:
-  # Простая команда без параметров
+  # A simple command without parameters
   ps:
     cmd: "docker ps"
 
-  # Команда с параметрами
+  # A command with parameters
   build:
     description: Build Docker image
     params:
       - name: tag
-        type: string            # string (по умолчанию), bool или int
+        type: string            # string (default), bool or int
         required: true
       - name: file
         type: string
         default: Dockerfile
     cmd: "docker build -t {{.tag}} -f {{.file}} ."
 
-  # Команда с bool-параметром
+  # A command with a bool parameter
   logs:
     params:
       - name: container
@@ -134,11 +169,11 @@ commands:
         default: false
     cmd: "docker logs {{.container}} {{if .follow}}-f{{end}}"
 
-  # Вложенные команды: команда может иметь commands вместе с cmd или вместо него.
-  # Если указан cmd + commands, cmd вызывается как fallback при отсутствии subcommand.
+  # Nested commands: a command may have commands together with cmd or instead of it.
+  # With cmd + commands, cmd is called as a fallback when no subcommand is given.
   migrate:
     description: Database migrations
-    cmd: "migrate"              # fallback если не указан subcommand
+    cmd: "migrate"              # fallback when no subcommand is given
     commands:
       up:
         cmd: "migrate up"
@@ -146,35 +181,34 @@ commands:
         cmd: "migrate down"
 ```
 
-### Поля
+### Fields
 
-| Поле | Тип | Описание |
+| Field | Type | Description |
 |---|---|---|
-| `name` | string | Имя модуля (опционально, по умолчанию = имя файла без `.yaml` или каталога с `config.yaml`; для `futi.yaml` — `futi`). Это значение доступно как `{{.module_name}}` и `FUTI_MODULE_NAME` в `cmd` и в хуках `attach`/`detach` |
-| `description` | string | Описание модуля (опционально) |
-| `cmd` | string | Команда по умолчанию на уровне модуля (опционально) |
-| `params` | list | Схема команды по умолчанию: параметры (опционально) |
-| `positional` | block | Схема команды по умолчанию: позиционные аргументы (опционально) |
-| `commands` | map | Команды модуля |
-| `commands.<name>.description` | string | Описание команды (опционально) |
-| `commands.<name>.cmd` | string | Шаблон команды (если есть `commands` — fallback) |
-| `commands.<name>.params` | list | Параметры команды (опционально) |
-| `commands.<name>.positional` | block | Требования к позиционным аргументам (опционально) |
-| `commands.<name>.commands` | map | Вложенные команды (опционально) |
-| `params[].name` | string | Имя параметра (обязательно): буквы, цифры, `_` и `-`, не начинается с цифры или `-`. Имена `args`, `args_list`, `env`, `module_name`, `module_root` зарезервированы — ошибка схемы |
-| `params[].type` | string | Тип: `string` (по умолчанию), `bool` или `int` |
-| `params[].required` | bool | Обязательный параметр (по умолчанию `false`) |
-| `params[].default` | string | Значение по умолчанию |
-| `params[].description` | string | Описание параметра (опционально, показывается в help) |
-| `positional.min` | int | Обязательный минимум позиционных аргументов после `--` (по умолчанию `0`) |
+| `name` | string | Module name (optional; defaults to the file name without `.yaml`, or the directory name for a directory with `config.yaml`; for `futi.yaml` it is `futi`). The value is available as `{{.module_name}}` and `FUTI_MODULE_NAME` in `cmd` and in the `attach`/`detach` hooks |
+| `description` | string | Module description (optional) |
+| `cmd` | string | Module-level default command (optional) |
+| `params` | list | Schema of the default command: parameters (optional) |
+| `positional` | block | Schema of the default command: positional arguments (optional) |
+| `commands` | map | Module commands |
+| `commands.<name>.description` | string | Command description (optional) |
+| `commands.<name>.cmd` | string | Command template (if `commands` is present, it is a fallback) |
+| `commands.<name>.params` | list | Command parameters (optional) |
+| `commands.<name>.positional` | block | Requirements for positional arguments (optional) |
+| `commands.<name>.commands` | map | Nested commands (optional) |
+| `params[].name` | string | Parameter name (required): letters, digits, `_` and `-`, must not start with a digit or `-`. The names `args`, `args_list`, `env`, `module_name`, `module_root` are reserved and cause a schema error |
+| `params[].type` | string | Type: `string` (default), `bool` or `int` |
+| `params[].required` | bool | Required parameter (default `false`) |
+| `params[].default` | string | Default value |
+| `params[].description` | string | Parameter description (optional, shown in help) |
+| `positional.min` | int | Required minimum of positional arguments after `--` (default `0`) |
 
-Имя с дефисом, например `dry-run`: в CLI — `--dry-run`, в шаблоне — `{{index . "dry-run"}}` (точка-нотация `{{.dry-run}}` не работает).
+A name with a hyphen, for example `dry-run`, is `--dry-run` on the command line and `{{index . "dry-run"}}` in a template (dot notation `{{.dry-run}}` does not work).
 
-Верхнеуровневые `params` и `positional` описывают команду по умолчанию (`cmd`):
-валидация, defaults и help работают так же, как у обычных команд.
+Top-level `params` and `positional` describe the default command (`cmd`): validation, defaults and help work the same way as for regular commands.
 
 ```yaml
-# meta.yaml — модуль как одна команда со схемой
+# meta.yaml — a module as a single command with a schema
 name: meta
 cmd: "python scripts/meta.py --files {{quote .args}}{{if .json}} --json{{end}}"
 params:
@@ -189,22 +223,22 @@ positional:
 futi meta --json -- photo.jpg
 ```
 
-Неизвестный ключ манифеста (например, опечатка `requird` в параметре) — ошибка схемы с номером строки: `line 9: unknown key "requird" in commands.build.params[0]`. Ключи с префиксом `x-` разрешены на любом уровне структуры и игнорируются — под них удобно заводить YAML-якоря (`x-common: &c {…}` и `<<: *c`). Исключение: ключ внутри `commands` — это имя команды, и `x-build` там обычная команда.
+An unknown manifest key (for example, the typo `requird` in a parameter) is a schema error with a line number: `line 9: unknown key "requird" in commands.build.params[0]`. Keys with the `x-` prefix are allowed at any level of the structure and are ignored; they are handy for YAML anchors (`x-common: &c {…}` and `<<: *c`). The exception: a key inside `commands` is a command name, so `x-build` there is an ordinary command.
 
 ---
 
-## Discovery и namespaces
+## Discovery and namespaces
 
-futi использует SaltStack-модель discovery. Модуль может быть:
+futi uses the SaltStack discovery model. A module can be:
 
-**Одиночным YAML-файлом:**
+**A single YAML file:**
 
 ```
 ~/.config/futi/modules/docker.yaml      → futi docker <command>
 ~/.config/futi/modules/git.yaml         → futi git <command>
 ```
 
-**Пакетом — директорией с `config.yaml` и скриптами:**
+**A package: a directory with `config.yaml` and scripts:**
 
 ```
 ~/.config/futi/modules/deploy/
@@ -215,70 +249,52 @@ futi использует SaltStack-модель discovery. Модуль мож�
 
 → `futi deploy <command>`
 
-**Вложенные namespaces:**
+**Nested namespaces:**
 
 ```
 ~/.config/futi/modules/dev/deploy.yaml          → futi dev deploy <command>
 ~/.config/futi/modules/dev/deploy/config.yaml   → futi dev deploy <command>
 ```
 
-namespace формируется из пути: `dev/deploy.yaml` → `dev.deploy`, вызывается как `futi dev deploy <command>` (последний аргумент — команда, остальное — namespace).
+The namespace is built from the path: `dev/deploy.yaml` → `dev.deploy`, called as `futi dev deploy <command>` (the last argument is the command, the rest is the namespace).
 
-**Именование записей:** имя файла (без `.yaml`) и имя каталога — это сегмент namespace, поэтому оно не должно быть пустым, содержать точку или равняться `config`. Записи вроде `my.tool.yaml`, `.yaml`, `my.dir/`, `.git/` и `config/` (вместе с содержимым) не листятся и не резолвятся: `my.tool` резолвился бы в `my/tool.yaml`.
+**Entry naming:** the file name (without `.yaml`) and the directory name are a namespace segment, so they must not be empty, contain a dot, or equal `config`. Entries such as `my.tool.yaml`, `.yaml`, `my.dir/`, `.git/` and `config/` (with their contents) are neither listed nor resolved: `my.tool` would resolve to `my/tool.yaml`.
 
-**Конфликт имён:** если для одного namespace существуют и `.yaml`, и `/config.yaml` — ошибка. Уберите одно из двух. `futi list` такую пару не скрывает: показывает одну запись `x` с пометкой `conflict: x.yaml and x/config.yaml`, а `futi x` завершается ошибкой конфликта.
+**Name conflict:** if both `.yaml` and `/config.yaml` exist for one namespace, that is an error. Remove one of the two. `futi list` does not hide such a pair: it shows one entry `x` with the note `conflict: x.yaml and x/config.yaml`, and `futi x` fails with a conflict error.
 
-Модуль `x.yaml` и namespace `x/` без `config.yaml` — не конфликт: в листинге видны обе записи, `futi x <command>` вызывает модуль, а `futi x <имя> <command>` — модули внутри namespace.
+A module `x.yaml` and a namespace `x/` without `config.yaml` are not a conflict: both entries are listed, `futi x <command>` calls the module, and `futi x <name> <command>` calls modules inside the namespace.
 
-### Симлинки
+### Symlinks
 
-Симлинки в каталоге модулей поддерживаются и обрабатываются так же, как
-реальные файлы и директории: симлинк на `.yaml`-файл, на пакет-директорию
-(с `config.yaml`) и на namespace — везде листятся, резолвятся и исполняются.
+Symlinks in the modules directory are supported and treated the same way as real files and directories: a symlink to a `.yaml` file, to a package directory (with `config.yaml`) and to a namespace is listed, resolved and executed everywhere.
 
-Это удобно для dotfiles-менеджеров (stow, chezmoi) и для разработки:
-модуль можно держать в git-репо и подключить симлинком:
+This is convenient for dotfiles managers (stow, chezmoi) and for development: you can keep a module in a git repo and connect it with a symlink:
 
 ```bash
 ln -s ~/projects/my-modules/deploy ~/.config/futi/modules/deploy
-futi deploy   # пакет-симлинк листится и исполняется как обычный
+futi deploy   # a package symlink is listed and executed like a regular one
 ```
 
-Нюансы:
+Details:
 
-- Циклы симлинков (`a → b → a`) безопасны: циклы отсекаются по предкам —
-  каталог (по реальному пути), уже лежащий на текущем пути обхода, не
-  раскрывается повторно. Два симлинка на один каталог
-  (`a/x → real`, `b/y → real`) раскрываются оба.
-- Битый симлинк с именем `*.yaml` (цель недоступна) не листится и не
-  резолвится, как и FIFO или устройство с таким именем: модулем считается
-  только обычный файл. Если цель временно недоступна (например, не
-  примонтирован volume), запись кэша такого модуля удаляется при обновлении
-  кэша и восстанавливается, когда цель снова доступна.
-- Запись, которую нельзя проверить из-за прав (например, каталог без права
-  поиска `x`), тоже не листится, но молча не пропадает: `futi list` выводит
-  `warning: …` с путём и причиной, а кэш при таком частичном листинге не
-  очищается.
-- `futi modules init` при записи через симлинк-директорию создаёт файл в целевом
-  каталоге симлинка и показывает **реальный** (резолвнутый) путь в выводе.
+- Symlink cycles (`a → b → a`) are safe: cycles are cut off by ancestors. A directory (by real path) that is already on the current traversal path is not expanded again. Two symlinks to one directory (`a/x → real`, `b/y → real`) are both expanded.
+- A broken symlink named `*.yaml` (target unavailable) is neither listed nor resolved, just like a FIFO or a device with such a name: only a regular file counts as a module. If the target is temporarily unavailable (for example, a volume is not mounted), the cache entry of such a module is removed on cache refresh and restored when the target is available again.
+- An entry that cannot be checked because of permissions (for example, a directory without the search permission `x`) is not listed either, but it does not disappear silently: `futi list` prints `warning: …` with the path and the reason, and the cache is not cleared on such a partial listing.
+- When `futi modules init` writes through a symlinked directory, it creates the file in the symlink's target directory and shows the **real** (resolved) path in its output.
 
-### Локальные модули проекта
+### Local project modules
 
-Помимо глобального каталога, futi автоматически подхватывает модули из текущей
-директории проекта:
+Besides the global directory, futi automatically picks up modules from the current project directory:
 
-- `./.futi/` — каталог модулей с той же структурой (yaml-файлы, пакеты,
-  namespaces);
-- `./futi.yaml` — одиночный модуль проекта (имя берётся из поля `name`).
+- `./.futi/` — a modules directory with the same structure (yaml files, packages, namespaces);
+- `./futi.yaml` — a single project module (the name comes from the `name` field).
 
-При наличии обоих — `./.futi/` имеет приоритет. Локальные модули **перекрывают
-глобальные** с тем же именем: удобно переопределять поведение под конкретный
-проект (свои `deploy`, `test`, `build` в репо — без правки глобальных модулей).
+If both exist, `./.futi/` takes precedence. Local modules **shadow global ones** with the same name: handy for overriding behavior for a specific project (your own `deploy`, `test`, `build` in the repo, without editing global modules).
 
 ```
 myproject/
-├── futi.yaml          # модуль проекта целиком
-├── .futi/             # или каталог локальных модулей
+├── futi.yaml          # the whole project module
+├── .futi/             # or a directory of local modules
 │   ├── deploy.yaml
 │   └── test.yaml
 └── src/
@@ -286,52 +302,50 @@ myproject/
 
 ```bash
 cd myproject
-futi list              # видны и локальные, и глобальные модули
-futi deploy            # вызван локальный .futi/deploy.yaml
+futi list              # both local and global modules are visible
+futi deploy            # the local .futi/deploy.yaml is called
 ```
 
-Локальные модули живут только in-memory (не попадают в persistent кэш) —
-каждый запуск читает их заново, поэтому изменения подхватываются сразу.
-Невалидный `futi.yaml` — ошибка при старте (ранняя диагностика).
+Local modules live in memory only (they do not enter the persistent cache): every run reads them again, so changes are picked up immediately. An invalid `futi.yaml` is an error at startup (early diagnostics).
 
-### Конфиг-файл: несколько источников
+### Config file: several sources
 
-Файл `~/.config/futi/config.yaml` задаёт источники модулей с mountpoint'ами:
+The file `~/.config/futi/config.yaml` defines module sources with mountpoints:
 
 ```yaml
 sources:
-  - path: ~/.config/futi/modules         # корень (по умолчанию)
-  - path: /path/to/project-modules       # содержимое монтируется в ns1.ns2
+  - path: ~/.config/futi/modules         # root (default)
+  - path: /path/to/project-modules       # contents are mounted at ns1.ns2
     mountpoint: ns1.ns2
-  - path: /path/to/another-source        # дополнение ns1.ns2 из другого пути
+  - path: /path/to/another-source        # extends ns1.ns2 from another path
     mountpoint: ns1.ns2
-  - path: /path/to/tools                 # обёрнуто как namespace "tools" внутри "dev"
+  - path: /path/to/tools                 # wrapped as the namespace "tools" inside "dev"
     mountpoint: dev
     mount_as_namespace: tools
 ```
 
-Параметры:
-- `path` (обязательный) — каталог с модулями; `~/…` — путь от домашнего каталога (сам домашний каталог — только в кавычках: `"~"`, голый `~` в YAML — это null), относительный путь считается от каталога `config.yaml`
-- `mountpoint` — внутрь какого namespace монтировать содержимое (по умолчанию: корень)
-- `mount_as_namespace` — обернуть содержимое в дополнительный namespace с этим именем
+Parameters:
+- `path` (required) — a directory with modules; `~/…` is a path from the home directory (the home directory itself only in quotes: `"~"`, a bare `~` in YAML is null), a relative path is counted from the directory of `config.yaml`
+- `mountpoint` — the namespace to mount the contents into (default: root)
+- `mount_as_namespace` — wrap the contents in an extra namespace with this name
 
-Правила `mountpoint` и `mount_as_namespace`: внешние точки обрезаются (`.dev.` → `dev`); значение, состоящее только из точек (`.`, `..`), пустой сегмент (`a..b`), а также `/`, `\`, пробельные и управляющие символы в имени — ошибка при загрузке конфига.
+Rules for `mountpoint` and `mount_as_namespace`: leading and trailing dots are trimmed (`.dev.` → `dev`); a value made only of dots (`.`, `..`), an empty segment (`a..b`), as well as `/`, `\`, whitespace and control characters in a name are errors when the config is loaded.
 
-Неизвестный ключ в `config.yaml` (например, опечатка `mountpont`) — ошибка с номером строки: `line 3: unknown key "mountpont" in sources[0]`. Ключи с префиксом `x-` разрешены на любом уровне и игнорируются — под них удобно заводить YAML-якоря (`x-common: &common {…}`).
+An unknown key in `config.yaml` (for example, the typo `mountpont`) is an error with a line number: `line 3: unknown key "mountpont" in sources[0]`. Keys with the `x-` prefix are allowed at any level and are ignored; they are handy for YAML anchors (`x-common: &common {…}`).
 
-Несколько источников с одинаковым mountpoint **объединяются** — модули из всех источников видны в одном namespace. Если два источника дают модуль с одинаковым именем — это конфликт: `futi list` показывает модуль с пометкой `conflict: module in several sources: <каталоги sources>`, а `futi x` завершается ошибкой конфликта.
+Several sources with the same mountpoint are **merged**: modules from all sources are visible in one namespace. If two sources provide a module with the same name, that is a conflict: `futi list` shows the module with the note `conflict: module in several sources: <source directories>`, and `futi x` fails with a conflict error.
 
-Несуществующий или нечитаемый каталог source не ломает остальные: модули остальных sources работают, а в stderr выводится `warning: …` с путём и причиной (при политике кэша `every_time` — при каждом запуске). Автодополнение в таком случае молчит, а кэш при частичном листинге не очищается. Без `config.yaml` отсутствующий каталог модулей (свежая установка) — не ошибка и предупреждений не даёт.
+A missing or unreadable source directory does not break the others: modules from the other sources work, and `warning: …` with the path and the reason is printed to stderr (with the cache policy `every_time`, on every run). Completion stays silent in this case, and the cache is not cleared on a partial listing. Without `config.yaml`, a missing modules directory (a fresh install) is not an error and produces no warnings.
 
-Пустые namespace создаются неявно: если источник монтируется на `ns1.ns2`, то `ns1` и `ns2` существуют как namespaces, даже без собственных модулей.
+Empty namespaces are created implicitly: if a source is mounted at `ns1.ns2`, then `ns1` and `ns2` exist as namespaces even without modules of their own.
 
-Если конфиг-файл отсутствует — futi использует один каталог `~/.config/futi/modules/` (или `FUTI_MODULES_DIR`).
+If the config file is absent, futi uses a single directory `~/.config/futi/modules/` (or `FUTI_MODULES_DIR`).
 
 ---
 
-## Параметры и шаблонизация
+## Parameters and templating
 
-### Передача параметров
+### Passing parameters
 
 ```bash
 futi docker build --tag myapp --file Dockerfile.dev
@@ -340,42 +354,31 @@ futi docker logs --follow=false
 futi docker logs --follow -- mycontainer
 ```
 
-Форматы:
-- `--param value` — пробел (для string/int-параметров)
-- `--param=value` — через `=` (обязательно для значений, начинающихся с `--`)
-- `--bool-flag` — без значения (=`true`)
-- `--bool-flag=false` — явный false
+Formats:
+- `--param value` — with a space (for string/int parameters)
+- `--param=value` — with `=` (required for values that start with `--`)
+- `--bool-flag` — without a value (= `true`)
+- `--bool-flag=false` — explicit false
 
-> **Важно:** порядок строгий — `futi <путь…> [флаги] [-- args]`. Путь
-> (namespace и команда) заканчивается на первом токене, начинающемся с `-`
-> (одиночный `-` — обычное слово). После этого слово допустимо только как
-> значение предыдущего string/int-флага; bool-флаг слово никогда не съедает
-> (`--force false` — ошибка, пишите `--force=false`), а лишнее слово —
-> ошибка `unexpected argument`. Позиционные аргументы команды передаются
-> после `--`. Флаги до пути (`futi --tag x docker build`) не поддерживаются.
+> **Important:** the order is strict — `futi <path…> [flags] [-- args]`. The path (namespace and command) ends at the first token that starts with `-` (a lone `-` is an ordinary word). After that a word is allowed only as the value of the previous string/int flag; a bool flag never consumes a word (`--force false` is an error, write `--force=false`), and an extra word is an `unexpected argument` error. Positional arguments of the command are passed after `--`. Flags before the path (`futi --tag x docker build`) are not supported.
 >
-> Значение `string`/`int` может начинаться с одного `-` (`--n -5`,
-> `--msg -h`); значение, начинающееся с `--`, — только через `=`
-> (`--msg=--x`). Короткие флаги (`-v`, `-f` и т. п.) у обычных команд не
-> принимаются — параметры передаются как `--name`. `-v`/`-r` — только флаги
-> `list`; `--verbose`/`--recurse` у обычной команды — обычные параметры.
-> `-h`/`--help` после пути показывает справку по этому пути.
+> A `string`/`int` value may start with a single `-` (`--n -5`, `--msg -h`); a value that starts with `--` only works via `=` (`--msg=--x`). Short flags (`-v`, `-f`, etc.) are not accepted by regular commands: parameters are passed as `--name`. `-v`/`-r` are only flags of `list`; `--verbose`/`--recurse` on a regular command are ordinary parameters. `-h`/`--help` after a path shows help for that path.
 
-### Шаблонизация
+### Templating
 
-futi использует Go `text/template`:
+futi uses Go `text/template`:
 
-| Синтаксис | Описание |
+| Syntax | Description |
 |---|---|
-| `{{.name}}` | Подстановка значения параметра |
-| `{{quote .name}}` | Безопасная вставка значения как **одного** аргумента (экранирует кавычки/пробелы/метасимволы) |
-| `{{.args}}` | Все аргументы после `--` (строка, пробел-joined) |
-| `{{index .args_list 0}}` | N-й аргумент после `--` (доступ к массиву) |
-| `{{if .follow}}...{{end}}` | Условный блок (для bool) |
-| `{{.env.FOO}}` | Переменная окружения `FOO` (error если не задана) |
-| `{{if index .env "FOO"}}...{{end}}` | Условный блок по наличию env var |
+| `{{.name}}` | Substitutes a parameter value |
+| `{{quote .name}}` | Safely inserts the value as **one** argument (escapes quotes, spaces and metacharacters) |
+| `{{.args}}` | All arguments after `--` (a string, space-joined) |
+| `{{index .args_list 0}}` | The N-th argument after `--` (array access) |
+| `{{if .follow}}...{{end}}` | Conditional block (for bool) |
+| `{{.env.FOO}}` | Environment variable `FOO` (an error if not set) |
+| `{{if index .env "FOO"}}...{{end}}` | Conditional block on the presence of an env var |
 
-Аргументы после `--` передаются в шаблон:
+Arguments after `--` are passed to the template:
 
 ```bash
 futi echo_mod echo -- hello world
@@ -385,63 +388,59 @@ futi echo_mod echo -- hello world
 # → cmd: "echo {{index .args_list 0}}" → echo hello
 ```
 
-Команда по умолчанию (на уровне модуля) вызывается без явной команды:
+The module-level default command is called without an explicit command:
 
 ```bash
 futi echo_mod -- hello world
 # → module.cmd: "echo {{.args}}" → echo hello world
 ```
 
-> **Примечание:** разделитель `--` для args может быть заменён гибридным режимом в будущих версиях (позиционные args для листовых команд без явного `--`).
+> **Note:** the `--` separator for args may be replaced by a hybrid mode in future versions (positional args for leaf commands without an explicit `--`).
 
-Bool-параметры принимают `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off` (без учёта регистра и пробелов по краям): falsy-значения приводятся к пустой строке, truthy — к `true`. Любое другое значение, включая пустое (`--flag=`), — ошибка. Не переданный bool без `default` — false.
+Bool parameters accept `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off` (case-insensitive, surrounding whitespace ignored): falsy values become an empty string, truthy ones become `true`. Any other value, including an empty one (`--flag=`), is an error. A bool that is not passed and has no `default` is false.
 
-### Валидация параметров
+### Parameter validation
 
-- `required: true` и параметр не передан → ошибка; пустое значение string/int (`--tag=`) тоже ошибка (для bool явный `false` допустим)
-- `required: true` вместе с непустым `default` → ошибка схемы (`futi modules validate <ns>`)
-- `default` int-параметра должен быть целым числом, `default` bool — одним из значений выше, иначе ошибка схемы
-- `default` применяется, если параметр не передан
-- Неизвестный параметр (нет в схеме) → ошибка
-- `positional.min` и аргументов после `--` меньше минимума → ошибка
+- `required: true` and the parameter is not passed → error; an empty string/int value (`--tag=`) is an error too (for bool, an explicit `false` is allowed)
+- `required: true` together with a non-empty `default` → schema error (`futi modules validate <ns>`)
+- The `default` of an int parameter must be an integer, the `default` of a bool must be one of the values above, otherwise it is a schema error
+- `default` is applied when the parameter is not passed
+- An unknown parameter (not in the schema) → error
+- `positional.min` and fewer arguments after `--` than the minimum → error
 
-Пример `positional`:
+A `positional` example:
 
 ```yaml
 commands:
   greet:
     cmd: "echo {{index .args_list 0}}"
     positional:
-      min: 1       # требует минимум 1 позиционный аргумент после --
+      min: 1       # requires at least 1 positional argument after --
 ```
 
-### Важно: пробелы и кавычки в значениях
+### Important: spaces and quotes in values
 
-Если значение параметра содержит пробелы, используйте `{{quote}}`:
+If a parameter value contains spaces, use `{{quote}}`:
 
 ```yaml
-cmd: "echo {{quote .msg}}"   # --msg "hello world" → один аргумент: hello world
+cmd: "echo {{quote .msg}}"   # --msg "hello world" → one argument: hello world
 ```
 
-`{{quote}}` экранирует значение так, что оно становится ровно **одним**
-аргументом команды, даже если содержит пробелы, кавычки или метасимволы.
+`{{quote}}` escapes the value so that it becomes exactly **one** command argument, even if it contains spaces, quotes or metacharacters.
 
-Паттерн с ручными кавычками (`cmd: "echo \"{{.msg}}\""`) тоже работает,
-но небезопасен: значение проходит повторный разбор `shlex`, поэтому
-пользователь может «пробить» кавычки и добавить произвольные флаги:
+The pattern with manual quotes (`cmd: "echo \"{{.msg}}\""`) works too, but it is unsafe: the value goes through `shlex` parsing again, so a user can "break out" of the quotes and add arbitrary flags:
 
 ```bash
 futi mod --msg 'x" --force "y'
-# cmd: "echo \"{{.msg}}\""  → echo "x" --force "y"  → --force стал отдельным аргументом!
-# cmd: "echo {{quote .msg}}" → echo 'x" --force "y' → --force остался частью значения
+# cmd: "echo \"{{.msg}}\""  → echo "x" --force "y"  → --force became a separate argument!
+# cmd: "echo {{quote .msg}}" → echo 'x" --force "y' → --force stayed part of the value
 ```
 
-Для значений в опасных позициях (`git commit -m`, `docker run`, любые
-`--flag {{.param}}`) всегда используйте `{{quote}}`.
+For values in dangerous positions (`git commit -m`, `docker run`, any `--flag {{.param}}`) always use `{{quote}}`.
 
-### Переменные окружения в шаблонах
+### Environment variables in templates
 
-Доступ к переменным окружения через `{{.env.FOO}}` — полезно для секретов (токены, API keys), которые небезопасно передавать через `--param` (видны в `ps`):
+Environment variables are available via `{{.env.FOO}}` — useful for secrets (tokens, API keys) that are unsafe to pass via `--param` (they are visible in `ps`):
 
 ```yaml
 commands:
@@ -459,7 +458,7 @@ futi deploy --target staging
 # → deploy --token secret123 --env staging
 ```
 
-Обращение к несуществующей переменной вызывает ошибку (fail-fast). Для опциональной проверки используйте `index`:
+Referencing a non-existent variable is an error (fail-fast). For an optional check use `index`:
 
 ```yaml
 cmd: "deploy {{if index .env \"VERBOSE\"}}-v{{end}}"
@@ -467,11 +466,9 @@ cmd: "deploy {{if index .env \"VERBOSE\"}}-v{{end}}"
 
 ---
 
-## Модуль-пакет со скриптами
+## Module package with scripts
 
-Модуль может содержать собственные скрипты. futi не задаёт `WorkDir` для
-команды — она исполняется в cwd вызова (`./photo.jpg` разрешается оттуда).
-Ссылайтесь на файлы модуля явно через шаблон `{{quote .module_root}}`:
+A module may contain its own scripts. futi does not set `WorkDir` for the command: it runs in the caller's cwd (`./photo.jpg` is resolved from there). Refer to the module's files explicitly through the `{{quote .module_root}}` template:
 
 ```
 ~/.config/futi/modules/mytool/
@@ -494,26 +491,21 @@ commands:
 
 ```bash
 futi mytool deploy --target staging
-# выполнит ~/.config/futi/modules/mytool/scripts/deploy.sh staging
+# runs ~/.config/futi/modules/mytool/scripts/deploy.sh staging
 ```
 
-Скрипты вызываются с `WorkDir` = cwd вызова futi. Первый токен cmd
-подчиняется обычной Unix-семантике: относительный путь резолвится от cwd,
-bare-имя — через `PATH`. Свои скрипты пакета — явно через
-`{{quote .module_root}}/scripts/...` (кавычки экранируют пробелы в пути,
-если модуль лежит в каталоге с пробелами).
+Scripts are called with `WorkDir` = the cwd of the futi call. The first token of `cmd` follows ordinary Unix semantics: a relative path is resolved from the cwd, a bare name through `PATH`. The package's own scripts go explicitly through `{{quote .module_root}}/scripts/...` (the quotes escape spaces in the path if the module lives in a directory with spaces).
 
-### `{{.module_root}}` и `{{.module_name}}`
+### `{{.module_root}}` and `{{.module_name}}`
 
-В шаблоне cmd доступны две новые переменные — путь и имя модуля. Они
-используются для обращения к файлам модуля из cmd и хуков:
+Two variables are available in the `cmd` template: the path and the name of the module. They are used to reach the module's files from `cmd` and hooks:
 
 ```yaml
 cmd: "{{quote .module_root}}/scripts/{{.name}}.sh"
 ```
 
 ```yaml
-# Модуль с собственным venv — путь к интерпретатору от корня модуля:
+# A module with its own venv — the interpreter path starts from the module root:
 # ~/.config/futi/modules/images/qr/
 # ├── config.yaml
 # ├── scripts/make.py
@@ -523,95 +515,89 @@ commands:
     cmd: "{{quote .module_root}}/.venv/bin/python {{quote .module_root}}/scripts/make.py --text {{quote .text}}"
 ```
 
-Переменные прокинуты также как `FUTI_MODULE_ROOT` и `FUTI_MODULE_NAME` в
-окружении дочернего процесса — скрипты на любом языке могут использовать их
-напрямую:
+The variables are also exposed as `FUTI_MODULE_ROOT` and `FUTI_MODULE_NAME` in the child process environment, so scripts in any language can use them directly:
 
 ```python
-# scripts/run.py — путь к модулю из env
+# scripts/run.py — the module path from env
 import os
 mod_root = os.environ["FUTI_MODULE_ROOT"]
 config = os.path.join(mod_root, "config.local.yaml")
 ```
 
-Обращение к `{{.module_root}}`/`{{.module_name}}` при пустом `ModuleRef` даёт
-missingkey-ошибку (`fail-fast`, как `{{.env.X}}` при отсутствии env var).
+Referencing `{{.module_root}}`/`{{.module_name}}` with an empty `ModuleRef` gives a missingkey error (`fail-fast`, like `{{.env.X}}` when the env var is absent).
 
-### Cwd вызова и пути пользователя
+### Caller's cwd and user paths
 
-Относительные пути, переданные пользователем (`--out result.png`, файлы
-после `--`), резолвятся ОС от cwd вызова `futi` — естественная Unix-семантика.
-Скрипту, которому нужен cwd, достаточно `getcwd()` (он = cwd вызова futi):
+Relative paths passed by the user (`--out result.png`, files after `--`) are resolved by the OS from the cwd of the `futi` call — natural Unix semantics. A script that needs the cwd can just call `getcwd()` (it equals the cwd of the futi call):
 
 ```python
 import os
 out = os.path.join(os.getcwd(), "result.png")
 ```
 
-> **Migration note (pre-release):** до переработки рабочего каталога futi вызывал команды с
-> `WorkDir` = корень модуля и передавал `FUTI_CWD` в env. Это поведение
-> удалено. Правки модулей:
+> **Migration note (pre-release):** before the working-directory rework, futi ran commands with `WorkDir` = the module root and passed `FUTI_CWD` in the env. That behavior has been removed. Module fixes:
 >
 > - `cmd: "./scripts/x.sh ..."` → `cmd: "{{quote .module_root}}/scripts/x.sh ..."`
 > - `cmd: ".venv/bin/python scripts/x.py ..."` → `cmd: "{{quote .module_root}}/.venv/bin/python {{quote .module_root}}/scripts/x.py ..."`
 > - `base = os.environ.get("FUTI_CWD") or os.getcwd()` → `base = os.getcwd()`
->   (cwd вызова futi = cwd скрипта, `getcwd()` достаточно)
-> - `os.environ["FUTI_CWD"]` для путей модуля → `os.environ["FUTI_MODULE_ROOT"]`
+>   (the cwd of the futi call = the script's cwd, `getcwd()` is enough)
+> - `os.environ["FUTI_CWD"]` for module paths → `os.environ["FUTI_MODULE_ROOT"]`
 
 ---
 
-## Команды CLI
+## CLI commands
 
 ```bash
-futi <namespace...> <command> [--param val] [-- args]   # вызов команды модуля
-futi <namespace...> [<command>] -h          # справка по пути (модуль, ветка или команда)
-futi <namespace>                            # команда по умолчанию (если есть cmd на уровне модуля)
-futi --dry-run <namespace...> <command> ... # показать команду, не исполняя
-futi list                                   # модули и namespaces в корне
-futi <namespace...> list                    # содержимое namespace или команды модуля
-futi <namespace...> list -v                 # то же, с колонкой PATH
-futi <namespace...> list -r                 # рекурсивный обход поддерева
-futi modules validate <namespace>           # валидация схемы модуля
-futi <namespace...> help                    # справка по модулю/команде
-futi modules init <name> [flags]            # создать модуль с шаблоном
-futi modules install <source> [flags]       # установить модуль из source (local/git/archive)
-futi modules uninstall <name> [flags]       # detach + удаление (с подтверждением)
-futi modules update [name] [flags]          # re-fetch из lockfile-источника + re-attach
-futi modules list                           # установленные модули
-futi modules info <name>                    # детали установки (lockfile/about)
-futi modules path <name>                    # каталог установленного модуля
-futi modules add_command <mod> <cmd> [flags]   # добавить команду в манифест
-futi modules remove_command <mod> <cmd>      # удалить команду из манифеста
-futi cache refresh                          # явное обновление кэша модулей
-futi cache status                           # статистика кэша
-futi cache clear                            # удалить persistent кэш с диска
-futi completion <bash|zsh|fish>             # сгенерировать скрипт автодополнения
-futi __complete <args...>                   # hidden: подсказки для completion (внутр.)
-futi -h | --help                            # справка
+futi <namespace...> <command> [--param val] [-- args]   # call a module command
+futi <namespace...> [<command>] -h          # help for a path (module, branch or command)
+futi <namespace>                            # default command (if the module has a module-level cmd)
+futi --dry-run <path...> <command>          # print the command without running it
+futi list                                   # modules and namespaces at the root
+futi <namespace...> list                    # contents of a namespace or module commands
+futi <namespace...> list -v                 # the same, with a PATH column
+futi <namespace...> list -r                 # recursive subtree traversal
+futi modules validate <namespace>           # validate a module schema
+futi <namespace...> help                    # help for a module/command
+futi modules init <name> [flags]            # create a module from a template
+futi modules install <source> [flags]       # install a module from a source (local/git/archive)
+futi modules uninstall <name> [flags]       # detach + remove (with confirmation)
+futi modules update [name] [flags]          # re-fetch from the lockfile source + re-attach
+futi modules list                           # installed modules
+futi modules info <name>                    # installation details (lockfile/about)
+futi modules path <name>                    # directory of an installed module
+futi modules add_command <mod> <cmd> [flags]   # add a command to the manifest
+futi modules remove_command <mod> <cmd>      # remove a command from the manifest
+futi cache refresh                          # explicit module cache refresh
+futi cache status                           # cache statistics
+futi cache clear                            # remove the persistent cache from disk
+futi completion <bash|zsh|fish>             # generate a completion script
+futi __complete <args...>                   # hidden: completion hints (internal)
+futi -h | --help                            # help
+futi --version                              # print the version
 ```
 
-Удалить единственную команду модуля без `cmd` нельзя — получился бы пустой модуль; `futi modules remove_command` откажет и оставит манифест без изменений.
+You cannot remove the only command of a module that has no `cmd`: the module would be empty; `futi modules remove_command` refuses and leaves the manifest unchanged.
 
-Парсинг: путь — слова до первого флага (токена с `-`); последнее слово пути — команда, всё до него — namespace (сегменты через `.`); затем флаги, затем `--`. Аргументы после `--` передаются в шаблон команды как `{{.args}}` (строка) и `{{.args_list}}` (массив). Сегменты пути можно писать через точку: `futi docker.build` = `futi docker build` (если есть модуль `docker.build`, побеждает он — сначала пробуется длиннейший namespace).
+Parsing: the path is the words up to the first flag (a token with `-`); the last word of the path is the command, everything before it is the namespace (segments joined with `.`); then flags, then `--`. Arguments after `--` are passed to the command template as `{{.args}}` (a string) and `{{.args_list}}` (an array). Path segments may be written with dots: `futi docker.build` = `futi docker build` (if a module `docker.build` exists, it wins: the longest namespace is tried first).
 
-**Зарезервированные имена**: `list`, `cache`, `modules`, `completion`, `__complete` (перехватываются CLI до резолва модулей) нельзя использовать ни в одном сегменте пути модуля — ни в namespace, ни в имени. Проверка выполняется при `futi modules init` и `futi modules install` (для `--namespace` и итогового имени); уже установленные модули не затрагиваются. Команда модуля с именем `list` — ошибка схемы (см. раздел ошибок валидации). `help` — исключение: если в модуле определена своя команда `help`, вызывается она.
+**Reserved names**: `list`, `cache`, `modules`, `completion`, `__complete` (intercepted by the CLI before module resolution) cannot be used in any segment of a module path — neither in a namespace nor in a name. The check runs in `futi modules init` and `futi modules install` (for `--namespace` and the resulting name); modules that are already installed are not affected. A module command named `list` is a schema error (see the validation errors section). `help` is an exception: if a module defines its own `help` command, it is called.
 
 ```bash
 futi docker build --tag myapp        # namespace=docker, command=build
 futi dev deploy staging              # namespace=dev.deploy, command=staging
 futi k8s logs --follow -- mypod      # namespace=k8s, command=logs, follow=true, args="mypod"
 futi echo_mod echo -- hello world    # namespace=echo_mod, command=echo, args="hello world"
-futi echo_mod -- hello world         # default cmd модуля echo_mod, args="hello world"
+futi echo_mod -- hello world         # default cmd of the echo_mod module, args="hello world"
 ```
 
-**Stdin, сигналы и код выхода.** Команда модуля наследует stdin futi: пайпы (`echo data | futi m c`) и интерактивные утилиты (`ssh`, `psql`, `docker exec -it`) работают. Ctrl+C (SIGINT) и Ctrl+\ (SIGQUIT) терминал доставляет сразу команде — когда futi запущен на переднем плане терминала, он ждёт её завершения и ничего не делает сам. Без терминала или не на переднем плане (CI, фон, нет управляющего терминала) SIGINT/SIGQUIT, присланные futi (`kill -INT <pid>`, IDE), пересылаются команде. SIGTERM и SIGHUP, полученные futi, пересылаются команде всегда. При сигнале всей группе процессов (`timeout`, `timeout -s INT`, systemd `KillMode=control-group`, `kill -TERM -<pgid>`) команда получит SIGTERM (а без терминала и SIGINT/SIGQUIT) дважды: напрямую и от futi. Если futi переслал команде SIGTERM, SIGHUP или SIGINT, после её завершения он завершается тем же сигналом, даже если команда перехватила сигнал и вышла с 0; после пересланного SIGQUIT код выхода — `128+3`. Код выхода futi для команды модуля равен коду команды; если команда убита сигналом N — `128+N` (например, 143 для SIGTERM); при гибели команды от SIGINT/SIGTERM/SIGHUP futi сам завершается тем же сигналом, поэтому шелл прерывает циклы по Ctrl+C. То же относится к `futi modules *`: если хук (`attach`/`detach`) убит прерывающим сигналом, futi завершается этим сигналом; прочие ошибки `modules`-команд дают код 1. SIGINT и SIGHUP, проигнорированные при запуске futi (`nohup`, фоновая команда шелла), остаются игнорируемыми и для команды (для SIGQUIT и SIGTERM рантайм Go ставит свой обработчик, наследования нет).
+**Stdin, signals and exit code.** A module command inherits the stdin of futi: pipes (`echo data | futi m c`) and interactive utilities (`ssh`, `psql`, `docker exec -it`) work. Ctrl+C (SIGINT) and Ctrl+\ (SIGQUIT) are delivered by the terminal straight to the command: when futi runs in the foreground of a terminal, it waits for the command to finish and does nothing itself. Without a terminal or not in the foreground (CI, background, no controlling terminal), SIGINT/SIGQUIT sent to futi (`kill -INT <pid>`, an IDE) are forwarded to the command. SIGTERM and SIGHUP received by futi are always forwarded to the command. When a signal is sent to the whole process group (`timeout`, `timeout -s INT`, systemd `KillMode=control-group`, `kill -TERM -<pgid>`), the command receives SIGTERM (and without a terminal, SIGINT/SIGQUIT too) twice: directly and from futi. If futi forwarded SIGTERM, SIGHUP or SIGINT to the command, after the command finishes futi terminates with the same signal, even if the command caught the signal and exited with 0; after a forwarded SIGQUIT the exit code is `128+3`. The futi exit code for a module command equals the command's exit code; if the command was killed by signal N, it is `128+N` (for example, 143 for SIGTERM); when the command dies from SIGINT/SIGTERM/SIGHUP, futi itself terminates with the same signal, so the shell breaks loops on Ctrl+C. The same applies to `futi modules *`: if a hook (`attach`/`detach`) is killed by an interrupting signal, futi terminates with that signal; other errors of `modules` commands give exit code 1. SIGINT and SIGHUP that were ignored when futi started (`nohup`, a shell background command) stay ignored for the command too (for SIGQUIT and SIGTERM the Go runtime installs its own handler, so nothing is inherited).
 
-### Навигация через `list`
+### Navigation with `list`
 
-`list` показывает содержимое текущего уровня иерархии:
+`list` shows the contents of the current level of the hierarchy:
 
 ```bash
-$ futi list                          # корень: модули и namespaces
+$ futi list                          # root: modules and namespaces
 ┌───────────┬────────┬───────────────────┐
 │   TYPE    │  NAME  │    DESCRIPTION    │
 ├───────────┼────────┼───────────────────┤
@@ -619,7 +605,7 @@ $ futi list                          # корень: модули и namespaces
 │ namespace │ images │                   │
 └───────────┴────────┴───────────────────┘
 
-$ futi images list                   # namespace: вложенные namespaces и модули
+$ futi images list                   # namespace: nested namespaces and modules
 ┌───────────┬───────────┬───────────────┐
 │   TYPE    │   NAME    │  DESCRIPTION  │
 ├───────────┼───────────┼───────────────┤
@@ -627,14 +613,14 @@ $ futi images list                   # namespace: вложенные namespaces 
 │ module    │ png       │ PNG utilities │
 └───────────┴───────────┴───────────────┘
 
-$ futi images converter list         # вложенный namespace
+$ futi images converter list         # nested namespace
 ┌────────┬────────┬──────────────────────┐
 │  TYPE  │  NAME  │     DESCRIPTION      │
 ├────────┼────────┼──────────────────────┤
 │ module │ to_png │ Convert images to PNG │
 └────────┴────────┴──────────────────────┘
 
-$ futi images png list               # модуль: команды
+$ futi images png list               # module: commands
 ┌─────────┬─────────────┐
 │ COMMAND │ DESCRIPTION │
 ├─────────┼─────────────┤
@@ -642,7 +628,7 @@ $ futi images png list               # модуль: команды
 │ resize  │             │
 └─────────┴─────────────┘
 
-$ futi docker list                   # модуль в корне: команды
+$ futi docker list                   # module at the root: commands
 ┌─────────┬─────────────┐
 │ COMMAND │ DESCRIPTION │
 ├─────────┼─────────────┤
@@ -651,10 +637,10 @@ $ futi docker list                   # модуль в корне: команд�
 └─────────┴─────────────┘
 ```
 
-Если у модуля есть команда по умолчанию (`cmd` на уровне модуля), она отображается первой с маркером `(default)`:
+If a module has a default command (a module-level `cmd`), it is shown first with the `(default)` marker:
 
 ```bash
-$ futi echo_mod list                 # модуль с default cmd
+$ futi echo_mod list                 # module with a default cmd
 ┌───────────┬─────────────┐
 │ COMMAND   │ DESCRIPTION │
 ├───────────┼─────────────┤
@@ -663,11 +649,11 @@ $ futi echo_mod list                 # модуль с default cmd
 └───────────┴─────────────┘
 ```
 
-То же касается subcommands: если команда имеет `cmd` + `commands`, `cmd` показывается как `(default)` (fallback при вызове без subcommand).
+The same goes for subcommands: if a command has `cmd` + `commands`, `cmd` is shown as `(default)` (the fallback when called without a subcommand).
 
-Логика: если namespace резолвится как модуль — `list` показывает его команды. Если как namespace-директория — показывает непосредственных детей (вложенные namespaces и модули). `list` зарезервирован — команда с именем `list` (на любом уровне вложенности) в модуле — ошибка схемы.
+Logic: if the namespace resolves to a module, `list` shows its commands. If it resolves to a namespace directory, it shows the direct children (nested namespaces and modules). `list` is reserved: a command named `list` (at any nesting level) in a module is a schema error.
 
-Флаг `-v`/`--verbose` добавляет колонку `PATH` — путь к манифесту модуля. Полезно при нескольких источниках модулей или отладке:
+The `-v`/`--verbose` flag adds a `PATH` column — the path to the module manifest. Useful with several module sources or when debugging:
 
 ```bash
 $ futi list -v
@@ -679,7 +665,7 @@ $ futi list -v
 └───────────┴────────┴───────────────────┴──────────────────────────────────────────┘
 ```
 
-Флаг `-r`/`--recurse` рекурсивно обходит всё поддерево namespace, показывая полный namespace-путь от контекста:
+The `-r`/`--recurse` flag walks the whole namespace subtree recursively, showing the full namespace path from the context:
 
 ```bash
 $ futi list -r
@@ -693,7 +679,7 @@ $ futi list -r
 │ module    │ images.png           │ PNG utilities        │
 └───────────┴──────────────────────┴──────────────────────┘
 
-$ futi images list -r                # от контекста images
+$ futi images list -r                # from the images context
 ┌───────────┬──────────────────┬──────────────────────┐
 │   TYPE    │       NAME       │     DESCRIPTION      │
 ├───────────┼──────────────────┼──────────────────────┤
@@ -703,19 +689,19 @@ $ futi images list -r                # от контекста images
 └───────────┴──────────────────┴──────────────────────┘
 ```
 
-`-r` игнорируется для модулей (показывает команды как обычно). Можно комбинировать: `futi list -r -v`.
+`-r` is ignored for modules (commands are shown as usual). Flags can be combined: `futi list -r -v`.
 
-### Справка через `help`
+### Help with `help`
 
-`help` — контекстная справка на любом уровне, без выхода в README:
+`help` is contextual help at any level, without leaving the terminal for the README:
 
 ```bash
-futi demo help                 # справка по модулю
-futi demo build help           # справка по команде
-futi demo migrate help         # справка по ветке команд
+futi demo help                 # module help
+futi demo build help           # command help
+futi demo migrate help         # help for a command branch
 ```
 
-Модульная справка — описание, default cmd и список команд:
+Module help shows the description, the default cmd and the list of commands:
 
 ```bash
 $ futi demo help
@@ -726,8 +712,7 @@ commands:
   migrate  Database migrations
 ```
 
-Командная справка — USAGE с параметрами (тип, required, default, описание),
-позиционные требования и итоговый шаблон команды:
+Command help shows USAGE with parameters (type, required, default, description), positional requirements and the final command template:
 
 ```bash
 $ futi demo build help
@@ -745,53 +730,51 @@ CMD
   docker build -t {{.tag}} -f {{.file}} .
 ```
 
-`help` подсказывается автодополнением на каждом уровне (модуль/команда/
-subcommand). Если в модуле определена собственная команда `help` — вызывается
-она, системная справка не перехватывает user-defined имена. Пользовательская `help` исполняется как обычная команда: получает флаги и `-- args`, её stderr и код выхода пробрасываются.
+`help` is suggested by completion at every level (module/command/subcommand). If a module defines its own `help` command, that one is called; system help does not intercept user-defined names. A user-defined `help` runs as an ordinary command: it receives flags and `-- args`, and its stderr and exit code are passed through.
 
 ### `--dry-run`
 
-`--dry-run` — глобальный флаг: печатает итоговую команду модуля и ничего не исполняет.
+`--dry-run` is a global flag: it prints the final module command and executes nothing.
 
-Для команды с шаблоном `cmd: "docker build -t {{quote .tag}} -f {{quote .file}} ."` (`file` по умолчанию `Dockerfile`):
+For a command with the template `cmd: "docker build -t {{quote .tag}} -f {{quote .file}} ."` (`file` defaults to `Dockerfile`):
 
 ```bash
 $ futi --dry-run docker build --tag 'my app'
 docker build -t 'my app' -f Dockerfile .
 ```
 
-Вывод — одна строка в stdout: argv команды после рендера шаблона и разбора shlex, токены с пробелами и спецсимволами в одинарных кавычках (строку можно вставить в shell). Вывод печатается в синтаксисе POSIX shell (bash/zsh). Токены с управляющими или непечатаемыми символами (ESC, `\r`, bidi и т. п.) экранируются в форме `$'…'`, чтобы чужой модуль не мог подделать отображаемую команду. Ошибки (неизвестная команда, пропущенный обязательный параметр, ошибка шаблона) выводятся так же, как без `--dry-run`, с тем же кодом выхода.
+The output is one line on stdout: the command's argv after template rendering and shlex parsing, with tokens that contain spaces or special characters in single quotes (the line can be pasted into a shell). The output uses bash/zsh syntax (not POSIX sh/dash): the `$'…'` form is used only for tokens with control or non-printable characters (ESC, `\r`, bidi characters, etc.), so a foreign module cannot forge the displayed command. To paste such tokens back into a shell, use a UTF-8 locale: `\u…` inside `$'…'` depends on the locale. Errors (unknown command, missing required parameter, template error) are printed the same way as without `--dry-run`, with the same exit code.
 
-- Флаг распознаётся только первым аргументом `futi`; после пути `--dry-run` — обычный флаг модуля, а не зарезервированное имя параметра.
-- Хуки (`attach`/`detach`) не исполняются и не показываются: печатается только команда.
-- `-h` / `--help` после пути работает как обычно (справка, код 0). Пользовательская команда `help` модуля показывается как любая другая.
-- `list`, `help` (системная справка), `modules`, `cache`, `completion`, `--version` и `-h` без пути не команды модулей: с `--dry-run` они завершаются ошибкой `--dry-run applies only to module commands` (код 1).
-- **Секреты:** шаблон подставляет значения `{{.env.X}}` — они попадут в вывод. Не публикуйте результат `--dry-run` для команд с токенами и паролями в окружении.
+- The flag is recognized only as the first argument of `futi`; after the path `--dry-run` is an ordinary module flag, not a reserved parameter name.
+- Hooks (`attach`/`detach`) are not executed and not shown: only the command is printed.
+- `-h` / `--help` after the path works as usual (help, exit code 0). A module's user-defined `help` command is shown like any other.
+- `list`, `help` (system help), `modules`, `cache`, `completion`, `--version` and `-h` without a path are not module commands: with `--dry-run` they fail with the error `--dry-run applies only to module commands` (exit code 1).
+- **Secrets:** the template substitutes `{{.env.X}}` values, and they will appear in the output. Do not publish `--dry-run` output for commands with tokens and passwords in the environment.
 
 ---
 
-## Валидация
+## Validation
 
-`futi modules validate <ns>` проверяет схему модуля без вызова команды — полезно при разработке модуля, в CI или перед публикацией.
+`futi modules validate <ns>` checks a module schema without calling a command — useful when developing a module, in CI, or before publishing.
 
 ```bash
 $ futi modules validate docker
 OK
 ```
 
-Невалидный модуль выводит отчёт со всеми ошибками и предупреждениями за один проход:
+An invalid module prints a report with all errors and warnings in one pass:
 
 ```bash
 $ futi modules validate bad
-ERROR: command "empty": must have cmd or commands
 ERROR: command "build": param "tag" has invalid type "float" (valid: string, bool, int)
 ERROR: command "build": duplicate param "tag"
+ERROR: command "empty": must have cmd or commands
 modules: validate: module "bad" has 3 error(s)
 $ echo $?
 1
 ```
 
-Предупреждения не блокируют (exit code 0):
+Warnings do not block (exit code 0):
 
 ```bash
 $ futi modules validate db
@@ -800,33 +783,33 @@ $ echo $?
 0
 ```
 
-### Что проверяется
+### What is checked
 
-**Ошибки** (блокируют загрузку модуля, `futi <ns> <cmd>` упадёт с понятным сообщением):
+**Errors** (block module loading, `futi <ns> <cmd>` fails with a clear message):
 
-- неизвестный ключ манифеста (с номером строки; такие ошибки выводятся первыми)
-- модуль без `cmd` и без `commands`
-- команда без `cmd` и без `commands` (бесполезная команда); `cmd` из одних пробелов считается пустым
-- `params` или `positional.min` без `cmd` — на любом уровне (модуль, команда); параметры не наследуются подкомандами
-- синтаксическая ошибка шаблона в `cmd`, `attach`, `detach` (проверяется только разбор, имена переменных — нет)
-- недопустимое имя команды в `commands`: пустое, начинается с `-`, содержит `.`, пробельные или управляющие символы
-- команда с именем `list` (на любом уровне) — недостижима, `list` перехватывается как системный запрос
-- дубликаты имён `params` в команде
-- `type` параметра не из `{string, bool, int}` (пустой = `string`)
-- имя параметра зарезервировано (`args`, `args_list`, `env`, `module_name`, `module_root`) — иначе оно перекрылось бы служебной переменной шаблона
-- имя параметра не соответствует `^[A-Za-z_][A-Za-z0-9_-]*$` (в т.ч. пустое)
+- an unknown manifest key (with a line number; such errors are printed first)
+- a module with neither `cmd` nor `commands`
+- a command with neither `cmd` nor `commands` (a useless command); a `cmd` consisting only of spaces counts as empty
+- `params` or `positional.min` without `cmd` — at any level (module, command); parameters are not inherited by subcommands
+- a template syntax error in `cmd`, `attach`, `detach` (only parsing is checked, not variable names)
+- an invalid command name in `commands`: empty, starts with `-`, contains `.`, whitespace or control characters
+- a command named `list` (at any level) is unreachable: `list` is intercepted as a system request
+- duplicate `params` names in a command
+- a parameter `type` outside `{string, bool, int}` (empty = `string`)
+- a reserved parameter name (`args`, `args_list`, `env`, `module_name`, `module_root`) — otherwise it would be shadowed by a template service variable
+- a parameter name that does not match `^[A-Za-z_][A-Za-z0-9_-]*$` (including an empty one)
 
-**Предупреждения** (не блокируют, показываются только в `validate`):
+**Warnings** (do not block, shown only in `validate`):
 
-- команда с `commands`, но без `cmd` — вызов без subcommand падает в runtime
+- a command with `commands` but without `cmd` — calling without a subcommand fails at runtime
 
-Валидация выполняется рекурсивно для всех вложенных `commands`. Порядок ошибок детерминирован: неизвестные ключи, затем `attach`/`detach` и пустой модуль, затем `(default)`, затем команды по алфавиту (родитель раньше вложенных). При обычном вызове (`futi <ns> <cmd>`) валидация запускается автоматически при загрузке модуля — `futi modules validate <ns>` нужен для просмотра **всех** ошибок за один проход и для warnings (которые в runtime не показываются).
+Validation is recursive over all nested `commands`. The order of errors is deterministic: unknown keys, then `attach`/`detach` and the empty module, then `(default)`, then commands in alphabetical order (a parent before its nested commands). On a regular call (`futi <ns> <cmd>`) validation runs automatically when the module is loaded; `futi modules validate <ns>` is needed to see **all** errors in one pass and the warnings (which are not shown at runtime).
 
 ---
 
-## Создание модулей
+## Creating modules
 
-`futi modules init` создаёт YAML-модуль с шаблоном — не нужно копировать из README вручную. Модуль сразу доступен через auto-discovery. Сегменты пути не содержат точку (она — разделитель namespace); если уже есть `<path>/config.yaml`, init отказывает (иначе `.yaml` и `/config.yaml` дали бы конфликт).
+`futi modules init` creates a YAML module from a template, so you do not have to copy it from the README by hand. The module is immediately available through auto-discovery. Path segments contain no dot (it is the namespace separator); if `<path>/config.yaml` already exists, init refuses (otherwise `.yaml` and `/config.yaml` would conflict).
 
 ```bash
 futi modules init mytool                          # ./.futi/mytool.yaml
@@ -834,16 +817,16 @@ futi modules init dev/mytool                      # ./.futi/dev/mytool.yaml (nam
 futi modules init mytool --global                 # ~/.config/futi/modules/mytool.yaml
 ```
 
-Флаги:
+Flags:
 
-| Флаг | Описание |
+| Flag | Description |
 |---|---|
-| `--desc <text>` | Описание модуля (по умолчанию `My tool`) |
-| `--default-cmd <cmd>` | Команда по умолчанию на уровне модуля (`cmd` поле) |
-| `--command <name>` | Добавить команду (можно несколько раз) |
-| `--global` | Создать в `~/.config/futi/modules/` вместо `./.futi/` |
+| `--desc <text>` | Module description (default `My tool`) |
+| `--default-cmd <cmd>` | Module-level default command (the `cmd` field) |
+| `--command <name>` | Add a command (can be repeated) |
+| `--global` | Create in `~/.config/futi/modules/` instead of `./.futi/` |
 
-Минимальный модуль (без флагов):
+A minimal module (no flags):
 
 ```bash
 $ futi modules init mytool
@@ -862,7 +845,7 @@ commands:
     cmd: "echo hello"
 ```
 
-С флагами:
+With flags:
 
 ```bash
 $ futi modules init dev/apitool --desc "API utilities" --default-cmd "echo api" --command fetch --command build
@@ -871,7 +854,7 @@ Created: .futi/dev/apitool.yaml
 $ futi dev apitool           # default cmd
 api
 
-$ futi dev apitool fetch     # команда
+$ futi dev apitool fetch     # a command
 fetch
 ```
 
@@ -887,43 +870,43 @@ commands:
     cmd: "echo build"
 ```
 
-При существующем файле возвращается ошибка (без перезаписи). Созданный модуль проходит валидацию схемы.
+If the file already exists, an error is returned (no overwrite). The created module passes schema validation.
 
 ---
 
-## Управление модулями
+## Managing modules
 
-Установка модулей из любого источника — локальный путь, git-репозиторий, web-архив:
+Install modules from any source — a local path, a git repository, a web archive:
 
 ```bash
-# из локального каталога
+# from a local directory
 futi modules install ~/dev/my-modules/qr
 
-# из git (branch/tag через --ref)
+# from git (branch/tag via --ref)
 futi modules install https://github.com/foo/qr-mod.git --ref v1.2.0
 
-# из архива (.zip / .tar.gz)
+# from an archive (.zip / .tar.gz)
 futi modules install https://example.com/qr-mod.tar.gz
 
-# в namespace и локально в проект
+# into a namespace, and locally into a project
 futi modules install ~/dev/qr --namespace images
 futi modules install ~/dev/qr --local
 ```
 
-Одиночный `.yaml` при установке оборачивается в пакет: создаётся каталог `<module>/config.yaml`; имя без `.yaml`/`.yml` берётся из `name:` манифеста или из имени источника, оно не должно содержать точку, а рядом не должно лежать одноимённого `<module>.yaml`. Флаги install: `--namespace <ns>`, `--ref <git-ref>` (только для git-источника, для local/archive — ошибка), `--local` (в `./.futi/` вместо глобального каталога), `--skip-attach`, `--yes` / `-y` (запустить attach-хук без вопроса), `--from-local` / `--from-git` / `--from-archive` (переопределить эвристику определения типа источника).
+A single `.yaml` is wrapped into a package on install: a directory `<module>/config.yaml` is created; the name without `.yaml`/`.yml` is taken from `name:` in the manifest or from the source name, it must not contain a dot, and there must be no `<module>.yaml` of the same name next to it. Install flags: `--namespace <ns>`, `--ref <git-ref>` (git sources only, an error for local/archive), `--local` (into `./.futi/` instead of the global directory), `--skip-attach`, `--yes` / `-y` (run the attach hook without asking), `--from-local` / `--from-git` / `--from-archive` (override the source type detection heuristic).
 
-Сетевые источники — только `https://`: `http://`- и `git://`-адреса отвергаются, редирект с https на http запрещён (и для архива, и для git); для git-репозитория скачайте модуль вручную и установите из локального пути, для архива — скачайте, распакуйте и установите каталог (локальный `.tar.gz`/`.zip` install не принимает). Поддерживаются архивы `.zip` и `.tar.gz`/`.tgz`; формат определяется по содержимому файла, расширение в URL берётся без query и fragment, а `.tar.bz2`/`.tbz2`/`.tar.xz`/`.txz` отвергаются до скачивания. Скачивание архива ограничено 100 MiB и 5 минутами. Распаковка ограничена 500 MiB суммарно и 10000 записями (файлы и каталоги); symlink и прочие не-regular записи в `.zip` и `.tar.gz` пропускаются, а права файлов приводятся к `rwx` (без setuid/setgid/sticky, владелец всегда может читать и писать). Источник и `--ref` не должны начинаться с `-`.
+Network sources are `https://` only: `http://` and `git://` addresses are rejected, and a redirect from https to http is forbidden (for both archive and git); for a git repository, download the module manually and install it from a local path, and for an archive, download and unpack it and install the directory (install does not accept a local `.tar.gz`/`.zip`). `.zip` and `.tar.gz`/`.tgz` archives are supported; the format is detected by the file contents, the extension in the URL is taken without query and fragment, and `.tar.bz2`/`.tbz2`/`.tar.xz`/`.txz` are rejected before downloading. An archive download is limited to 100 MiB and 5 minutes. Unpacking is limited to 500 MiB in total and 10000 entries (files and directories); symlinks and other non-regular entries in `.zip` and `.tar.gz` are skipped, and file permissions are reduced to `rwx` (no setuid/setgid/sticky, the owner can always read and write). The source and `--ref` must not start with `-`.
 
-Модуль может объявлять setup/teardown-хуки — `futi` выполнит их при install/update и uninstall:
+A module can declare setup/teardown hooks — `futi` runs them on install/update and uninstall:
 
 ```yaml
 attach: ".venv/bin/python -m pip install -r requirements.txt"
 detach: "rm -rf .venv"
 ```
 
-Хуки выполняются в каталоге модуля; `{{.module_name}}`/`FUTI_MODULE_NAME` — то же имя, что и в `cmd` (поле `name`, а без него — имя каталога/файла модуля), при install, update и uninstall; доступны `{{.module_name}}`, `{{.module_root}}`, `{{.env.FOO}}`, `{{quote ...}}` и переменные окружения FUTI_MODULE_NAME / FUTI_MODULE_ROOT. Хуки наследуют stdin futi и выполняются без таймаута: зависший хук прерывается Ctrl+C. Без управляющего терминала (CI, cron, ssh без tty) хук запускается в своей группе процессов: сигналы SIGINT, SIGQUIT, SIGTERM и SIGHUP, полученные futi, пересылаются всем процессам хука, включая порождённые составной командой (`sh -c`). При управляющем терминале хук остаётся в группе futi (интерактивные хуки работают) — в том числе когда futi запущен в фоне (`&`) или с перенаправленным вводом (`</dev/null`): перенаправление и фон изоляцию не включают; при адресном `kill -TERM <futi>` процессы, порождённые хуком, могут остаться. Изолированный хук (без управляющего терминала) не погибает от сигнала, посланного группе futi (`kill -9 -<pgid>`, `timeout -s KILL futi …`): его группа отдельная. Провал `attach` при install откатывает установку (модуль удаляется); при update — только предупреждение, новое дерево сохраняется. Провал `detach` при uninstall — предупреждение (или отказ с `--strict-detach`).
+Hooks run in the module directory; `{{.module_name}}`/`FUTI_MODULE_NAME` is the same name as in `cmd` (the `name` field, or without it the module's directory/file name) on install, update and uninstall; `{{.module_name}}`, `{{.module_root}}`, `{{.env.FOO}}`, `{{quote ...}}` and the environment variables FUTI_MODULE_NAME / FUTI_MODULE_ROOT are available. Hooks inherit the stdin of futi and run without a timeout: a hung hook is interrupted with Ctrl+C. Without a controlling terminal (CI, cron, ssh without tty) a hook runs in its own process group: SIGINT, SIGQUIT, SIGTERM and SIGHUP received by futi are forwarded to all hook processes, including those spawned by a compound command (`sh -c`). With a controlling terminal the hook stays in the futi group (interactive hooks work), including when futi runs in the background (`&`) or with redirected input (`</dev/null`): redirection and background do not enable isolation; on a targeted `kill -TERM <futi>`, processes spawned by the hook may stay behind. An isolated hook (no controlling terminal) does not die from a signal sent to the futi group (`kill -9 -<pgid>`, `timeout -s KILL futi …`): its group is separate. A failed `attach` on install rolls the installation back (the module is removed); on update it is only a warning, and the new tree is kept. A failed `detach` on uninstall is a warning (or a refusal with `--strict-detach`).
 
-`attach` из скачанного манифеста — чужой код, поэтому install и update перед его запуском спрашивают подтверждение (в stderr, шаблон показывается как есть, без подстановки значений):
+The `attach` from a downloaded manifest is foreign code, so install and update ask for confirmation before running it (on stderr; the template is shown as is, without substituting values):
 
 ```
 Module qr runs an attach hook (in /home/user/.config/futi/modules/qr):
@@ -931,72 +914,72 @@ Module qr runs an attach hook (in /home/user/.config/futi/modules/qr):
 Run it? [y/N]
 ```
 
-Вопрос задаётся до изменений на диске: при отказе install не устанавливает модуль, update оставляет старую версию (`update` без имени спрашивает про каждый модуль; отказ — ошибка этого модуля, остальные обновляются). Если stdin не терминал (CI, скрипты, пайп), futi не спрашивает и завершается ошибкой; если ответа нет (`</dev/null`, `docker run` без `-i`, systemd `StandardInput=null`) — тоже ошибка. В обоих случаях укажите `--yes` (`-y`), чтобы запустить хук, или `--skip-attach`, чтобы пропустить; `--skip-attach` важнее `--yes`. У update `--yes` подтверждает и замену файлов (см. ниже): без терминала на stdin update с изменёнными файлами требует `--yes`, в том числе вместе с `--skip-attach`. Модуль без `attach` и update без изменений источника подтверждения attach не требуют.
+The question is asked before any changes on disk: on refusal install does not install the module, update keeps the old version (`update` without a name asks about each module; a refusal is an error for that module, the others are updated). If stdin is not a terminal (CI, scripts, a pipe), futi does not ask and fails with an error; if there is no answer (`</dev/null`, `docker run` without `-i`, systemd `StandardInput=null`), that is an error too. In both cases pass `--yes` (`-y`) to run the hook or `--skip-attach` to skip it; `--skip-attach` takes precedence over `--yes`. For update, `--yes` also confirms the replacement of files (see below): without a terminal on stdin, an update with changed files requires `--yes`, including together with `--skip-attach`. A module without `attach` and an update with an unchanged source do not require attach confirmation.
 
-Каждая установка пишет sidecar `__futi_meta.yaml` рядом с config.yaml (источник, тип, ref/commit, hash дерева, даты) — по нему работают:
+Each installation writes a sidecar `__futi_meta.yaml` next to config.yaml (source, type, ref/commit, tree hash, dates); the following commands rely on it:
 
 ```bash
-futi modules list              # установленные модули
-futi modules info qr           # детали установки
-futi modules update            # re-fetch + re-attach (все модули)
-futi modules update qr         # один модуль
-futi modules uninstall qr      # detach + удаление (с подтверждением)
-futi modules path qr           # каталог модуля (для скриптов)
+futi modules list              # installed modules
+futi modules info qr           # installation details
+futi modules update            # re-fetch + re-attach (all modules)
+futi modules update qr         # one module
+futi modules uninstall qr      # detach + remove (with confirmation)
+futi modules path qr           # module directory (for scripts)
 ```
 
-`modules list` и `update` без имени видят модули всех `sources` из `config.yaml` плюс глобальный каталог и `./.futi`; `uninstall`/`update`/`info` по имени находят модуль только через discovery (в `sources` и `./.futi`) — модуль глобального каталога вне `sources` нужно добавить в `sources` или удалить вручную. Модули показываются под тем именем, под которым их находит discovery, — с mountpoint: `dev.tools.qr`; симлинки на каталоги раскрываются (циклы отсекаются, один реальный каталог показывается один раз — предпочтительно под путём без симлинка); модуль, каталог которого сам симлинк, `update` без имени пропускает (`Warning: skipped <name>: module directory is a symlink`): замена дерева превратила бы симлинк в копию; симлинк-каталог namespace выше модуля этому не мешает. Невалидный `config.yaml` — ошибка команды. Установка (`install`, `init --global`) пишет только в глобальный каталог (`FUTI_MODULES_DIR` или `~/.config/futi/modules/`) или с `--local` — в `./.futi`; если при заданных `sources` глобального каталога среди них нет, install и `init --global` предупреждают `Warning: <dir> is not listed in config.yaml sources; …` (по имени модуль не будет найден, пока каталог не добавлен в `sources`), а если он смонтирован с префиксом — печатают `Module is available as <prefix>.<name>`.
+`modules list` and `update` without a name see modules from all `sources` in `config.yaml` plus the global directory and `./.futi`; `uninstall`/`update`/`info` by name find a module only through discovery (in `sources` and `./.futi`) — a module in the global directory outside `sources` must be added to `sources` or removed by hand. Modules are shown under the name by which discovery finds them, with the mountpoint: `dev.tools.qr`; symlinks to directories are expanded (cycles are cut off, one real directory is shown once, preferably under the path without a symlink); a module whose directory is itself a symlink is skipped by `update` without a name (`Warning: skipped <name>: module directory is a symlink`): replacing the tree would turn the symlink into a copy; a symlinked namespace directory above the module does not interfere. An invalid `config.yaml` is a command error. Installation (`install`, `init --global`) writes only to the global directory (`FUTI_MODULES_DIR` or `~/.config/futi/modules/`) or, with `--local`, to `./.futi`; if the global directory is not among the configured `sources`, install and `init --global` warn `Warning: <dir> is not listed in config.yaml sources; …` (the module will not be found by name until the directory is added to `sources`), and if it is mounted with a prefix, they print `Module is available as <prefix>.<name>`.
 
-`update` сравнивает hash дерева источника с lockfile (в hash входят пути, содержимое файлов, бит исполнения и цели симлинков): без изменений — no-op (обновляется только `last_check`), локальные правки установленного модуля сохраняются. Если источник изменился, update сравнивает файлы на диске с новой версией: совпадают — переписывается только lockfile; иначе в stderr печатается список изменений (`D` — удалится, `M` — изменится, `A` — появится, в этом порядке; не больше 50 строк) и задаётся вопрос `Replace module files? [y/N]` — до вопроса про `attach`. Локальные правки при этом видны как `M`/`D` и после подтверждения теряются; при отказе модуль не меняется. Без терминала на stdin нужен `--yes` (`-y`) — в CI и скриптах укажите его. Каталоги `.venv`, `node_modules`, `.git`, `__pycache__` в hash и сравнение не входят и при замене дерева не сохраняются (старое дерево удаляется целиком, `attach` пересоздаёт их). Замена дерева атомарна, `installed_at` и `about` сохраняются. При сбое переноса или записи lockfile update восстанавливает старое дерево. Если от прерванного update остался `<module>.futi-backup`, update отказывает и просит разобрать backup вручную; `list` и `update` такой каталог модулем не считают (update без имени лишь предупреждает о нём в stderr). Флаги update: `--skip-attach`, `--yes` / `-y`.
+`update` compares the hash of the source tree with the lockfile (the hash covers paths, file contents, the execute bit and symlink targets): no changes means a no-op (only `last_check` is updated), and local edits of the installed module are kept. If the source changed, update compares the files on disk with the new version: if they match, only the lockfile is rewritten; otherwise a list of changes is printed to stderr (`D` — will be removed, `M` — will change, `A` — will appear, in this order; at most 50 lines) and the question `Replace module files? [y/N]` is asked, before the `attach` question. Local edits show up as `M`/`D` and are lost after confirmation; on refusal the module is not changed. Without a terminal on stdin, `--yes` (`-y`) is required — pass it in CI and scripts. The directories `.venv`, `node_modules`, `.git`, `__pycache__` are not part of the hash or the comparison and are not preserved when the tree is replaced (the old tree is removed entirely, `attach` recreates them). The tree replacement is atomic, `installed_at` and `about` are preserved. If moving or writing the lockfile fails, update restores the old tree. If a `<module>.futi-backup` is left over from an interrupted update, update refuses and asks you to sort out the backup manually; `list` and `update` do not treat such a directory as a module (update without a name only warns about it on stderr). Update flags: `--skip-attach`, `--yes` / `-y`.
 
-Удаление требует подтверждения (размер и число файлов); без sidecar (модуль создан вручную или через `modules init`) — только с `--force`. Флаги uninstall: `--yes`, `--force`, `--skip-detach`, `--strict-detach`.
+Uninstall requires confirmation (size and number of files); without the sidecar (the module was created by hand or via `modules init`) it works only with `--force`. Uninstall flags: `--yes`, `--force`, `--skip-detach`, `--strict-detach`.
 
-Управление командами модуля без редактора:
+Managing module commands without an editor:
 
 ```bash
 futi modules add_command qr scan --desc "Scan a QR code"
 futi modules remove_command qr scan
 ```
 
-Удалить единственную команду модуля без `cmd` нельзя — получился бы пустой модуль; `remove_command` откажет и оставит манифест без изменений.
+You cannot remove the only command of a module that has no `cmd`: the module would be empty; `remove_command` refuses and leaves the manifest unchanged.
 
-**Известное ограничение:** если процесс futi упадёт (краш) посреди install/update, может остаться частично скопированное дерево без sidecar. Откат работает при ошибках attach и при провале валидации, но не при краше процесса — такой каталог можно удалить вручную или через `futi modules uninstall <name> --force`.
+**Known limitation:** if the futi process crashes in the middle of install/update, a partially copied tree without a sidecar may remain. Rollback works on attach errors and on validation failure, but not on a process crash — such a directory can be removed by hand or with `futi modules uninstall <name> --force`.
 
 ---
 
-## Кэш модулей
+## Module cache
 
-futi кэширует загруженные модули для устранения повторной загрузки в рамках одного запуска и между запусками. Persistent кэш хранится в `~/.cache/futi/modulecache.gob` (gob-формат), in-memory кэш — в рамках процесса.
+futi caches loaded modules to avoid reloading within one run and between runs. The persistent cache is stored in `~/.cache/futi/modulecache.gob` (gob format), the in-memory cache lives for the duration of the process.
 
-### Поведение
+### Behavior
 
-- При старте CLI загружает persistent кэш с диска (глобальные модули).
-- In-memory кэш хранит ВСЕ модули (глобальные + локальные из `./.futi/` или `./futi.yaml`).
-- Локальные модули не сохраняются на диск — только глобальные.
-- При Refresh: проверка `mtime + size` — перечитываются только изменившиеся файлы.
-- Удалённые из source модули очищаются из кэша при следующем Refresh.
-- Ошибки загрузки отдельных модулей не фатальны — модуль пропускается, счётчик `skipped` инкрементируется.
+- On startup the CLI loads the persistent cache from disk (global modules).
+- The in-memory cache holds ALL modules (global + local from `./.futi/` or `./futi.yaml`).
+- Local modules are not saved to disk — only global ones.
+- On Refresh: an `mtime + size` check — only changed files are re-read.
+- Modules removed from the source are purged from the cache on the next Refresh.
+- Load errors of individual modules are not fatal — the module is skipped and the `skipped` counter is incremented.
 
 ### `futi cache refresh`
 
-Явное обновление кэша: обходит source, перечитывает изменившиеся модули, сохраняет на диск.
+An explicit cache refresh: walks the source, re-reads changed modules, saves to disk.
 
 ```bash
 $ futi cache refresh
 Cache refreshed: 5 modules, 2 updated
 
-# С невалидным модулем:
+# With an invalid module:
 $ futi cache refresh
 Cache refreshed: 5 modules, 2 updated, 1 skipped
 ```
 
-`futi cache` без подкоманды или с неизвестной подкомандой возвращает понятную ошибку:
+`futi cache` without a subcommand, or with an unknown subcommand, returns a clear error:
 
 ```bash
 $ futi cache
-error: cache requires a subcommand (try "cache refresh", "cache status", or "cache clear")
+futi: cache requires a subcommand (try "cache refresh", "cache status", or "cache clear")
 
 $ futi cache foo
-error: unknown cache subcommand "foo" (try "cache refresh", "cache status", or "cache clear")
+futi: unknown cache subcommand "foo" (try "cache refresh", "cache status", or "cache clear")
 ```
 
 ### `futi cache status` / `futi cache clear`
@@ -1012,70 +995,58 @@ $ futi cache clear
 Cache cleared: /home/user/.cache/futi/modulecache.gob
 ```
 
-`status` показывает активную политику, время последнего обновления, число
-модулей в кэше и путь к файлу. `clear` удаляет persistent кэш — при следующем
-запуске он будет перестроен с нуля (полезно при странном поведении или после
-смены версии futi).
+`status` shows the active policy, the time of the last refresh, the number of modules in the cache and the file path. `clear` removes the persistent cache — it will be rebuilt from scratch on the next run (useful for odd behavior or after changing the futi version).
 
-### Целостность кэша
+### Cache integrity
 
-Кэш хранит SHA-256 чексумму манифеста каждого модуля. При **исполнении**
-модуля чексумма сверяется с файлом на диске: если манифест изменился или
-запись в кэше не совпадает с файлом — модуль перечитывается с диска, а не
-берётся из кэша. Это защищает от двух сценариев: устаревший кэш (файл
-изменился после Refresh) и повреждённый/подменённый gob-файл. Чексумма
-сверяется также в системной справке (`help`) и в completion. Без сверки, из
-кэша, работает только `list` — скорость важнее.
+The cache stores a SHA-256 checksum of each module's manifest. When a module is **executed**, the checksum is compared with the file on disk: if the manifest changed or the cache entry does not match the file, the module is re-read from disk instead of being taken from the cache. This protects against two scenarios: a stale cache (the file changed after Refresh) and a corrupted or substituted gob file. The checksum is also compared in system help (`help`) and in completion. Only `list` works from the cache without the check — speed matters more there.
 
-### Политики обновления
+### Update policies
 
-Стратегия автоматического обновления при старте CLI задаётся в `config.yaml`:
+The automatic refresh strategy at CLI startup is set in `config.yaml`:
 
 ```yaml
 cache:
   refresh: every_time   # every_time (default) | every_t_min | force_only
-  time: "30m"            # только для every_t_min
+  time: "30m"            # only for every_t_min
 ```
 
-| Политика | Поведение |
+| Policy | Behavior |
 |---|---|
-| `every_time` | Обновлять при каждом запуске CLI (default). |
-| `every_t_min` | Обновлять раз в указанный интервал `time` (не более 365 дней; для большего используйте `force_only`). Между запусками — использовать кэш с диска. |
-| `force_only` | Обновлять только по `futi cache refresh`. После обновления или пересборки futi кэш пуст до `futi cache refresh`. |
+| `every_time` | Refresh on every CLI run (default). |
+| `every_t_min` | Refresh once per the given `time` interval (at most 365 days; use `force_only` for more). Between runs, use the cache from disk. |
+| `force_only` | Refresh only on `futi cache refresh`. After a futi upgrade or rebuild the cache is empty until `futi cache refresh`. |
 
-Формат `time` — расширение `time.ParseDuration` с поддержкой дней через суффикс `d`:
+The `time` format is an extension of `time.ParseDuration` with days via the `d` suffix:
 
-| Пример | Значение |
+| Example | Meaning |
 |---|---|
-| `30m` | 30 минут |
-| `2h` | 2 часа |
-| `1d` | 1 день (24 часа) |
-| `1d4h` | 1 день 4 часа (28 часов) |
-| `1d2h30m` | 1 день 2 часа 30 минут |
+| `30m` | 30 minutes |
+| `2h` | 2 hours |
+| `1d` | 1 day (24 hours) |
+| `1d4h` | 1 day 4 hours (28 hours) |
+| `1d2h30m` | 1 day 2 hours 30 minutes |
 
-Компоненты суммируются, итог должен быть больше нуля (`0d12h` допустимо, `0d` — нет). Отрицательные значения не поддерживаются.
+The components are summed and the total must be greater than zero (`0d12h` is valid, `0d` is not). Negative values are not supported.
 
 ### Fallback
 
-Если `~/.cache/` недоступен (нет `HOME` / `XDG_CACHE_HOME`) — futi fallback-ит на in-memory кэш с предупреждением в stderr. CLI работает, но persistent кэш недоступен до следующего запуска с корректным окружением.
+If `~/.cache/` is unavailable (no `HOME` / `XDG_CACHE_HOME`), futi falls back to an in-memory cache with a warning on stderr. The CLI works, but the persistent cache is unavailable until the next run with a correct environment.
 
-При повреждённом gob-файле — кэш автоматически перестраивается с пустого состояния. При несовпадении версии схемы (несовместимый формат файла кэша) — аналогично. Кэш также перестраивается при каждом обновлении или пересборке бинаря futi: файл кэша привязан к идентичности бинаря (mtime и размер), чужой кэш игнорируется без сообщений. При политике `force_only` после обновления futi персистентный кэш пуст до `futi cache refresh` (модули при этом читаются с диска напрямую).
+If the gob file is corrupted, the cache is automatically rebuilt from an empty state. The same happens on a schema version mismatch (an incompatible cache file format). The cache is also rebuilt on every upgrade or rebuild of the futi binary: the cache file is tied to the binary identity (mtime and size), and a foreign cache is ignored silently. With the `force_only` policy, after a futi upgrade the persistent cache is empty until `futi cache refresh` (modules are read directly from disk meanwhile).
 
 ---
 
-## Автодополнение
+## Shell completion
 
-futi поддерживает автодополнение для **bash**, **zsh** и **fish**. Имена модулей,
-namespace'ов, команд, подкоманд и параметров (`--tag`, `--force`) — динамические,
-поэтому completion запрашивает подсказки у futi на лету через скрытую команду
-`futi __complete <args...>` (протокол, совместимый с cobra).
+futi supports completion for **bash**, **zsh** and **fish**. Names of modules, namespaces, commands, subcommands and parameters (`--tag`, `--force`) are dynamic, so completion asks futi for hints on the fly through the hidden command `futi __complete <args...>` (a protocol compatible with cobra).
 
-### Установка
+### Setup
 
 ```bash
 # bash
 futi completion bash > /etc/bash_completion.d/futi   # system-wide
-source <(futi completion bash)                        # сессия
+source <(futi completion bash)                        # current session
 
 # zsh
 futi completion zsh > "${fpath[1]}/_futi"
@@ -1085,106 +1056,82 @@ autoload -U compinit && compinit
 futi completion fish > ~/.config/fish/completions/futi.fish
 ```
 
-### Что дополняется
+### What is completed
 
-- **Модули и namespaces** — `futi <TAB>`, `futi dev <TAB>`
-- **Команды и subcommands** — `futi docker <TAB>`, `futi docker migrate <TAB>`
-- **Имена параметров** — `futi docker build --<TAB>` → `--tag`, `--force`
-- **Все параметры на команде** — `futi docker build <TAB>` сразу показывает все флаги с пометками: `--tag (required)`, `--force (default: false)` (метки видны в zsh, bash/fish отрезают)
-- **После значения флага** — `futi images qr make --out qr.png <TAB>` подсказывает оставшиеся флаги (`--text`, `--scale`); значение флага не ломает подсказки. Путь (namespace и команда) всегда идёт до первого флага, поэтому после флагов слова пути и `help` не предлагаются
-- **Пути в значениях флагов** — при вводе значения не-bool флага (`--out ~/<TAB>`, `--out=~/<TAB>`) shell предлагает файлы/директории; в будущем — только для параметров типа `path` (ROADMAP)
-- **Параметры default-команды** — модуль-однокоманда (`cmd` + `params`, без `commands`) подсказывает свои флаги: `futi meta <TAB>` → `--json`
-- **После bool-флага** — `futi docker build --force <TAB>` подсказывает оставшиеся (ещё не введённые) флаги (`--tag`); значения `true`/`false` не предлагаются: bool-флаг значения не берёт, `false` задаётся как `--force=false`
-- **Глобальные флаги** — `futi --<TAB>` → `--dry-run`, `--help`, `--version`; после ведущего `--dry-run` подсказки как для обычного вызова, но без builtins (`cache`, `completion`, `list`, `modules`): `futi --dry-run <TAB>` показывает только модули и namespaces, `futi --dry-run dev <TAB>` — как обычно
+- **Modules and namespaces** — `futi <TAB>`, `futi dev <TAB>`
+- **Commands and subcommands** — `futi docker <TAB>`, `futi docker migrate <TAB>`
+- **Parameter names** — `futi docker build --<TAB>` → `--tag`, `--force`
+- **All parameters on a command** — `futi docker build <TAB>` immediately shows all flags with marks: `--tag (required)`, `--force (default: false)` (the marks are visible in zsh; bash/fish cut them off)
+- **After a flag value** — `futi images qr make --out qr.png <TAB>` suggests the remaining flags (`--text`, `--scale`); a flag value does not break the hints. The path (namespace and command) always comes before the first flag, so after flags the path words and `help` are not offered
+- **Paths in flag values** — when typing the value of a non-bool flag (`--out ~/<TAB>`, `--out=~/<TAB>`), the shell offers files/directories; in the future only for parameters of type `path` (Roadmap)
+- **Parameters of the default command** — a single-command module (`cmd` + `params`, no `commands`) suggests its own flags: `futi meta <TAB>` → `--json`
+- **After a bool flag** — `futi docker build --force <TAB>` suggests the remaining (not yet entered) flags (`--tag`); the values `true`/`false` are not offered: a bool flag takes no value, and `false` is given as `--force=false`
+- **Global flags** — `futi --<TAB>` → `--dry-run`, `--help`, `--version`; after a leading `--dry-run` the hints are as for a regular call, but without builtins (`cache`, `completion`, `list`, `modules`): `futi --dry-run <TAB>` shows only modules and namespaces, `futi --dry-run dev <TAB>` works as usual
 - **Builtins** — `futi cache <TAB>` → `refresh`/`status`/`clear`; `futi completion <TAB>` → `bash`/`zsh`/`fish`
-- **Валидация модуля** — `futi modules validate <TAB>` подсказывает полные имена модулей (`dev.deploy`), после первого аргумента подсказок нет
-- **Приоритет builtins** — на корне `cache`, `completion`, `list`, `modules` подсказываются как builtins даже при одноимённом модуле (CLI исполнит builtin); `futi cache <TAB>` не показывает команды такого модуля
-- **Подсказка `help`** — `help` предлагается на каждом уровне (модуль/команда/subcommand): `futi demo <TAB>`, `futi demo db <TAB>`, `futi demo greet <TAB>`. Если в модуле уже определена команда `help` (user-defined), она и предлагается — системная не дублируется.
-- **Подсказка `list`** — `list` предлагается там, где `futi <путь> list` работает: в namespace, модуле, ветке с subcommands и модуле-однокоманде (`futi dev <TAB>`, `futi docker <TAB>`, `futi docker migrate <TAB>`); на листовой команде не предлагается (там `list` — ошибка)
-- **Флаги `modules`** — `futi modules add_command <модуль> --<TAB>` → `--cmd`, `--desc`; аналогично для `init`, `install`, `uninstall`, `update`
+- **Module validation** — `futi modules validate <TAB>` suggests full module names (`dev.deploy`), and no hints after the first argument
+- **Builtin priority** — at the root, `cache`, `completion`, `list`, `modules` are suggested as builtins even when a module has the same name (the CLI executes the builtin); `futi cache <TAB>` does not show the commands of such a module
+- **The `help` hint** — `help` is offered at every level (module/command/subcommand): `futi demo <TAB>`, `futi demo db <TAB>`, `futi demo greet <TAB>`. If the module already defines a (user-defined) `help` command, that one is offered and the system one is not duplicated.
+- **The `list` hint** — `list` is offered where `futi <path> list` works: in a namespace, a module, a branch with subcommands and a single-command module (`futi dev <TAB>`, `futi docker <TAB>`, `futi docker migrate <TAB>`); it is not offered on a leaf command (there `list` is an error)
+- **`modules` flags** — `futi modules add_command <module> --<TAB>` → `--cmd`, `--desc`; likewise for `init`, `install`, `uninstall`, `update`
 
-Значения строковых/числовых параметров (обычно user-supplied, например `--tag myapp`)
-не угадываются и не дополняются. После `--` (args команды) futi разрешает
-дополнение файлов.
+Values of string/numeric parameters (usually user-supplied, for example `--tag myapp`) are not guessed or completed. After `--` (the command's args) futi allows file completion.
 
-zsh выводит описания команд/модулей рядом с подсказками.
+zsh prints descriptions of commands/modules next to the hints.
 
-### Кэш и completion
+### Cache and completion
 
-`__complete` использует persistent кэш модулей (как обычный CLI), поэтому работает
-быстро — без обхода source на каждый TAB. Чтобы подсказки не были пустыми на
-холодном кэше (первый запуск) или устаревшими, `__complete` **самообновляет** кэш,
-если он никогда не обновлялся или обновлялся более часа назад. В остальных
-случаях берёт данные из кэша без Refresh.
+`__complete` uses the persistent module cache (like the regular CLI), so it is fast — it does not walk the source on every TAB. So that hints are not empty on a cold cache (the first run) or stale, `__complete` **refreshes** the cache itself if it has never been refreshed or was refreshed more than an hour ago. Otherwise it takes data from the cache without a Refresh.
 
 ---
 
-## Безопасность
+## Security
 
-### Модель доверия
+### Trust model
 
-**Модуль — это код.** Кто может писать в каталог модулей (или в конфиг с
-источниками), тот и определяет, какие команды исполняются — это осознанный
-дизайн, как у make, npm scripts или shell-алиасов. futi не пытается
-сандбоксить модули от их владельца. Следствия:
+**A module is code.** Whoever can write to the modules directory (or to the config with sources) decides which commands are executed. This is a deliberate design, like make, npm scripts or shell aliases. futi does not try to sandbox modules from their owner. Consequences:
 
-- Симлинки в каталоге модулей разрешены (dotfiles-менеджеры, dev-симлинки) —
-  контроль каталога и так даёт полный контроль.
-- `futi modules init` пишет только внутри каталога модулей и показывает реальный
-  (резолвнутый) путь записи.
-- `futi modules install` и `futi modules update` показывают `attach`-хук
-  устанавливаемого модуля и запускают его только после подтверждения (или с
-  `--yes`); без терминала на stdin и без `--yes` — отказ.
-- Публичный registry скачанных модулей (см. ROADMAP) потребует пересмотра
-  этой модели — доверие к чужим модулям нельзя будет неявно унаследовать.
+- Symlinks in the modules directory are allowed (dotfiles managers, dev symlinks): control of the directory already gives full control.
+- `futi modules init` writes only inside the modules directory and shows the real (resolved) write path.
+- `futi modules install` and `futi modules update` show the `attach` hook of the module being installed and run it only after confirmation (or with `--yes`); without a terminal on stdin and without `--yes` they refuse.
+- Network installs accept `https://` only and enforce download and unpack limits (see [Managing modules](#managing-modules)).
+- A public registry of downloadable modules (see Roadmap) will require revisiting this model: trust in foreign modules cannot be inherited implicitly.
 
-### Исполнение без shell
+### Execution without a shell
 
-Команды исполняются через `exec` с готовым argv — **без** оболочки.
-Метасимволы `;`, `$()`, `` ` `` из параметров не выполняются как shell-код
-(проходят как обычный текст в аргументах). Нужен shell — пишите его явно
-(`sh -c '...'`), передавая пользовательский ввод позиционным аргументом
-с `{{quote}}` (см. примеры).
+Commands are executed through `exec` with a ready argv — **without** a shell. The metacharacters `;`, `$()`, `` ` `` in parameters are not executed as shell code (they pass as ordinary text in arguments). If you need a shell, write it explicitly (`sh -c '...'`), passing user input as a positional argument with `{{quote}}` (see the examples).
 
-### `{{quote}}` для пользовательских значений
+### `{{quote}}` for user values
 
-Значения параметров проходят повторный разбор (shlex) при сборке argv.
-Вставка `{{.param}}` в кавычках (`"{{.msg}}"`) может быть «пробита» значением
-с кавычкой — оно выйдет за кавычки и станет отдельными аргументами
-(flag-инъекция). Для значений в опасных позициях используйте `{{quote .param}}` —
-гарантия ровно одного аргумента (см. [пробелы и кавычки](#важно-пробелы-и-кавычки-в-значениях)).
+Parameter values go through parsing again (shlex) when argv is built. Inserting `{{.param}}` in quotes (`"{{.msg}}"`) can be "broken out of" by a value with a quote character: it escapes the quotes and becomes separate arguments (flag injection). For values in dangerous positions use `{{quote .param}}`, which guarantees exactly one argument (see [spaces and quotes](#important-spaces-and-quotes-in-values)).
 
-### Секреты — через окружение
+### Secrets through the environment
 
-Токены и ключи передавайте через `{{.env.NAME}}`, а не через `--param`:
-параметры видны в `ps` и истории shell, окружение процесса — нет.
+Pass tokens and keys through `{{.env.NAME}}`, not through `--param`: parameters are visible in `ps` and in shell history, the process environment is not.
 
-### Целостность кэша
+### Cache integrity
 
-Persistent кэш сверяет SHA-256 чексумму манифеста при исполнении модуля,
-в системной справке и в completion — устаревший или подменённый кэш не
-приведёт к исполнению чужой команды (см. [Кэш модулей](#кэш-модулей)).
+The persistent cache verifies the SHA-256 checksum of the manifest on module execution, in system help and in completion, so a stale or substituted cache will not lead to a foreign command being executed (see [Module cache](#module-cache)).
 
 ---
 
-## Примеры
+## Examples
 
-Готовые рабочие модули (`git`, `docker`, `files`, `backup`) лежат в каталоге [`examples/`](examples/) — скопируйте их в каталог модулей или подключите через `sources`; посмотреть собранную команду без запуска можно через `futi --dry-run <путь> …`.
+Ready-to-use modules (`git`, `docker`, `files`, `backup`) are in the [`examples/`](examples/) directory: copy them into your modules directory or connect them through `sources`; to see the assembled command without running it, use `futi --dry-run <path> …`.
 
-### Echo-модуль (args + default cmd)
+### Echo module (args + default cmd)
 
 ```yaml
 # ~/.config/futi/modules/echo_mod.yaml
 name: echo_mod
 description: Echo utilities
-cmd: "echo {{.args}}"           # команда по умолчанию (без shell)
+cmd: "echo {{.args}}"           # default command (no shell)
 commands:
   upper:
     description: Uppercase echo
-    # futi исполняет argv БЕЗ shell: pipes, $() и циклы не работают напрямую.
-    # Нужен shell — пишите его явно (sh -c). Пользовательский ввод передавайте
-    # позиционным аргументом sh ($1) с {{quote}}, чтобы кавычки в значении
-    # не ломали скрипт и не инжектили код.
+    # futi executes argv WITHOUT a shell: pipes, $() and loops do not work directly.
+    # If you need a shell, write it explicitly (sh -c). Pass user input as a
+    # positional argument of sh ($1) with {{quote}}, so that quotes in the value
+    # do not break the script or inject code.
     cmd: "sh -c 'echo \"$1\" | tr a-z A-Z' sh {{quote .args}}"
   repeat:
     description: Repeat first arg N times
@@ -1197,7 +1144,7 @@ commands:
 
 ```bash
 futi echo_mod -- hello world         # echo hello world (default cmd)
-futi echo_mod upper -- hello world   # HELLO WORLD (через sh -c | tr)
+futi echo_mod upper -- hello world   # HELLO WORLD (via sh -c | tr)
 futi echo_mod repeat --count 3 -- hi # hi\nhi\nhi
 ```
 
@@ -1267,7 +1214,7 @@ futi docker shell --container myapp
 futi docker build-all
 ```
 
-### Проектный deploy-пакет
+### Project deploy package
 
 ```
 ~/.config/futi/modules/deploy/
@@ -1312,82 +1259,17 @@ futi deploy rollback --target production
 
 ---
 
-## ROADMAP
+## Roadmap
 
-futi находится на стадии PRE PRE MVP. Ниже — направления развития.
+futi is early-stage software (v0.1.0). Everything below is a plan, not a promise: none of it is implemented yet.
 
-### Ближайшие планы
-
-- **Типы параметров** — расширение за пределы `int`: `file`, `json`, `secret` (безопасная передача через env, не args; базовый доступ к env vars уже есть через `{{.env.FOO}}`). Для `file`/`path`-типов автокомплит будет предлагать пути только им (сейчас — всем не-bool флагам)
-- **Гибридный args-парсинг** — позиционные args для листовых команд без явного `--`
-- ~~**Shell completion** — автодополнение для bash/zsh/fish~~ ✅ реализовано (см. раздел «Автодополнение»)
-- ~~**Help-система** — модульная/командная справка через `help`~~ ✅ реализовано (`futi <ns> help`, `futi <ns> <cmd> help`; user-defined `help` выигрывает)
-- **Descriptions в bash/fish** — zsh выводит описания уже сейчас; bash/fish — roadmap
-- **PowerShell** — 4-й shell после стабилизации bash/zsh/fish
-- **Модульный completion** — модули сами предоставляют подсказки для автодополнения (динамические кандидаты: имена контейнеров, веток и т.п.); тогда же имя `completion` может быть отдано модулям через smart-роутинг (`futi completion bash|zsh|fish` остаётся builtin-генерацией скрипта, остальные вызовы — резолв модуля). Сейчас `completion`/`__complete` зарезервированы (см. `futi modules init`)
-
-### Unified I/O
-
-Автоматическая конвертация между форматами ввода-вывода:
-
-```yaml
-inputs:
-  - name: config
-    type: file        # строка → временный файл → путь
-    source: arg
-    cleanup: true
-  - name: data
-    type: json        # валидация и форматирование JSON
-    source: stdin
-  - name: token
-    type: secret      # передача через env, не args
-    source: arg
-```
-
-```bash
-echo '{"port": 8080}' | futi docker run --image nginx   # futi создаст временный файл
-```
-
-### Множественные интерфейсы
-
-Одно ядро — множество способов доступа. Модуль пишется один раз, доступен из любого интерфейса:
-
-- **MCP** — интеграция с AI-агентами (Claude, GPT и т.п.): команды модулей становятся tools,
-  схема параметров — их input schema. Основной сценарий — **удалённый**: futi развёрнут на
-  машине как сервер, удалённый агент подключается по сети (MCP over streamable HTTP) и
-  запускает команды на этой машине. Локально — `futi mcp` по stdio
-- **HTTP API** — REST для CI/CD и автоматизации, на том же сервере, что и MCP
-- **Безопасность сервера** — по умолчанию слушает только localhost; токены, права по
-  namespace (allowlist), лимиты вывода и времени, аудит-лог
-- **Стрим вывода** (SSE/WebSocket) — позже
-
-```bash
-futi serve --addr 127.0.0.1:8080            # форма команды предварительная
-curl -X POST http://localhost:8080/api/v1/exec -H "Authorization: Bearer $TOKEN" \
-  -d '{"namespace": "docker", "command": "build", "params": {"tag": "myapp"}}'
-```
-
-### Менеджер модулей
-
-Базовый жизненный цикл реализован — `futi modules install/uninstall/update` из
-локальных путей, git и архивов (см. [Управление модулями](#управление-модулями)).
-Осталось — registry:
-
-```bash
-futi modules install docker        # из registry (по короткому имени)
-futi modules check                 # проверить обновления
-```
-
-### Дополнительно
-
-- **Module versioning** — версии модулей, совместимость
-- **Project overrides** — переопределение модулей на уровне проекта (приоритет над глобальными)
-- **Config linting** — расширение валидации схем (базовая валидация через `futi modules validate` уже есть): подсказки по best practices, deprecated-поля, стилистика
-- **TUI** — интерактивный просмотр и вызов модулей
-- **Module registry** — публичный реестр шаримых модулей
+- **Module schema** — richer parameter types (`file`, `json`, `secret`), `choices`, annotations, and hybrid argument parsing (positional args for leaf commands without an explicit `--`). Path-style completion will then be offered only for `file`/`path` parameters.
+- **Server mode** — a remote MCP server over HTTP so that AI agents can call module commands on the machine where futi runs, plus a REST API for CI/CD. Auth, a namespace allowlist, output and time limits and an audit log are part of the plan.
+- **Module-provided completion and interactive mode** — modules supply their own completion candidates (container names, branches, etc.); an interactive TUI for browsing and calling modules; completion descriptions in bash/fish; PowerShell support.
+- **Ecosystem** — a module registry (`futi modules install <short-name>`, update checks) and module versioning.
 
 ---
 
-## Лицензия
+## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
