@@ -1,0 +1,394 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestLoadParsesSources(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, `
+sources:
+  - path: /home/user/.config/futi/modules
+  - path: /path/to/project
+    mountpoint: ns1.ns2
+  - path: /path/to/tools
+    mountpoint: dev
+    mount_as_namespace: utilities
+`)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("expected config, got nil")
+	}
+	if len(cfg.Sources) != 3 {
+		t.Fatalf("expected 3 sources, got %d", len(cfg.Sources))
+	}
+
+	if cfg.Sources[0].Path != "/home/user/.config/futi/modules" {
+		t.Fatalf("unexpected path[0]: %q", cfg.Sources[0].Path)
+	}
+	if cfg.Sources[0].Mountpoint != "" || cfg.Sources[0].MountAsNamespace != "" {
+		t.Fatalf("expected empty mountpoint and mount_as_namespace for source[0]")
+	}
+
+	if cfg.Sources[1].Mountpoint != "ns1.ns2" {
+		t.Fatalf("unexpected mountpoint[1]: %q", cfg.Sources[1].Mountpoint)
+	}
+
+	if cfg.Sources[2].Mountpoint != "dev" || cfg.Sources[2].MountAsNamespace != "utilities" {
+		t.Fatalf("unexpected source[2]: %+v", cfg.Sources[2])
+	}
+}
+
+func TestLoadNonExistentReturnsNil(t *testing.T) {
+	cfg, err := Load("/nonexistent/config.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg != nil {
+		t.Fatalf("expected nil config for non-existent file, got %+v", cfg)
+	}
+}
+
+func TestLoadInvalidYAMLReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, `sources: [\n  invalid`)
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for invalid YAML")
+	}
+}
+
+func TestLoadEmptyPathReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, `
+sources:
+  - path: ""
+`)
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for empty path")
+	}
+}
+
+func TestFullPrefix(t *testing.T) {
+	tests := []struct {
+		name string
+		sc   SourceConfig
+		want string
+	}{
+		{"no mount", SourceConfig{Path: "/foo"}, ""},
+		{"mountpoint only", SourceConfig{Path: "/foo", Mountpoint: "ns1.ns2"}, "ns1.ns2"},
+		{"mount_as_namespace only", SourceConfig{Path: "/foo", MountAsNamespace: "tools"}, "tools"},
+		{"both", SourceConfig{Path: "/foo", Mountpoint: "dev", MountAsNamespace: "tools"}, "dev.tools"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.sc.FullPrefix(); got != tt.want {
+				t.Fatalf("FullPrefix() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadTrimsDots(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, `
+sources:
+  - path: /foo
+    mountpoint: ".ns1.ns2."
+    mount_as_namespace: ".tools."
+`)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Sources[0].Mountpoint != "ns1.ns2" {
+		t.Fatalf("expected trimmed mountpoint, got %q", cfg.Sources[0].Mountpoint)
+	}
+	if cfg.Sources[0].MountAsNamespace != "tools" {
+		t.Fatalf("expected trimmed mount_as_namespace, got %q", cfg.Sources[0].MountAsNamespace)
+	}
+}
+
+// TestLoadParsesCacheSection проверяет, что секция cache парсится корректно.
+func TestLoadParsesCacheSection(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, `
+sources:
+  - path: /home/user/.config/futi/modules
+cache:
+  refresh: every_t_min
+  time: 30m
+`)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Cache.Refresh != "every_t_min" {
+		t.Fatalf("expected refresh=every_t_min, got %q", cfg.Cache.Refresh)
+	}
+	if cfg.Cache.Time != "30m" {
+		t.Fatalf("expected time=30m, got %q", cfg.Cache.Time)
+	}
+}
+
+// TestLoadCacheSectionMissingDefaultsToEmpty проверяет, что отсутствующая
+// секция cache → zero-value CacheConfig (Refresh="", Time="").
+// NewPolicyFromConfig("", "") → AlwaysPolicy (default).
+func TestLoadCacheSectionMissingDefaultsToEmpty(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, `
+sources:
+  - path: /home/user/.config/futi/modules
+`)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Cache.Refresh != "" {
+		t.Fatalf("expected empty refresh, got %q", cfg.Cache.Refresh)
+	}
+	if cfg.Cache.Time != "" {
+		t.Fatalf("expected empty time, got %q", cfg.Cache.Time)
+	}
+}
+
+func TestLoadExpandsTilde(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, "sources:\n  - path: ~/mods\n  - path: \"~\"\n  - path: ~/\n")
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, want := cfg.Sources[0].Path, filepath.Join(home, "mods"); got != want {
+		t.Fatalf("source[0].Path = %q, want %q", got, want)
+	}
+	if got, want := cfg.Sources[1].Path, filepath.Clean(home); got != want {
+		t.Fatalf("source[1].Path = %q, want %q", got, want)
+	}
+	if got, want := cfg.Sources[2].Path, filepath.Clean(home); got != want {
+		t.Fatalf("source[2].Path = %q, want %q", got, want)
+	}
+}
+
+func TestLoadRelativeSourcePathFromConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(t.TempDir())
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, "sources:\n  - path: mods\n  - path: ./mods\n  - path: ../shared\n  - path: a/../b\n")
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{
+		filepath.Join(dir, "mods"),
+		filepath.Join(dir, "mods"),
+		filepath.Join(filepath.Dir(dir), "shared"),
+		filepath.Join(dir, "b"),
+	}
+	for i, w := range want {
+		if cfg.Sources[i].Path != w {
+			t.Errorf("source[%d].Path = %q, want %q", i, cfg.Sources[i].Path, w)
+		}
+	}
+}
+
+func TestLoadRelativeConfigPathArgument(t *testing.T) {
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "rel"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(base, "rel", "config.yaml"), "sources:\n  - path: mods\n")
+	t.Chdir(base)
+
+	cfg, err := Load(filepath.Join("rel", "config.yaml"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := cfg.Sources[0].Path
+	if !filepath.IsAbs(got) {
+		t.Fatalf("source[0].Path = %q, want absolute", got)
+	}
+	// cwd после Chdir может отличаться символическими ссылками от base.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(cwd, "rel", "mods"); got != want {
+		t.Fatalf("source[0].Path = %q, want %q", got, want)
+	}
+}
+
+func TestLoadAbsoluteSourcePathUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	abs := filepath.Join(t.TempDir(), "abs")
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, "sources:\n  - path: "+abs+"\n  - path: "+abs+"/x/../y\n")
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Sources[0].Path != abs {
+		t.Errorf("source[0].Path = %q, want %q", cfg.Sources[0].Path, abs)
+	}
+	if want := filepath.Join(abs, "y"); cfg.Sources[1].Path != want {
+		t.Errorf("source[1].Path = %q, want %q", cfg.Sources[1].Path, want)
+	}
+}
+
+func TestLoadTildeUserRejected(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, cfgPath, "sources:\n  - path: ~bob/x\n")
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for ~user path")
+	}
+	if !strings.Contains(err.Error(), "source[0]") {
+		t.Fatalf("error %q does not mention source[0]", err)
+	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write file %q: %v", path, err)
+	}
+}
+
+func loadString(t *testing.T, content string) (*Config, error) {
+	t.Helper()
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, cfgPath, content)
+	return Load(cfgPath)
+}
+
+func TestLoadUnknownKeyTopLevel(t *testing.T) {
+	_, err := loadString(t, "sorces:\n  - path: /foo\n")
+	if err == nil || !strings.Contains(err.Error(), `line 1: unknown key "sorces"`) {
+		t.Fatalf("err = %v, want unknown key sorces at line 1", err)
+	}
+}
+
+func TestLoadUnknownKeyInSource(t *testing.T) {
+	_, err := loadString(t, "sources:\n  - path: /foo\n    mountpont: dev\n")
+	if err == nil || !strings.Contains(err.Error(), `unknown key "mountpont" in sources[0]`) {
+		t.Fatalf("err = %v, want unknown key mountpont in sources[0]", err)
+	}
+}
+
+func TestLoadUnknownKeyInCache(t *testing.T) {
+	_, err := loadString(t, "cache:\n  refrsh: force_only\n")
+	if err == nil || !strings.Contains(err.Error(), `line 2: unknown key "refrsh" in cache`) {
+		t.Fatalf("err = %v, want unknown key refrsh in cache", err)
+	}
+}
+
+func TestLoadReportsAllUnknownKeys(t *testing.T) {
+	_, err := loadString(t, "sorces: []\ncache:\n  refrsh: x\n")
+	if err == nil || !strings.Contains(err.Error(), `unknown key "sorces"; line 3: unknown key "refrsh" in cache`) {
+		t.Fatalf("err = %v, want both errors joined by %q", err, "; ")
+	}
+}
+
+func TestLoadAllowsXKeys(t *testing.T) {
+	cfg, err := loadString(t, `
+x-common: &c {mountpoint: dev}
+sources:
+  - path: /foo
+    x-note: hello
+  - <<: *c
+    path: /bar
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Sources) != 2 || cfg.Sources[1].Mountpoint != "dev" {
+		t.Fatalf("unexpected sources: %+v", cfg.Sources)
+	}
+}
+
+func TestLoadEmptyFile(t *testing.T) {
+	for name, content := range map[string]string{
+		"empty":        "",
+		"comment only": "# nothing here\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := loadString(t, content)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg == nil || len(cfg.Sources) != 0 || cfg.Cache != (CacheConfig{}) {
+				t.Fatalf("cfg = %+v, want empty Config", cfg)
+			}
+		})
+	}
+}
+
+func TestLoadInvalidMountpoint(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		value string
+		want  string // "" — ошибки быть не должно
+	}{
+		{"mountpoint double dot", "mountpoint", `".."`, `source[0]: invalid mountpoint ".."`},
+		{"mountpoint single dot", "mountpoint", `"."`, `source[0]: invalid mountpoint "."`},
+		{"mountpoint empty segment", "mountpoint", `"a..b"`, `source[0]: invalid mountpoint "a..b"`},
+		{"mountpoint slash", "mountpoint", `"a/b"`, `source[0]: invalid mountpoint "a/b"`},
+		{"mountpoint backslash", "mountpoint", `'a\b'`, `source[0]: invalid mountpoint "a\\b"`},
+		{"mountpoint space", "mountpoint", `"a b"`, `source[0]: invalid mountpoint "a b"`},
+		{"mountpoint control", "mountpoint", `"a\tb"`, `source[0]: invalid mountpoint "a\tb"`},
+		{"namespace double dot", "mount_as_namespace", `".."`, `source[0]: invalid mount_as_namespace ".."`},
+		{"namespace single dot", "mount_as_namespace", `"."`, `source[0]: invalid mount_as_namespace "."`},
+		{"namespace empty segment", "mount_as_namespace", `"a..b"`, `source[0]: invalid mount_as_namespace "a..b"`},
+		{"namespace slash", "mount_as_namespace", `"a/b"`, `source[0]: invalid mount_as_namespace "a/b"`},
+		{"namespace space", "mount_as_namespace", `"a b"`, `source[0]: invalid mount_as_namespace "a b"`},
+		{"mountpoint outer dots ok", "mountpoint", `".dev."`, ""},
+		{"namespace outer dots ok", "mount_as_namespace", `".dev."`, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := loadString(t, "sources:\n  - path: /foo\n    "+tc.field+": "+tc.value+"\n")
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				got := cfg.Sources[0].Mountpoint + cfg.Sources[0].MountAsNamespace
+				if got != "dev" {
+					t.Fatalf("trimmed value = %q, want %q", got, "dev")
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}

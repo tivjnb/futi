@@ -1,0 +1,10 @@
+name: backup
+description: Pack a directory into a timestamped tar.gz archive (module package with a bundled script)
+params:
+  - name: src
+    required: true
+    description: Directory to archive
+  - name: dest
+    required: true
+    description: Directory where the archive is written
+cmd: "{{quote .module_root}}/scripts/backup.sh {{quote .src}} {{quote .dest}}"
