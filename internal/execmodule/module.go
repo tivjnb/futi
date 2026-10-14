@@ -110,7 +110,7 @@ func LoadModule(manifestPath, moduleRoot string) (*Module, error) {
 // записанного файла — будущий путь).
 func LoadManifest(data []byte, manifestPath, moduleRoot string) (*Module, error) {
 	if len(data) > MaxManifestSize {
-		return nil, fmt.Errorf("execmodule: манифест %q: размер %d байт превышает лимит %d", manifestPath, len(data), MaxManifestSize)
+		return nil, fmt.Errorf("execmodule: manifest %q: size %d bytes exceeds limit %d", manifestPath, len(data), MaxManifestSize)
 	}
 	mod, err := ParseManifest(data, manifestPath, moduleRoot)
 	if err != nil {
@@ -137,10 +137,10 @@ func readManifest(path string) ([]byte, error) {
 		return nil, fmt.Errorf("execmodule: read manifest %q: %w", path, err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("execmodule: манифест %q — не обычный файл", path)
+		return nil, fmt.Errorf("execmodule: manifest %q is not a regular file", path)
 	}
 	if info.Size() > MaxManifestSize {
-		return nil, fmt.Errorf("execmodule: манифест %q: размер %d байт превышает лимит %d", path, info.Size(), MaxManifestSize)
+		return nil, fmt.Errorf("execmodule: manifest %q: size %d bytes exceeds limit %d", path, info.Size(), MaxManifestSize)
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -153,7 +153,7 @@ func readManifest(path string) ([]byte, error) {
 		return nil, fmt.Errorf("execmodule: read manifest %q: %w", path, err)
 	}
 	if len(data) > MaxManifestSize {
-		return nil, fmt.Errorf("execmodule: манифест %q: размер превышает лимит %d байт", path, MaxManifestSize)
+		return nil, fmt.Errorf("execmodule: manifest %q: size exceeds limit of %d bytes", path, MaxManifestSize)
 	}
 	return data, nil
 }

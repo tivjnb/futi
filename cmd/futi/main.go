@@ -1160,7 +1160,7 @@ func main() {
 	// без config/source/cache.
 	if os.Args[1] == "completion" {
 		if len(os.Args) < 3 {
-			fmt.Fprintf(os.Stderr, "error: completion requires a shell (valid: %s)\n", strings.Join(validCompletionShells, ", "))
+			fmt.Fprintf(os.Stderr, "futi: completion requires a shell (valid: %s)\n", strings.Join(validCompletionShells, ", "))
 			os.Exit(1)
 		}
 		if err := runCompletion(os.Stdout, os.Args[2]); err != nil {
@@ -1249,10 +1249,10 @@ func main() {
 			}
 			return
 		case "":
-			fmt.Fprintln(os.Stderr, `error: cache requires a subcommand (try "cache refresh", "cache status", or "cache clear")`)
+			fmt.Fprintln(os.Stderr, `futi: cache requires a subcommand (try "cache refresh", "cache status", or "cache clear")`)
 			os.Exit(1)
 		default:
-			fmt.Fprintf(os.Stderr, "error: unknown cache subcommand %q (try \"cache refresh\", \"cache status\", or \"cache clear\")\n", subcmd)
+			fmt.Fprintf(os.Stderr, "futi: unknown cache subcommand %q (try \"cache refresh\", \"cache status\", or \"cache clear\")\n", subcmd)
 			os.Exit(1)
 		}
 	}

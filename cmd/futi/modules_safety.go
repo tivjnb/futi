@@ -54,7 +54,7 @@ func checkReservedSegments(path, sep string) error {
 // в каталоге/файле с точкой в имени discovery не резолвит.
 func validateSegmentsNoDot(name string) error {
 	if strings.Contains(name, ".") {
-		return fmt.Errorf("invalid module name %q: точка зарезервирована как разделитель namespace", name)
+		return fmt.Errorf("invalid module name %q: dot is reserved as the namespace separator", name)
 	}
 	return nil
 }
@@ -70,7 +70,7 @@ func validateResolveName(name string) error {
 		return err
 	}
 	if strings.Contains(name, "/") {
-		return fmt.Errorf("invalid module name %q: namespace записывается через точку (a.b), не через /", name)
+		return fmt.Errorf("invalid module name %q: write the namespace with a dot (a.b), not /", name)
 	}
 	return nil
 }

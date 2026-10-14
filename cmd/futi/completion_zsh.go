@@ -13,14 +13,14 @@ _futi() {
     local -a response
     (( ! $+commands[futi] )) && return 1
 
-    # Слова от первого после futi до текущего включительно: слова после
-    # курсора (TAB в середине строки) не передаются.
+    # Words from the first one after futi up to the current one, inclusive: words after
+    # the cursor (TAB in the middle of a line) are not passed.
     local -a args
     args=("${(@)words[2,CURRENT]}")
 
     response=("${(@f)$(futi __complete "${args[@]}" 2>/dev/null)}")
 
-    # Директива — только последняя строка вида :N; иначе это кандидат.
+    # The directive is only a last line of the form :N; otherwise it is a candidate.
     local directive=0
     if [[ "${response[-1]}" =~ '^:[0-9]+$' ]]; then
         directive="${response[-1]#:}"
@@ -30,8 +30,8 @@ _futi() {
     local comp ctext cdesc
     for comp in "${response[@]}"; do
         [[ -z "$comp" ]] && continue
-        # _describe использует ':' как разделитель text:description, поэтому
-        # '\' и ':' экранируются (сначала '\') в тексте и в описании.
+        # _describe uses ':' as the text:description separator, so
+        # '\' and ':' are escaped (first '\') in the text and in the description.
         if [[ "$comp" == $'\t'* ]]; then
             # Tab-prefixed: description-only entry (rare).
             completions_with_descriptions+=("${comp}")
@@ -56,7 +56,7 @@ _futi() {
         _describe -d 'values' completions_with_descriptions
     fi
 
-    # Директива — битовая маска: 1 — ошибка, 2 — без пробела, 4 — без файлов.
+    # The directive is a bitmask: 1 - error, 2 - no space, 4 - no files.
     if (( directive & 1 )); then
         _message 'error occurred during completion'
     fi
@@ -66,9 +66,9 @@ _futi() {
     if (( directive & 4 )); then
         _message 'no file completion'
     fi
-    # Default: futi разрешает файловое дополнение (значения флагов —
-    # пути). Функция завершения полностью контролирует кандидатов,
-    # поэтому генерируем файловые сами.
+    # Default: futi allows file completion (flag values are
+    # paths). The completion function fully controls the candidates,
+    # so we generate the file candidates ourselves.
     if (( directive == 0 )); then
         _files
     fi

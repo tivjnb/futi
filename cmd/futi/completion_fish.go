@@ -16,8 +16,8 @@ function __futi_perform_completion
     set -l args (commandline -opc)
     set -l cursor (commandline -ct)
 
-    # commandline -opc не включает токен под курсором: всегда передаём его
-    # последним аргументом toComplete (пустым, если курсор на новом слове).
+    # commandline -opc does not include the token under the cursor: always pass it
+    # as the last toComplete argument (empty if the cursor is on a new word).
     set args $args "$cursor"
 
     set -l results ($args[1] __complete $args[2..-1] 2>/dev/null)
@@ -31,9 +31,9 @@ function __futi_perform_completion
         end
     end
 
-    # Directive Default (0): futi разрешает файловое дополнение —
-    # значения флагов (пути). fish глобально запретил файлы (-f),
-    # поэтому генерируем кандидатов сами.
+    # Directive Default (0): futi allows file completion -
+    # flag values (paths). fish globally disabled files (-f),
+    # so we generate the candidates ourselves.
     if test "$directive" = 0
         __fish_complete_path "$cursor" 2>/dev/null
         return

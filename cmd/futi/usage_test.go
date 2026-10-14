@@ -170,3 +170,26 @@ func TestUsageDescriptionsAligned(t *testing.T) {
 		t.Error("строка --dry-run с описанием не найдена в USAGE")
 	}
 }
+
+// Сообщения об ошибках main() начинаются с префикса "futi:".
+func TestMainErrorsHaveFutiPrefix(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"completion"}, "futi: completion requires a shell"},
+		{[]string{"cache"}, "futi: cache requires a subcommand"},
+		{[]string{"cache", "bogus"}, "futi: unknown cache subcommand"},
+	}
+	for _, tt := range tests {
+		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
+			_, stderr, code := runUsageBin(t, tt.args...)
+			if code == 0 {
+				t.Errorf("код выхода 0, ожидался ненулевой")
+			}
+			if !strings.HasPrefix(stderr, tt.want) {
+				t.Errorf("stderr = %q, want prefix %q", stderr, tt.want)
+			}
+		})
+	}
+}

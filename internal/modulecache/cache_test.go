@@ -999,8 +999,8 @@ func TestHashFileRespectsManifestLimit(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "big.yaml")
 		writeFile(t, path, strings.Repeat("a", manifestLimit+1))
 		_, err := hashFile(path)
-		if err == nil || !strings.Contains(err.Error(), "размер") || !strings.Contains(err.Error(), path) {
-			t.Fatalf("hashFile(файл > 1 МиБ): err = %v, want ошибка с \"размер\" и путём", err)
+		if err == nil || !strings.Contains(err.Error(), "exceeds limit") || !strings.Contains(err.Error(), path) {
+			t.Fatalf("hashFile(файл > 1 МиБ): err = %v, want ошибка с \"exceeds limit\" и путём", err)
 		}
 	})
 
@@ -1053,8 +1053,8 @@ func TestCacheRefreshSkipsOversizedAndFIFOManifests(t *testing.T) {
 			t.Fatalf("Refresh: Total=%d Skipped=%d SkippedModules=%+v, want 1, 1, одна запись", result.Total, result.Skipped, result.SkippedModules)
 		}
 		reason := result.SkippedModules[0].Reason
-		if !strings.HasPrefix(reason, "hash:") || !strings.Contains(reason, "размер") {
-			t.Fatalf("Reason = %q, want \"hash: …размер…\"", reason)
+		if !strings.HasPrefix(reason, "hash:") || !strings.Contains(reason, "exceeds limit") {
+			t.Fatalf("Reason = %q, want \"hash: …exceeds limit…\"", reason)
 		}
 	})
 

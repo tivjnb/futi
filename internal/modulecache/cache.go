@@ -147,10 +147,10 @@ func hashFile(path string) ([]byte, error) {
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("modulecache: манифест %q — не обычный файл", path)
+		return nil, fmt.Errorf("modulecache: manifest %q is not a regular file", path)
 	}
 	if info.Size() > execmodule.MaxManifestSize {
-		return nil, fmt.Errorf("modulecache: манифест %q: размер %d байт превышает лимит %d", path, info.Size(), execmodule.MaxManifestSize)
+		return nil, fmt.Errorf("modulecache: manifest %q: size %d bytes exceeds limit %d", path, info.Size(), execmodule.MaxManifestSize)
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -164,7 +164,7 @@ func hashFile(path string) ([]byte, error) {
 		return nil, err
 	}
 	if n > execmodule.MaxManifestSize {
-		return nil, fmt.Errorf("modulecache: манифест %q: размер превышает лимит %d байт", path, execmodule.MaxManifestSize)
+		return nil, fmt.Errorf("modulecache: manifest %q: size exceeds limit of %d bytes", path, execmodule.MaxManifestSize)
 	}
 	return h.Sum(nil), nil
 }

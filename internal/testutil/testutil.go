@@ -37,5 +37,5 @@ func WaitForFile(t testing.TB, path string, timeout time.Duration) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("файл %s не появился за %v", path, timeout)
+	t.Fatalf("file %s did not appear within %v", path, timeout)
 }
