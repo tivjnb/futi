@@ -96,9 +96,13 @@ func TestRunWithConfigNilStdoutDiscards(t *testing.T) {
 		t.Fatal(err)
 	}
 	origOut, origErr := os.Stdout, os.Stderr
+	t.Cleanup(func() {
+		os.Stdout, os.Stderr = origOut, origErr
+		outR.Close()
+		errR.Close()
+	})
 	os.Stdout, os.Stderr = outW, errW
 	runErr := RunWithConfig(context.Background(), &Config{}, "sh", "-c", "echo out; echo err >&2")
-	os.Stdout, os.Stderr = origOut, origErr
 	outW.Close()
 	errW.Close()
 	if runErr != nil {

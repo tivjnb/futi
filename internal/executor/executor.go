@@ -151,11 +151,12 @@ func (cfg *Config) WithStderr(stderr io.Writer) *Config {
 //     без управляющего терминала или не на переднем плане (CI, фон, нет
 //     управляющего терминала) они адресные (kill -INT) и пересылаются. Терминал проверяется в момент сигнала.
 //
-// With the child in its own process group (cfg.Group, see GroupMode) all четыре сигнала пересылаются
-// группе, отмена ctx шлёт SIGTERM группе, через cancelWaitDelay — SIGKILL
-// оставшимся в ней. Этот SIGKILL может прийти уже после возврата
-// RunWithConfig (группа ещё не опустела) и только пока процесс futi жив:
-// если futi завершится раньше, внук, игнорирующий SIGTERM, переживёт его.
+// With the child in its own process group (cfg.Group, see GroupMode) all four
+// signals are forwarded to the group, ctx cancellation sends SIGTERM to the
+// group, and after cancelWaitDelay SIGKILL to whatever remains in it. That
+// SIGKILL may arrive after RunWithConfig has returned (the group is not empty
+// yet) and only while the futi process is alive: if futi exits first, a
+// grandchild ignoring SIGTERM outlives it.
 //
 // Если сигнал переслан (или пришёл между завершением ребёнка и снятием
 // подписки), возвращается ошибка с *InterruptedError, даже если ребёнок
@@ -194,9 +195,10 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 	if cfg.Stdin != nil {
 		command.Stdin = cfg.Stdin
 	}
-	// Изоляция решается один раз при старте и только без управляющего
-	// терминала: в фоне терминала хук своей группы, читающий tty, остановился
-	// бы SIGTTIN, а fg разбудил бы только группу futi.
+	// The decision is made once, at start. GroupAlways isolates unconditionally;
+	// the controlling-terminal condition applies only to GroupIsolateWithoutTTY:
+	// with a terminal, a hook in its own background group reading the tty would
+	// be stopped by SIGTTIN, and fg would wake only futi's group.
 	isolated := cfg.Group == GroupAlways || (cfg.Group == GroupIsolateWithoutTTY && !controllingTTY())
 	// groupKill — таймер SIGKILL группе после отмены ctx: os/exec через
 	// WaitDelay добивает только лидера, а внук, игнорирующий SIGTERM, пережил
@@ -253,22 +255,24 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 	var interruptedBy syscall.Signal
 	stopForward := make(chan struct{})
 	forwardDone := make(chan struct{})
-	go func() {
-		defer close(forwardDone)
-		for {
-			select {
-			case s := <-sigCh:
-				sig, ok := s.(syscall.Signal)
-				if !ok || !forwards(sig) {
-					continue
+	if cfg.ForwardSignals {
+		go func() {
+			defer close(forwardDone)
+			for {
+				select {
+				case s := <-sigCh:
+					sig, ok := s.(syscall.Signal)
+					if !ok || !forwards(sig) {
+						continue
+					}
+					signalChild(sig)
+					interruptedBy = mergeForwarded(interruptedBy, sig)
+				case <-stopForward:
+					return
 				}
-				signalChild(sig)
-				interruptedBy = mergeForwarded(interruptedBy, sig)
-			case <-stopForward:
-				return
 			}
-		}
-	}()
+		}()
+	}
 
 	waitErr := command.Wait()
 	// Лидер мог умереть от SIGTERM раньше внуков: таймер снимается, только
@@ -276,13 +280,15 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 	if t := groupKill.Load(); t != nil && errors.Is(signalGroup(command.Process, 0), os.ErrProcessDone) {
 		t.Stop()
 	}
-	close(stopForward)
-	<-forwardDone
-	// Сигнал, пришедший между Wait и снятием подписки, ребёнку уже не нужен,
-	// но прерывание futi терять нельзя.
-	signal.Stop(sigCh)
-	if sig, ok := drainSignals(sigCh, forwards); ok {
-		interruptedBy = mergeForwarded(interruptedBy, sig)
+	if cfg.ForwardSignals {
+		close(stopForward)
+		<-forwardDone
+		// Сигнал, пришедший между Wait и снятием подписки, ребёнку уже не нужен,
+		// но прерывание futi терять нельзя.
+		signal.Stop(sigCh)
+		if sig, ok := drainSignals(sigCh, forwards); ok {
+			interruptedBy = mergeForwarded(interruptedBy, sig)
+		}
 	}
 
 	runErr := waitErr

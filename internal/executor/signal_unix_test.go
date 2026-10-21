@@ -582,7 +582,7 @@ func TestRunWithConfigKeepsInheritedIgnoredSignal(t *testing.T) {
 	signal.Ignore(syscall.SIGHUP)
 
 	var buf bytes.Buffer
-	if err := RunWithConfig(context.Background(), &Config{Stdout: &buf}, "grep", "SigIgn", "/proc/self/status"); err != nil {
+	if err := RunWithConfig(context.Background(), &Config{Stdout: &buf, ForwardSignals: true}, "grep", "SigIgn", "/proc/self/status"); err != nil {
 		t.Fatalf("RunWithConfig: %v", err)
 	}
 	fields := strings.Fields(buf.String())
