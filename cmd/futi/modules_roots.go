@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/tivjnb/futi/internal/config"
+	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/termtext"
 )
 
@@ -18,24 +19,6 @@ type moduleRoot struct {
 	Prefix string
 }
 
-// globalModulesDir — глобальный каталог установки: FUTI_MODULES_DIR или
-// каталог по умолчанию. Единственное место вычисления этого корня.
-func globalModulesDir() (string, error) {
-	if dir := os.Getenv("FUTI_MODULES_DIR"); dir != "" {
-		return dir, nil
-	}
-	return config.DefaultModulesDir()
-}
-
-// loadFutiConfig загружает config.yaml futi; отсутствующий файл — (nil, nil).
-func loadFutiConfig() (*config.Config, error) {
-	path, err := config.DefaultConfigPath()
-	if err != nil {
-		return nil, err
-	}
-	return config.Load(path)
-}
-
 // readModuleRoots — корни для чтения (list, update, uninstall): каждый source
 // из config.yaml со своим префиксом, глобальный каталог установки и ./.futi
 // (если есть) без префикса. Корни с одним реальным путём сводятся к первому,
@@ -43,7 +26,7 @@ func loadFutiConfig() (*config.Config, error) {
 // Невалидный config.yaml — ошибка: иначе модули его sources молча пропали бы
 // из list, а uninstall отказал бы «вне корней».
 func readModuleRoots() ([]moduleRoot, error) {
-	cfg, err := loadFutiConfig()
+	cfg, err := core.LoadDefaultConfig()
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +36,7 @@ func readModuleRoots() ([]moduleRoot, error) {
 			roots = append(roots, moduleRoot{Dir: sc.Path, Prefix: sc.FullPrefix()})
 		}
 	}
-	globalDir, err := globalModulesDir()
+	globalDir, err := core.DefaultModulesDir()
 	if err != nil {
 		return nil, err
 	}
