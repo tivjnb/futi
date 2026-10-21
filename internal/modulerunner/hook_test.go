@@ -11,13 +11,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tivjnb/futi/internal/testutil"
+	"github.com/tivjnb/futi/internal/executor"
 )
 
 func TestRunHookRunsInModuleRoot(t *testing.T) {
 	dir := t.TempDir()
 	var out bytes.Buffer
-	if err := RunHook(context.Background(), "pwd", dir, "m", &out, &out); err != nil {
+	if err := RunHook(context.Background(), "pwd", dir, "m", nil, &out, &out, executor.GroupIsolateWithoutTTY, true); err != nil {
 		t.Fatalf("RunHook: %v", err)
 	}
 	// pwd может вернуть резолвнутый путь — сравниваем через EvalSymlinks.
@@ -34,7 +34,7 @@ func TestRunHookTemplateVars(t *testing.T) {
 	dir := t.TempDir()
 	var out bytes.Buffer
 	err := RunHook(context.Background(),
-		`echo {{.module_name}} {{quote .module_root}}`, dir, "qr", &out, &out)
+		`echo {{.module_name}} {{quote .module_root}}`, dir, "qr", nil, &out, &out, executor.GroupIsolateWithoutTTY, true)
 	if err != nil {
 		t.Fatalf("RunHook: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestRunHookEnvVars(t *testing.T) {
 	dir := t.TempDir()
 	var out bytes.Buffer
 	err := RunHook(context.Background(),
-		`echo $FUTI_MODULE_NAME $FUTI_MODULE_ROOT`, dir, "qr", &out, &out)
+		`echo $FUTI_MODULE_NAME $FUTI_MODULE_ROOT`, dir, "qr", nil, &out, &out, executor.GroupIsolateWithoutTTY, true)
 	if err != nil {
 		t.Fatalf("RunHook: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestRunHookEnvVars(t *testing.T) {
 
 func TestRunHookUnknownVarFails(t *testing.T) {
 	dir := t.TempDir()
-	err := RunHook(context.Background(), `echo {{.nope}}`, dir, "m", io.Discard, io.Discard)
+	err := RunHook(context.Background(), `echo {{.nope}}`, dir, "m", nil, io.Discard, io.Discard, executor.GroupIsolateWithoutTTY, true)
 	if err == nil {
 		t.Fatal("expected template error for unknown variable")
 	}
@@ -70,7 +70,7 @@ func TestRunHookUnknownVarFails(t *testing.T) {
 
 func TestRunHookPropagatesExitCode(t *testing.T) {
 	dir := t.TempDir()
-	err := RunHook(context.Background(), "exit 7", dir, "m", io.Discard, io.Discard)
+	err := RunHook(context.Background(), "exit 7", dir, "m", nil, io.Discard, io.Discard, executor.GroupIsolateWithoutTTY, true)
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
 		t.Fatalf("expected *exec.ExitError, got %T: %v", err, err)
@@ -80,12 +80,10 @@ func TestRunHookPropagatesExitCode(t *testing.T) {
 	}
 }
 
-func TestRunHookInheritsStdin(t *testing.T) {
+func TestRunHookReadsExplicitStdin(t *testing.T) {
 	dir := t.TempDir()
-	testutil.ReplaceStdin(t, "data")
-
 	var out bytes.Buffer
-	if err := RunHook(context.Background(), `cat > "$FUTI_MODULE_ROOT/out"`, dir, "m", &out, &out); err != nil {
+	if err := RunHook(context.Background(), `cat > "$FUTI_MODULE_ROOT/out"`, dir, "m", strings.NewReader("data"), &out, &out, executor.GroupIsolateWithoutTTY, true); err != nil {
 		t.Fatalf("RunHook: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "out"))
@@ -105,7 +103,7 @@ func TestRunHookRelativeModuleRootIsAbsolute(t *testing.T) {
 	}
 	var out bytes.Buffer
 	err := RunHook(context.Background(),
-		`echo $FUTI_MODULE_ROOT {{.module_root}}`, filepath.Join("rel", "mod"), "m", &out, &out)
+		`echo $FUTI_MODULE_ROOT {{.module_root}}`, filepath.Join("rel", "mod"), "m", nil, &out, &out, executor.GroupIsolateWithoutTTY, true)
 	if err != nil {
 		t.Fatalf("RunHook: %v", err)
 	}

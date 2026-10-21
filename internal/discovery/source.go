@@ -92,7 +92,7 @@ func (s *GlobalSource) Resolve(namespace string) (string, string, error) {
 	segments := strings.Split(namespace, ".")
 	for _, seg := range segments {
 		if seg == "" {
-			return "", "", fmt.Errorf("discovery: invalid namespace %q: empty segment", namespace)
+			return "", "", fmt.Errorf("discovery: %w %q: empty segment", ErrInvalidNamespace, namespace)
 		}
 	}
 	for _, seg := range segments {
@@ -444,7 +444,7 @@ func (s *GlobalSource) namespaceDir(namespace string) (string, error) {
 	segments := strings.Split(namespace, ".")
 	for _, seg := range segments {
 		if seg == "" {
-			return "", fmt.Errorf("discovery: invalid namespace %q: empty segment", namespace)
+			return "", fmt.Errorf("discovery: %w %q: empty segment", ErrInvalidNamespace, namespace)
 		}
 		if !validSegment(seg) {
 			return "", newNamespaceNotFound(namespace)

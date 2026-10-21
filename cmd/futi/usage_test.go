@@ -98,8 +98,8 @@ func TestUsageExamplesAreSafe(t *testing.T) {
 
 // runHelp для корня печатает usage в переданный stdout.
 func TestRunHelpRootPrintsUsageToStdout(t *testing.T) {
-	src := helpTestSource(t)
-	code, stdout, stderr := runHelpFor(t, src, helpArgs())
+	rt := helpTestSource(t)
+	code, stdout, stderr := runHelpFor(t, rt, helpArgs())
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}

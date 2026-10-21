@@ -14,6 +14,7 @@ import (
 
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/metayaml"
 	"github.com/tivjnb/futi/internal/modulecache"
 	"github.com/tivjnb/futi/internal/modulerunner"
@@ -308,7 +309,7 @@ func updateAt(w io.Writer, gate attachGate, cache *modulecache.Cache, name, labe
 	// Прерывание сигналом возвращаем после Invalidate: дерево уже заменено.
 	var interruptErr error
 	if runAttach {
-		if err := modulerunner.RunHook(context.Background(), mod.Attach, moduleRoot, execmodule.EffectiveName(mod.Name, filepath.Join(moduleRoot, "config.yaml")), w, os.Stderr); err != nil {
+		if err := modulerunner.RunHook(context.Background(), mod.Attach, moduleRoot, execmodule.EffectiveName(mod.Name, filepath.Join(moduleRoot, "config.yaml")), os.Stdin, w, os.Stderr, executor.GroupIsolateWithoutTTY, true); err != nil {
 			if _, interrupted := interruptSignal(err); interrupted {
 				interruptErr = fmt.Errorf("attach interrupted: %w", err)
 			} else {

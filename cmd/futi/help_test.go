@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/tivjnb/futi/internal/completion"
+	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/modulecache"
 )
@@ -17,7 +18,7 @@ import (
 //
 //	demo.yaml    — команды greet (leaf с params), db (ветка up/down), help (user-defined)
 //	plain.yaml   — модуль без user-defined help
-func helpTestSource(t *testing.T) discovery.Source {
+func helpTestSource(t *testing.T) *core.Runtime {
 	t.Helper()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "demo.yaml"), `
@@ -49,7 +50,7 @@ commands:
   run:
     cmd: "echo running"
 `)
-	return discovery.NewGlobalSource(dir)
+	return testRuntime(t, core.Options{ModulesDir: dir})
 }
 
 // helpArgs — helpRequest для позиционного пути без флагов и args.
@@ -57,18 +58,29 @@ func helpArgs(positional ...string) *helpRequest {
 	return &helpRequest{positional: positional}
 }
 
+// testRuntime builds a Runtime with the CLI exec policy for tests.
+func testRuntime(t *testing.T, opts core.Options) *core.Runtime {
+	t.Helper()
+	opts.Exec = core.CLIExecPolicy
+	rt, err := core.NewRuntime(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rt
+}
+
 // runHelpFor запускает runHelp с раздельными буферами stdout/stderr и
 // возвращает код выхода.
-func runHelpFor(t *testing.T, src discovery.Source, req *helpRequest) (code int, stdout, stderr string) {
+func runHelpFor(t *testing.T, rt *core.Runtime, req *helpRequest) (code int, stdout, stderr string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code, _ = runHelp(context.Background(), &out, &errOut, src, nil, req)
+	code, _ = runHelp(context.Background(), nil, &out, &errOut, rt, req)
 	return code, out.String(), errOut.String()
 }
 
 func TestRunHelpModule(t *testing.T) {
-	src := helpTestSource(t)
-	code, stdout, stderr := runHelpFor(t, src, helpArgs("plain"))
+	rt := helpTestSource(t)
+	code, stdout, stderr := runHelpFor(t, rt, helpArgs("plain"))
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}
@@ -79,8 +91,8 @@ func TestRunHelpModule(t *testing.T) {
 }
 
 func TestRunHelpLeafCommand(t *testing.T) {
-	src := helpTestSource(t)
-	code, stdout, stderr := runHelpFor(t, src, helpArgs("demo", "greet"))
+	rt := helpTestSource(t)
+	code, stdout, stderr := runHelpFor(t, rt, helpArgs("demo", "greet"))
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}
@@ -91,8 +103,8 @@ func TestRunHelpLeafCommand(t *testing.T) {
 }
 
 func TestRunHelpBranch(t *testing.T) {
-	src := helpTestSource(t)
-	code, stdout, stderr := runHelpFor(t, src, helpArgs("demo", "db"))
+	rt := helpTestSource(t)
+	code, stdout, stderr := runHelpFor(t, rt, helpArgs("demo", "db"))
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}
@@ -103,9 +115,9 @@ func TestRunHelpBranch(t *testing.T) {
 }
 
 func TestRunHelpUserDefinedWins(t *testing.T) {
-	src := helpTestSource(t)
+	rt := helpTestSource(t)
 	// demo имеет команду help → user-defined help выигрывает (выполняется).
-	code, stdout, stderr := runHelpFor(t, src, helpArgs("demo"))
+	code, stdout, stderr := runHelpFor(t, rt, helpArgs("demo"))
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}
@@ -115,9 +127,9 @@ func TestRunHelpUserDefinedWins(t *testing.T) {
 }
 
 func TestRunHelpUserDefinedSubcommandWins(t *testing.T) {
-	src := helpTestSource(t)
+	rt := helpTestSource(t)
 	// demo.greet не имеет subcommand help → системная справка команды.
-	code, stdout, stderr := runHelpFor(t, src, helpArgs("demo", "greet"))
+	code, stdout, stderr := runHelpFor(t, rt, helpArgs("demo", "greet"))
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}
@@ -128,8 +140,8 @@ func TestRunHelpUserDefinedSubcommandWins(t *testing.T) {
 
 func TestRunHelpRoot(t *testing.T) {
 	// runHelp с пустым positional печатает usage в stdout (printUsage).
-	src := helpTestSource(t)
-	code, stdout, stderr := runHelpFor(t, src, helpArgs())
+	rt := helpTestSource(t)
+	code, stdout, stderr := runHelpFor(t, rt, helpArgs())
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}
@@ -139,8 +151,8 @@ func TestRunHelpRoot(t *testing.T) {
 }
 
 func TestRunHelpNotFound(t *testing.T) {
-	src := helpTestSource(t)
-	code, _, stderr := runHelpFor(t, src, helpArgs("demo", "nonexistent"))
+	rt := helpTestSource(t)
+	code, _, stderr := runHelpFor(t, rt, helpArgs("demo", "nonexistent"))
 	if code != 1 {
 		t.Fatalf("code = %d, want 1", code)
 	}
@@ -183,7 +195,7 @@ func TestUsageListsAllReservedWords(t *testing.T) {
 //	m    — required-параметр x, печатает x и args в stdout, "ERRTEXT" в stderr
 //	bad  — help завершается с кодом 3
 //	plain — без пользовательской help
-func userHelpSource(t *testing.T) discovery.Source {
+func userHelpSource(t *testing.T) *core.Runtime {
 	t.Helper()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "m.yaml"), `
@@ -210,18 +222,18 @@ commands:
   run:
     cmd: "echo running"
 `)
-	return discovery.NewGlobalSource(dir)
+	return testRuntime(t, core.Options{ModulesDir: dir})
 }
 
 func TestRunHelpUserCommandGetsFlagsAndArgs(t *testing.T) {
-	src := userHelpSource(t)
+	rt := userHelpSource(t)
 	req := &helpRequest{
 		positional: []string{"m"},
 		flags:      []string{"--x", "1"},
 		args:       "a b",
 		argsList:   []string{"a", "b"},
 	}
-	code, stdout, stderr := runHelpFor(t, src, req)
+	code, stdout, stderr := runHelpFor(t, rt, req)
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}
@@ -231,9 +243,9 @@ func TestRunHelpUserCommandGetsFlagsAndArgs(t *testing.T) {
 }
 
 func TestRunHelpUserCommandStderrSeparate(t *testing.T) {
-	src := userHelpSource(t)
+	rt := userHelpSource(t)
 	req := &helpRequest{positional: []string{"m"}, flags: []string{"--x", "1"}}
-	_, stdout, stderr := runHelpFor(t, src, req)
+	_, stdout, stderr := runHelpFor(t, rt, req)
 	if strings.Contains(stdout, "ERRTEXT") {
 		t.Fatalf("stderr команды попал в stdout: %q", stdout)
 	}
@@ -243,9 +255,9 @@ func TestRunHelpUserCommandStderrSeparate(t *testing.T) {
 }
 
 func TestRunHelpUserCommandExitCode(t *testing.T) {
-	src := userHelpSource(t)
+	rt := userHelpSource(t)
 	var out, errOut bytes.Buffer
-	code, err := runHelp(context.Background(), &out, &errOut, src, nil, helpArgs("bad"))
+	code, err := runHelp(context.Background(), nil, &out, &errOut, rt, helpArgs("bad"))
 	if code != 3 {
 		t.Fatalf("code = %d, want 3 (stderr: %s)", code, errOut.String())
 	}
@@ -255,8 +267,8 @@ func TestRunHelpUserCommandExitCode(t *testing.T) {
 }
 
 func TestRunHelpUserCommandMissingRequiredParam(t *testing.T) {
-	src := userHelpSource(t)
-	code, _, stderr := runHelpFor(t, src, helpArgs("m"))
+	rt := userHelpSource(t)
+	code, _, stderr := runHelpFor(t, rt, helpArgs("m"))
 	if code != 1 {
 		t.Fatalf("code = %d, want 1", code)
 	}
@@ -266,9 +278,9 @@ func TestRunHelpUserCommandMissingRequiredParam(t *testing.T) {
 }
 
 func TestRunHelpUserCommandHelpFlagShowsItsHelp(t *testing.T) {
-	src := userHelpSource(t)
+	rt := userHelpSource(t)
 	req := &helpRequest{positional: []string{"m"}, flags: []string{"--help"}}
-	code, stdout, stderr := runHelpFor(t, src, req)
+	code, stdout, stderr := runHelpFor(t, rt, req)
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}
@@ -279,9 +291,9 @@ func TestRunHelpUserCommandHelpFlagShowsItsHelp(t *testing.T) {
 }
 
 func TestRunHelpSystemIgnoresFlags(t *testing.T) {
-	src := userHelpSource(t)
+	rt := userHelpSource(t)
 	req := &helpRequest{positional: []string{"plain"}, flags: []string{"--x", "1"}, args: "a", argsList: []string{"a"}}
-	code, stdout, stderr := runHelpFor(t, src, req)
+	code, stdout, stderr := runHelpFor(t, rt, req)
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}
@@ -308,7 +320,7 @@ func TestRunHelpUserModuleNamedHelp(t *testing.T) {
 name: help
 cmd: "echo MODULEHELP"
 `)
-	code, stdout, stderr := runHelpFor(t, discovery.NewGlobalSource(dir), helpArgs())
+	code, stdout, stderr := runHelpFor(t, testRuntime(t, core.Options{ModulesDir: dir}), helpArgs())
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}
@@ -320,13 +332,13 @@ cmd: "echo MODULEHELP"
 // `demo.greet help` должен вести себя как `demo greet help`: сегмент пути с
 // точкой делится на namespace и команду.
 func TestParseArgsHelpDotNamespaceMatchesSpacedPath(t *testing.T) {
-	src := helpTestSource(t)
+	rt := helpTestSource(t)
 	_, err := parseArgs([]string{"demo.greet", "help"})
 	var req *helpRequest
 	if !errors.As(err, &req) {
 		t.Fatalf("err = %v, want helpRequest", err)
 	}
-	code, stdout, stderr := runHelpFor(t, src, req)
+	code, stdout, stderr := runHelpFor(t, rt, req)
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}

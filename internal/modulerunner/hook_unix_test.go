@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/tivjnb/futi/internal/executor"
 )
 
 // Хук без управляющего терминала (CI, cron, ssh без tty) — в своей группе
@@ -26,7 +28,7 @@ func TestRunHookIsolatedWithoutTTY(t *testing.T) {
 		t.Skip("есть управляющий терминал: хук не изолируется")
 	}
 	var out bytes.Buffer
-	if err := RunHook(context.Background(), `echo $$ $(cut -d" " -f5 /proc/$$/stat)`, t.TempDir(), "m", &out, io.Discard); err != nil {
+	if err := RunHook(context.Background(), `echo $$ $(cut -d" " -f5 /proc/$$/stat)`, t.TempDir(), "m", nil, &out, io.Discard, executor.GroupIsolateWithoutTTY, true); err != nil {
 		t.Fatalf("RunHook: %v", err)
 	}
 	fields := strings.Fields(out.String())

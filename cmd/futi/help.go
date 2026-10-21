@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/modulerunner"
@@ -18,7 +19,9 @@ import (
 // stdout/stderr, код команды; user-defined выигрывает). Иначе показывает
 // системную справку для positional (флаги и args игнорируются). Возвращает код
 // выхода и ошибку запуска пользовательской команды (см. runParsed).
-func runHelp(ctx context.Context, stdout, stderr io.Writer, source discovery.Source, loader modulerunner.ModuleLoader, req *helpRequest) (int, error) {
+func runHelp(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt *core.Runtime, req *helpRequest) (int, error) {
+	source, _ := rt.Source() // main has already checked the error
+	loader := rt.Cache()
 	// Полный путь с "help" как последней командой.
 	full := make([]string, len(req.positional)+1)
 	copy(full, req.positional)
@@ -28,7 +31,7 @@ func runHelp(ctx context.Context, stdout, stderr io.Writer, source discovery.Sou
 	if resolved && isExecutableHelp(source, loader, manifest, root, cmdPath) {
 		pa := &parsedArgs{flags: req.flags, args: req.args, argsList: req.argsList, dryRun: req.dryRun}
 		pa.namespace, pa.command = splitPath(full)
-		return runParsed(ctx, stdout, stderr, source, loader, pa)
+		return runParsed(ctx, stdin, stdout, stderr, rt, pa)
 	}
 
 	if req.dryRun && resolved {

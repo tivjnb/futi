@@ -11,6 +11,10 @@ import (
 // так, чтобы вызывающий отличал "не найдено" через errors.Is.
 var ErrCommandNotFound = errors.New("command not found")
 
+// ErrRequiresSubcommand — у команды есть вложенные команды, но нет своего cmd:
+// нужно указать подкоманду.
+var ErrRequiresSubcommand = errors.New("requires a subcommand")
+
 // notFoundError несёт готовый текст ошибки и совпадает с ErrCommandNotFound
 // по errors.Is (текст при этом не меняется).
 type notFoundError struct{ msg string }
@@ -62,7 +66,7 @@ func (m *Module) ResolveCommand(path []string) (*Command, error) {
 	}
 
 	if cmd.Cmd == "" && len(cmd.Commands) > 0 {
-		return nil, fmt.Errorf("execmodule: command %q requires a subcommand", strings.Join(path, " "))
+		return nil, fmt.Errorf("execmodule: command %q %w", strings.Join(path, " "), ErrRequiresSubcommand)
 	}
 
 	return cmd, nil

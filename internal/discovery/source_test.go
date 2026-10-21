@@ -1418,3 +1418,14 @@ func TestListingsSkipDanglingSymlinksSilently(t *testing.T) {
 		t.Errorf("List() = %v, want %v", got, want)
 	}
 }
+
+func TestInvalidNamespaceSentinel(t *testing.T) {
+	s := NewGlobalSource(t.TempDir())
+	_, _, resolveErr := s.Resolve("a..b")
+	_, listErr := s.ListChildren("a..b")
+	for name, err := range map[string]error{"Resolve": resolveErr, "ListChildren": listErr} {
+		if !errors.Is(err, ErrInvalidNamespace) {
+			t.Errorf("%s err = %v, want ErrInvalidNamespace", name, err)
+		}
+	}
+}

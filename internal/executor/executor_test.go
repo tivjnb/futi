@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -67,18 +68,54 @@ func TestRunWithConfigRejectsNilContext(t *testing.T) {
 	}
 }
 
-func TestRunWithConfigInheritsStdin(t *testing.T) {
+func TestRunWithConfigNilStdinIsEmpty(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("cat недоступен на Windows")
 	}
-	testutil.ReplaceStdin(t, "hello")
+	testutil.ReplaceStdin(t, "inherited")
 
 	var buf bytes.Buffer
 	if err := RunWithConfig(context.Background(), &Config{Stdout: &buf}, "cat"); err != nil {
 		t.Fatalf("RunWithConfig: %v", err)
 	}
-	if got := buf.String(); got != "hello" {
-		t.Fatalf("stdout = %q, want %q", got, "hello")
+	if got := buf.String(); got != "" {
+		t.Fatalf("stdout = %q, want empty (nil Stdin must not inherit os.Stdin)", got)
+	}
+}
+
+func TestRunWithConfigNilStdoutDiscards(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh недоступен на Windows")
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	origOut, origErr := os.Stdout, os.Stderr
+	t.Cleanup(func() {
+		os.Stdout, os.Stderr = origOut, origErr
+		outR.Close()
+		errR.Close()
+	})
+	os.Stdout, os.Stderr = outW, errW
+	runErr := RunWithConfig(context.Background(), &Config{}, "sh", "-c", "echo out; echo err >&2")
+	outW.Close()
+	errW.Close()
+	if runErr != nil {
+		t.Fatalf("RunWithConfig: %v", runErr)
+	}
+	for name, r := range map[string]*os.File{"stdout": outR, "stderr": errR} {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(data) != 0 {
+			t.Fatalf("%s leaked %q, want nothing", name, data)
+		}
 	}
 }
 

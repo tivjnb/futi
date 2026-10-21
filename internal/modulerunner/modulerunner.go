@@ -1,17 +1,14 @@
 package modulerunner
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"sort"
 	"strings"
 
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
-	"github.com/tivjnb/futi/internal/executor"
 
 	"github.com/google/shlex"
 )
@@ -62,42 +59,52 @@ type Prepared struct {
 	ModuleRoot string
 }
 
-// Prepare находит модуль через source, загружает его, валидирует параметры,
-// рендерит cmd-шаблон и разбирает результат в argv, ничего не исполняя.
-// Поддерживает subcommands: progressive resolution пробует резолвить модуль
-// от длиннейшего namespace к коротчайшему; остаток = command path.
-// args — строка после `--` (для {{.args}}), argsList — массив (для {{.args_list}}).
-// command="" означает вызов default cmd модуля (Module.Cmd).
-// loader — опциональный загрузчик модулей с кэшем (nil = без кэша, прямой LoadModule).
-func Prepare(
-	source discovery.Source,
-	namespace, command string,
-	params map[string]string,
-	args string,
-	argsList []string,
-	loader ModuleLoader,
-) (*Prepared, error) {
-	// Исполняемый модуль загружаем со строгой проверкой свежести/аутентичности
-	// (SHA-256); так же — системная справка и completion. list использует
-	// обычный LoadModule (быстрый).
-	r, err := resolveCommand(source, namespace, command, loader)
-	if err != nil {
-		return nil, err
-	}
-	cmd, mod, moduleRoot := r.cmd, r.mod, r.moduleRoot
-	moduleName := execmodule.EffectiveName(mod.Name, r.manifestPath)
+// Env возвращает окружение процесса команды: os.Environ() плюс FUTI_MODULE_NAME
+// и FUTI_MODULE_ROOT (симметрия с хуками; FUTI_CWD удалён — cwd = cwd вызова).
+func (p *Prepared) Env() []string {
+	env := os.Environ()
+	return append(env,
+		"FUTI_MODULE_NAME="+p.ModuleName,
+		"FUTI_MODULE_ROOT="+p.ModuleRoot,
+	)
+}
 
-	resolved, err := cmd.Validate(params)
+// Resolved — найденная команда модуля: сама команда, модуль и его расположение.
+// Модуль загружается один раз в Resolve; Validate и Prepare его не перечитывают.
+type Resolved struct {
+	Command      *execmodule.Command
+	Module       *execmodule.Module
+	ModuleRoot   string
+	ManifestPath string // нужен для имени модуля по умолчанию (execmodule.EffectiveName)
+
+	// label — namespace + command для текста ошибки shlex.
+	label string
+}
+
+// ModuleName — эффективное имя модуля.
+func (r *Resolved) ModuleName() string {
+	return execmodule.EffectiveName(r.Module.Name, r.ManifestPath)
+}
+
+// Validate проверяет параметры и минимум позиционных аргументов (после "--")
+// и возвращает значения параметров с применёнными значениями по умолчанию.
+func (r *Resolved) Validate(params map[string]string, argsList []string) (map[string]string, error) {
+	resolved, err := r.Command.Validate(params)
 	if err != nil {
 		return nil, fmt.Errorf("modulerunner: %w", err)
 	}
-
-	// Проверка обязательного минимума позиционных аргументов (после "--").
-	if err := cmd.ValidatePositional(argsList); err != nil {
+	if err := r.Command.ValidatePositional(argsList); err != nil {
 		return nil, fmt.Errorf("modulerunner: %w", err)
 	}
+	return resolved, nil
+}
 
-	rendered, err := cmd.Render(resolved, args, argsList, execmodule.ModuleRef{Name: moduleName, Root: moduleRoot})
+// Prepare рендерит cmd-шаблон и разбирает результат в argv, ничего не исполняя.
+// {{.args}} — argsList, склеенный через пробел; {{.args_list}} — сам массив.
+func (r *Resolved) Prepare(resolved map[string]string, argsList []string) (*Prepared, error) {
+	moduleName := r.ModuleName()
+	rendered, err := r.Command.Render(resolved, strings.Join(argsList, " "), argsList,
+		execmodule.ModuleRef{Name: moduleName, Root: r.ModuleRoot})
 	if err != nil {
 		return nil, fmt.Errorf("modulerunner: %w", err)
 	}
@@ -106,91 +113,30 @@ func Prepare(
 	if err != nil {
 		// Отрендеренную строку не выводим: в ней могут быть значения секретов
 		// ({{.env.X}}, параметры); причина shlex сохраняется.
-		return nil, fmt.Errorf("modulerunner: command %q: split rendered cmd: %w", strings.TrimSpace(namespace+" "+command), err)
+		return nil, fmt.Errorf("modulerunner: command %q: split rendered cmd: %w", r.label, err)
 	}
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("modulerunner: empty command after render")
 	}
 
-	return &Prepared{Argv: parts, ModuleName: moduleName, ModuleRoot: moduleRoot}, nil
-}
-
-// Run готовит команду через Prepare и выполняет её.
-// stdout/stderr — опциональные writers для перехвата вывода (nil = os.Stdout/os.Stderr).
-// stdin команды всегда наследуется от futi (os.Stdin).
-// Остальные параметры — как у Prepare.
-func Run(
-	ctx context.Context,
-	source discovery.Source,
-	namespace, command string,
-	params map[string]string,
-	args string,
-	argsList []string,
-	stdout, stderr io.Writer,
-	loader ModuleLoader,
-) error {
-	p, err := Prepare(source, namespace, command, params, args, argsList, loader)
-	if err != nil {
-		return err
-	}
-
-	// Unix-семантика для первого токена cmd: относительные пути резолвятся
-	// ОС от cwd вызова (Go exec при Dir=="" наследует cwd родительского
-	// процесса); bare-имя ищется в PATH. Свои скрипты пакета — явно через
-	// {{quote .module_root}}/scripts/x.py. См. WORKDIR.md §2, §3.1.
-	//
-	// Env: FUTI_MODULE_NAME и FUTI_MODULE_ROOT — симметрия с хуками;
-	// FUTI_CWD удалён (cwd = cwd вызова, getcwd() в скрипте даёт то же).
-	env := os.Environ()
-	env = append(env,
-		"FUTI_MODULE_NAME="+p.ModuleName,
-		"FUTI_MODULE_ROOT="+p.ModuleRoot,
-	)
-	cfg := executor.NewConfig().WithEnv(env)
-	if stdout != nil {
-		cfg = cfg.WithStdout(stdout)
-	}
-	if stderr != nil {
-		cfg = cfg.WithStderr(stderr)
-	}
-
-	return executor.RunWithConfig(ctx, cfg, p.Argv[0], p.Argv[1:]...)
-}
-
-// resolvedCommand — результат резолва команды: сама команда, модуль и корень модуля.
-type resolvedCommand struct {
-	cmd        *execmodule.Command
-	mod        *execmodule.Module
-	moduleRoot string
-	// manifestPath нужен для имени модуля по умолчанию (execmodule.EffectiveName).
-	manifestPath string
-}
-
-// ResolveCommand находит модуль и команду (progressive resolution, как в Run)
-// и возвращает схему команды: params/positional. command="" — default cmd
-// модуля. Схема нужна для исполнения, поэтому модуль грузится так же, как в Run —
-// через LoadModuleVerified (свежесть относительно манифеста на диске); иначе
-// привязка флагов могла бы разойтись со схемой, по которой Run валидирует.
-// Ошибки те же, что у Run до валидации параметров.
-func ResolveCommand(source discovery.Source, loader ModuleLoader, namespace, command string) (*execmodule.Command, error) {
-	r, err := resolveCommand(source, namespace, command, loader)
-	if err != nil {
-		return nil, err
-	}
-	return r.cmd, nil
+	return &Prepared{Argv: parts, ModuleName: moduleName, ModuleRoot: r.ModuleRoot}, nil
 }
 
 // ErrModuleNotFound — ни один префикс пути не резолвится в модуль.
 var ErrModuleNotFound = errors.New("module not found")
 
-// resolveCommand — общий progressive resolution для Run и ResolveCommand:
-// пробует резолвить модуль от длиннейшего namespace к коротчайшему, остаток =
-// command path. Модуль грузится через LoadModuleVerified.
-func resolveCommand(
+// ErrNoDefaultCommand — модуль найден, но у него нет default cmd, а команда не указана.
+var ErrNoDefaultCommand = errors.New("has no default command; specify one")
+
+// Resolve — progressive resolution: пробует резолвить модуль от длиннейшего
+// namespace к коротчайшему, остаток = command path. command="" — default cmd
+// модуля. Модуль грузится через LoadModuleVerified (строгая проверка
+// свежести/аутентичности, как при исполнении).
+func Resolve(
 	source discovery.Source,
-	namespace, command string,
 	loader ModuleLoader,
-) (*resolvedCommand, error) {
+	namespace, command string,
+) (*Resolved, error) {
 	// Реконструкция positional args из namespace + command.
 	// Непустой namespace всегда делится по ".", в т.ч. при command=="":
 	// `futi docker.build` даёт namespace "docker.build" без команды.
@@ -201,6 +147,8 @@ func resolveCommand(
 	if namespace == "" || command != "" {
 		positional = append(positional, command)
 	}
+
+	label := strings.TrimSpace(namespace + " " + command)
 
 	// i=len(positional) → ns=все, commandPath=[] (default cmd случай).
 	// i>=1: пустой namespace (i=0) модулем не является.
@@ -224,24 +172,25 @@ func resolveCommand(
 		// commandPath пустой → default cmd модуля (со схемой: params/positional).
 		if len(commandPath) == 0 {
 			if mod.Cmd == "" {
-				return nil, fmt.Errorf("modulerunner: module %q has no default command; specify one", ns)
+				return nil, fmt.Errorf("modulerunner: module %q %w", ns, ErrNoDefaultCommand)
 			}
-			return &resolvedCommand{
-				cmd: &execmodule.Command{
+			return &Resolved{
+				Command: &execmodule.Command{
 					Cmd:        mod.Cmd,
 					Params:     mod.Params,
 					Positional: mod.Positional,
 				},
-				mod:          mod,
-				moduleRoot:   moduleRoot,
-				manifestPath: manifestPath,
+				Module:       mod,
+				ModuleRoot:   moduleRoot,
+				ManifestPath: manifestPath,
+				label:        label,
 			}, nil
 		}
 		cmd, err := mod.ResolveCommand(commandPath)
 		if err != nil {
 			return nil, fmt.Errorf("modulerunner: %w", err)
 		}
-		return &resolvedCommand{cmd: cmd, mod: mod, moduleRoot: moduleRoot, manifestPath: manifestPath}, nil
+		return &Resolved{Command: cmd, Module: mod, ModuleRoot: moduleRoot, ManifestPath: manifestPath, label: label}, nil
 	}
 
 	return nil, fmt.Errorf("modulerunner: %w for %v", ErrModuleNotFound, positional)

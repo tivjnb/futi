@@ -101,6 +101,9 @@ func TestDefaultOptions(t *testing.T) {
 	if opts.Warn != nil {
 		t.Error("Warn != nil, want nil")
 	}
+	if opts.Exec != CLIExecPolicy {
+		t.Errorf("Exec = %+v, want CLIExecPolicy %+v", opts.Exec, CLIExecPolicy)
+	}
 }
 
 func TestDefaultOptionsNoHome(t *testing.T) {

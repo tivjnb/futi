@@ -37,13 +37,14 @@ type Options struct {
 	CachePath    string           // "" = MemoryStorage (политика — из конфига)
 	CachePathErr error            // ошибка вычисления пути кэша: MemoryStorage + AlwaysPolicy + предупреждение
 	Warn         func(msg string) // nil = предупреждения отбрасываются
+	Exec         ExecPolicy       // child process execution policy
 
 	loader modulerunner.ModuleLoader // nil = Runtime.Cache(); шов для тестов
 }
 
 // DefaultOptions — единственное чтение окружения для Runtime CLI.
 func DefaultOptions() (Options, error) {
-	var opts Options
+	opts := Options{Exec: CLIExecPolicy}
 
 	configPath, err := config.DefaultConfigPath()
 	if err != nil {

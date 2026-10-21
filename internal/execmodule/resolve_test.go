@@ -1,6 +1,7 @@
 package execmodule
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -89,6 +90,9 @@ func TestResolveCommandBranchWithoutLeaf(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "migrate") {
 		t.Fatalf("error should mention command name, got: %v", err)
+	}
+	if !errors.Is(err, ErrRequiresSubcommand) {
+		t.Fatalf("err = %v, want ErrRequiresSubcommand", err)
 	}
 }
 
