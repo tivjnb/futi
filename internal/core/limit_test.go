@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"testing"
@@ -88,5 +89,53 @@ func TestLimitedWriterWithinLimit(t *testing.T) {
 	}
 	if l.Truncated() {
 		t.Error("Truncated() = true for 3 bytes under limit 5")
+	}
+}
+
+func TestOutputWritersNilStreamsStayNilWithLimit(t *testing.T) {
+	var buf bytes.Buffer
+	cases := []struct {
+		name         string
+		stdout, errw io.Writer
+		wantONil     bool
+		wantENil     bool
+	}{
+		{"both nil", nil, nil, true, true},
+		{"stdout nil", nil, &buf, true, false},
+		{"stderr nil", &buf, nil, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			o, e, _ := outputWriters(tc.stdout, tc.errw, 10)
+			if (o == nil) != tc.wantONil || (e == nil) != tc.wantENil {
+				t.Errorf("writers nil = (%v, %v), want (%v, %v)", o == nil, e == nil, tc.wantONil, tc.wantENil)
+			}
+		})
+	}
+}
+
+func TestLimitedWriterNilStreamDoesNotConsumeBudget(t *testing.T) {
+	var buf bytes.Buffer
+	o, e, l := outputWriters(&buf, nil, 5)
+	if e != nil {
+		t.Fatalf("stderr writer = %v, want nil", e)
+	}
+	if _, err := o.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if l.Truncated() || buf.String() != "hello" {
+		t.Errorf("truncated=%v written=%q, want false, %q", l.Truncated(), buf.String(), "hello")
+	}
+}
+
+func TestLimitedWriterShortWrite(t *testing.T) {
+	short := funcWriter(func(p []byte) (int, error) { return len(p) - 1, nil })
+	o, _, l := outputWriters(short, nil, 100)
+	n, err := o.Write([]byte("abcd"))
+	if !errors.Is(err, io.ErrShortWrite) || n != 3 {
+		t.Errorf("Write = %d, %v; want 3, io.ErrShortWrite", n, err)
+	}
+	if l.left != 97 {
+		t.Errorf("left = %d, want 97 (only written bytes consumed)", l.left)
 	}
 }

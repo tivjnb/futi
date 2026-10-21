@@ -55,22 +55,21 @@ func TestExamplesRender(t *testing.T) {
 		name     string
 		ns, cmd  string
 		params   map[string]string
-		args     string
 		argsList []string
 		want     []string
 	}{
-		{"git switch", "git", "switch", map[string]string{"branch": "feat/x"}, "", nil,
+		{"git switch", "git", "switch", map[string]string{"branch": "feat/x"}, nil,
 			[]string{"git", "switch", "--", "feat/x"}},
-		{"git switch: значение с пробелом и флагом", "git", "switch", map[string]string{"branch": "--force x"}, "", nil,
+		{"git switch: значение с пробелом и флагом", "git", "switch", map[string]string{"branch": "--force x"}, nil,
 			[]string{"git", "switch", "--", "--force x"}},
-		{"git log: default count", "git", "log", map[string]string{}, "", nil,
+		{"git log: default count", "git", "log", map[string]string{}, nil,
 			[]string{"git", "log", "--oneline", "-n", "10"}},
 		{"docker logs: follow и tail", "docker", "logs",
-			map[string]string{"container": "web", "follow": "true", "tail": "50"}, "", nil,
+			map[string]string{"container": "web", "follow": "true", "tail": "50"}, nil,
 			[]string{"docker", "logs", "--tail", "50", "--follow", "--", "web"}},
-		{"files large: size склеен в один токен", "files", "large", map[string]string{"size": "100M"}, "", nil,
+		{"files large: size склеен в один токен", "files", "large", map[string]string{"size": "100M"}, nil,
 			[]string{"find", ".", "-type", "f", "-size", "+100M"}},
-		{"files count: позиционные не разбираются повторно", "files", "count", nil, "a b c", []string{"a b", "c"},
+		{"files count: позиционные не разбираются повторно", "files", "count", nil, []string{"a b", "c"},
 			[]string{"wc", "-l", "--", "a b", "c"}},
 	}
 	for _, tt := range tests {

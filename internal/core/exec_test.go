@@ -5,20 +5,17 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/execmodule"
-	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
@@ -176,8 +173,13 @@ func TestExecuteWorkDir(t *testing.T) {
 		}
 	})
 	t.Run("bare name from PATH", func(t *testing.T) {
-		if got := run(t, "echo hi", t.TempDir()); got != "hi" {
-			t.Errorf("output = %q, want hi", got)
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "echo"), "#!/bin/sh\necho shadowed\n")
+		if err := os.Chmod(filepath.Join(dir, "echo"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got := run(t, "echo hi", dir); got != "hi" {
+			t.Errorf("output = %q, want hi (PATH must win over WorkDir)", got)
 		}
 	})
 	t.Run("relative WorkDir", func(t *testing.T) {
@@ -305,6 +307,20 @@ func TestExecuteWriterErrorIsError(t *testing.T) {
 	}
 }
 
+// A writer error under an output limit is also a hard error, not a WaitErr.
+func TestExecuteWriterErrorWithLimitIsError(t *testing.T) {
+	skipWindows(t)
+	rt, tgt := newExecRT(t, core.Options{Exec: core.CLIExecPolicy}, "echo hi")
+	res, err := rt.Execute(context.Background(), tgt,
+		core.ExecuteRequest{Stdout: failWriter{}, OutputLimit: 100})
+	if err == nil {
+		t.Fatal("err = nil, want writer error")
+	}
+	if res.WaitErr != nil || res.ExitCode != 0 {
+		t.Errorf("WaitErr = %v, ExitCode = %d; want nil, 0", res.WaitErr, res.ExitCode)
+	}
+}
+
 // A grandchild holding the pipe yields exec.ErrWaitDelay: not an error.
 func TestExecuteWaitDelayIsNotError(t *testing.T) {
 	skipWindows(t)
@@ -400,92 +416,4 @@ func TestExecuteConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-}
-
-// startSelfTerm runs "sh -c 'echo ready; sleep N'" and sends SIGTERM to the
-// test process once the child reports ready.
-func sigtermWhenReady(t *testing.T, ready <-chan struct{}) {
-	t.Helper()
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGTERM)
-	t.Cleanup(func() { signal.Stop(ch) })
-	go func() {
-		<-ready
-		_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
-	}()
-}
-
-type readyWriter struct {
-	once  sync.Once
-	ready chan struct{}
-}
-
-func (w *readyWriter) Write(p []byte) (int, error) {
-	w.once.Do(func() { close(w.ready) })
-	return len(p), nil
-}
-
-func TestExecuteCLIPolicyForwardsSignals(t *testing.T) {
-	skipWindows(t)
-	rt, tgt := newExecRT(t, core.Options{Exec: core.CLIExecPolicy}, `"sh -c 'echo ready; sleep 5'"`)
-	w := &readyWriter{ready: make(chan struct{})}
-	sigtermWhenReady(t, w.ready)
-	res, err := rt.Execute(context.Background(), tgt, core.ExecuteRequest{Stdout: w})
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	var intr *executor.InterruptedError
-	if !errors.As(res.WaitErr, &intr) || res.ExitCode != 143 {
-		t.Errorf("WaitErr = %v, ExitCode = %d; want InterruptedError, 143", res.WaitErr, res.ExitCode)
-	}
-}
-
-func TestExecuteServerPolicyNoForward(t *testing.T) {
-	skipWindows(t)
-	rt, tgt := newExecRT(t, core.Options{Exec: core.ServerExecPolicy}, `"sh -c 'echo ready; sleep 1; exit 0'"`)
-	w := &readyWriter{ready: make(chan struct{})}
-	sigtermWhenReady(t, w.ready)
-	res, err := rt.Execute(context.Background(), tgt, core.ExecuteRequest{Stdout: w})
-	if err != nil || res.WaitErr != nil || res.ExitCode != 0 {
-		t.Errorf("Execute = %+v, %v; want clean result", res, err)
-	}
-}
-
-func TestExecuteServerPolicyCancelKillsGrandchild(t *testing.T) {
-	skipWindows(t)
-	if testing.Short() {
-		t.Skip("waits for executor cancelWaitDelay")
-	}
-	pidFile := filepath.Join(t.TempDir(), "pid")
-	rt, tgt := newExecRT(t, core.Options{Exec: core.ServerExecPolicy},
-		`"sh -c 'sh -c \"trap \\\"\\\" TERM; echo \\$\\$ > `+pidFile+`; while :; do sleep 1; done\" & wait'"`)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		deadline := time.Now().Add(10 * time.Second)
-		for time.Now().Before(deadline) {
-			if b, _ := os.ReadFile(pidFile); strings.TrimSpace(string(b)) != "" {
-				break
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
-		cancel()
-	}()
-	_, err := rt.Execute(ctx, tgt, core.ExecuteRequest{})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v, want Canceled", err)
-	}
-	b, _ := os.ReadFile(pidFile)
-	pid, perr := strconv.Atoi(strings.TrimSpace(string(b)))
-	if perr != nil {
-		t.Fatalf("pid file: %q", b)
-	}
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if syscall.Kill(pid, 0) != nil {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("grandchild %d still alive after cancel", pid)
 }

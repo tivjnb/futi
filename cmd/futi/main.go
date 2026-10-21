@@ -905,8 +905,8 @@ func systemHelpCode(stdout, stderr io.Writer, source discovery.Source, loader mo
 	return 0
 }
 
-// runParsed — общий путь исполнения команды (ResolveCommand → bindFlags
-// (-h/--help → справка) → Run → formatRunError) для обычной ветки main и
+// runParsed — общий путь исполнения команды (rt.Resolve → bindFlags
+// (-h/--help → справка) → rt.Execute → formatRunError) для обычной ветки main и
 // пользовательской help. Пишет в переданные stdout/stderr и возвращает код
 // выхода. Второе значение — ошибка запуска (уже напечатанная в stderr): её
 // возвращаем наружу, чтобы вызывающий через exitAfterRunError корректно

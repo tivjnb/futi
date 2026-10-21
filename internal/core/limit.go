@@ -20,7 +20,9 @@ func (l *outputLimiter) Truncated() bool {
 }
 
 // limitedWriter writes to w while the shared budget lasts and silently drops
-// the rest. Write always reports success, so the child never sees a failure.
+// the rest: truncation by the limit is not reported to the child. A failure
+// or a short write of the underlying writer is returned as (k, err) or
+// (k, io.ErrShortWrite).
 type limitedWriter struct {
 	l *outputLimiter
 	w io.Writer
@@ -35,34 +37,41 @@ func (lw *limitedWriter) Write(p []byte) (int, error) {
 		lw.l.truncated = true
 	}
 	if n > 0 {
-		if _, err := lw.w.Write(p[:n]); err != nil {
-			return 0, err
+		k, err := lw.w.Write(p[:n])
+		lw.l.left -= int64(k)
+		if err != nil {
+			return k, err
 		}
-		lw.l.left -= n
+		if int64(k) < n {
+			return k, io.ErrShortWrite
+		}
 	}
 	return len(p), nil
 }
 
-// outputWriters prepares the child's output writers. nil becomes io.Discard.
-// With limit == 0 the writers pass through and the limiter is nil. Otherwise
-// both streams share one budget; if stdout and stderr are the same writer,
-// they get the same wrapper.
+// outputWriters prepares the child's output writers. With limit == 0 the
+// writers pass through and the limiter is nil. Otherwise the non-nil streams
+// share one budget; if stdout and stderr are the same writer, they get the
+// same wrapper. A nil stream stays nil (the executor sends it to the null
+// device without a pipe) and does not consume the budget.
 func outputWriters(stdout, stderr io.Writer, limit int64) (o, e io.Writer, l *outputLimiter) {
 	if limit <= 0 {
 		return stdout, stderr, nil
 	}
-	if stdout == nil {
-		stdout = io.Discard
-	}
-	if stderr == nil {
-		stderr = io.Discard
+	if stdout == nil && stderr == nil {
+		return nil, nil, nil
 	}
 	l = &outputLimiter{left: limit}
-	o = &limitedWriter{l: l, w: stdout}
-	if sameWriter(stdout, stderr) {
-		return o, o, l
+	if stdout != nil {
+		o = &limitedWriter{l: l, w: stdout}
 	}
-	return o, &limitedWriter{l: l, w: stderr}, l
+	if stderr != nil {
+		if o != nil && sameWriter(stdout, stderr) {
+			return o, o, l
+		}
+		e = &limitedWriter{l: l, w: stderr}
+	}
+	return o, e, l
 }
 
 // sameWriter reports whether a and b are the same writer. Comparing

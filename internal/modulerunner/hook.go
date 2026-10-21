@@ -20,7 +20,8 @@ import (
 // Отличия от обычного cmd: результат рендера выполняется через `sh -c`
 // (hook может быть составной командой: пайпы, &&, ;). stdin, group и forward
 // задаёт вызывающий (executor.Config.Stdin/Group/ForwardSignals), таймаута
-// нет. Доступные переменные шаблона: {{.module_name}}, {{.module_root}}, {{.env.FOO}}, {{quote .x}}.
+// нет. Доступные переменные шаблона: {{.module_name}}, {{.module_root}},
+// {{.env.FOO}}, {{quote .x}}.
 // Env процесса: полное окружение пользователя + FUTI_MODULE_NAME,
 // FUTI_MODULE_ROOT. cwd = moduleRoot. FUTI_CWD удалён (WORKDIR.md §2.4):
 // cwd хука = moduleRoot, в скрипте getcwd() даёт то же.
