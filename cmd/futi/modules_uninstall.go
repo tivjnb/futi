@@ -10,6 +10,7 @@ import (
 
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/metayaml"
 	"github.com/tivjnb/futi/internal/modulecache"
 	"github.com/tivjnb/futi/internal/modulerunner"
@@ -129,7 +130,7 @@ func runModulesUninstall(w io.Writer, stdin io.Reader, source discovery.Source, 
 			}
 			fmt.Fprintf(os.Stderr, "Warning: cannot load manifest, detach skipped: %v\n", err)
 		} else if mod.Detach != "" {
-			if err := modulerunner.RunHook(context.Background(), mod.Detach, moduleRoot, execmodule.EffectiveName(mod.Name, manifestPath), w, os.Stderr); err != nil {
+			if err := modulerunner.RunHook(context.Background(), mod.Detach, moduleRoot, execmodule.EffectiveName(mod.Name, manifestPath), os.Stdin, w, os.Stderr, executor.GroupIsolateWithoutTTY, true); err != nil {
 				if _, interrupted := interruptSignal(err); interrupted {
 					return fmt.Errorf("detach interrupted, nothing deleted: %w", err)
 				}

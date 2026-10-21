@@ -101,7 +101,7 @@ func TestRunWithConfigForwardsSIGTERM(t *testing.T) {
 	env, mark, ready := signalChildEnv(t)
 	script := `trap 'echo term > "$MARK"; exit 0' TERM; echo ready > "$READY"; i=0; while [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done`
 
-	err := runUntilSignalled(t, &Config{Env: env}, ready, script, syscall.SIGTERM)
+	err := runUntilSignalled(t, &Config{Env: env, ForwardSignals: true}, ready, script, syscall.SIGTERM)
 	assertMark(t, mark, "term")
 	assertInterrupted(t, err, syscall.SIGTERM)
 }
@@ -113,7 +113,7 @@ func TestRunWithConfigForwardsSIGHUP(t *testing.T) {
 	env, mark, ready := signalChildEnv(t)
 	script := `trap 'echo hup > "$MARK"; exit 0' HUP; echo ready > "$READY"; i=0; while [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done`
 
-	err := runUntilSignalled(t, &Config{Env: env}, ready, script, syscall.SIGHUP)
+	err := runUntilSignalled(t, &Config{Env: env, ForwardSignals: true}, ready, script, syscall.SIGHUP)
 	assertMark(t, mark, "hup")
 	assertInterrupted(t, err, syscall.SIGHUP)
 }
@@ -128,7 +128,7 @@ func TestRunWithConfigForwardsSIGINTWithoutTTY(t *testing.T) {
 	env, mark, ready := signalChildEnv(t)
 	script := `trap 'echo int > "$MARK"; exit 0' INT; echo ready > "$READY"; i=0; while [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done`
 
-	err := runUntilSignalled(t, &Config{Env: env}, ready, script, syscall.SIGINT)
+	err := runUntilSignalled(t, &Config{Env: env, ForwardSignals: true}, ready, script, syscall.SIGINT)
 	assertMark(t, mark, "int")
 	assertInterrupted(t, err, syscall.SIGINT)
 }
@@ -154,7 +154,7 @@ func TestRunWithConfigDoesNotForwardSIGINT(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- RunWithConfig(context.Background(), &Config{Env: env}, "sh", "-c", script)
+		done <- RunWithConfig(context.Background(), &Config{Env: env, ForwardSignals: true}, "sh", "-c", script)
 	}()
 	testutil.WaitForFile(t, ready, 5*time.Second)
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
@@ -192,7 +192,7 @@ func TestRunWithConfigCancelSendsSIGTERM(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- RunWithConfig(ctx, &Config{Env: env}, "sh", "-c", script)
+		done <- RunWithConfig(ctx, &Config{Env: env, ForwardSignals: true}, "sh", "-c", script)
 	}()
 	testutil.WaitForFile(t, ready, 5*time.Second)
 	cancel()
@@ -226,7 +226,7 @@ func TestRunWithConfigCancelKillsChildIgnoringSIGTERM(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- RunWithConfig(ctx, &Config{Env: env}, "sh", "-c", script)
+		done <- RunWithConfig(ctx, &Config{Env: env, ForwardSignals: true}, "sh", "-c", script)
 	}()
 	testutil.WaitForFile(t, ready, 5*time.Second)
 	start := time.Now()
@@ -271,7 +271,7 @@ func TestRunWithConfigIsolatedGroupGetsSIGTERM(t *testing.T) {
 	setControllingTTY(t, false)
 	env, mark, ready, script := isolatedGrandchildEnv(t)
 
-	err := runUntilSignalled(t, &Config{Env: env, IsolateWithoutTTY: true}, ready, script, syscall.SIGTERM)
+	err := runUntilSignalled(t, &Config{Env: env, Group: GroupIsolateWithoutTTY, ForwardSignals: true}, ready, script, syscall.SIGTERM)
 	testutil.WaitForFile(t, mark, 5*time.Second)
 	assertMark(t, mark, "gc")
 	var intErr *InterruptedError
@@ -292,7 +292,7 @@ func TestRunWithConfigIsolatedCancelSignalsGroup(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- RunWithConfig(ctx, &Config{Env: env, IsolateWithoutTTY: true}, "sh", "-c", script)
+		done <- RunWithConfig(ctx, &Config{Env: env, Group: GroupIsolateWithoutTTY, ForwardSignals: true}, "sh", "-c", script)
 	}()
 	testutil.WaitForFile(t, ready, 5*time.Second)
 	cancel()
@@ -321,7 +321,7 @@ func TestRunWithConfigIsolatedKeepsDaemonOnNormalExit(t *testing.T) {
 	setControllingTTY(t, false)
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	script := `sleep 30 </dev/null >/dev/null 2>&1 & echo $! > "$PIDFILE"`
-	cfg := &Config{Env: append(os.Environ(), "PIDFILE="+pidFile), IsolateWithoutTTY: true}
+	cfg := &Config{Env: append(os.Environ(), "PIDFILE="+pidFile), Group: GroupIsolateWithoutTTY, ForwardSignals: true}
 	if err := RunWithConfig(context.Background(), cfg, "sh", "-c", script); err != nil {
 		t.Fatalf("RunWithConfig: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestRunWithConfigIsolatedCancelKillsGroupIgnoringSIGTERM(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- RunWithConfig(ctx, &Config{Env: env, IsolateWithoutTTY: true}, "sh", "-c", `sh -c "$INNER" & wait`)
+		done <- RunWithConfig(ctx, &Config{Env: env, Group: GroupIsolateWithoutTTY, ForwardSignals: true}, "sh", "-c", `sh -c "$INNER" & wait`)
 	}()
 	testutil.WaitForFile(t, ready, 5*time.Second)
 	pid := readPid(t, ready)
@@ -406,7 +406,7 @@ func TestRunWithConfigIsolatedForwardsSIGINT(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- RunWithConfig(context.Background(), &Config{Env: env, IsolateWithoutTTY: true}, "sh", "-c", script)
+		done <- RunWithConfig(context.Background(), &Config{Env: env, Group: GroupIsolateWithoutTTY, ForwardSignals: true}, "sh", "-c", script)
 	}()
 	testutil.WaitForFile(t, ready, 5*time.Second)
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
@@ -455,7 +455,7 @@ func childGroup(t *testing.T, cfg *Config) (pid, pgrp int) {
 func TestRunWithConfigNotIsolatedWithTTY(t *testing.T) {
 	setControllingTTY(t, true)
 	setForegroundTTY(t, false)
-	_, pgrp := childGroup(t, &Config{IsolateWithoutTTY: true})
+	_, pgrp := childGroup(t, &Config{Group: GroupIsolateWithoutTTY, ForwardSignals: true})
 	if want := syscall.Getpgrp(); pgrp != want {
 		t.Fatalf("pgrp ребёнка = %d, want %d (группа теста)", pgrp, want)
 	}
@@ -463,7 +463,7 @@ func TestRunWithConfigNotIsolatedWithTTY(t *testing.T) {
 
 func TestRunWithConfigIsolatedOwnGroup(t *testing.T) {
 	setControllingTTY(t, false)
-	pid, pgrp := childGroup(t, &Config{IsolateWithoutTTY: true})
+	pid, pgrp := childGroup(t, &Config{Group: GroupIsolateWithoutTTY, ForwardSignals: true})
 	if pgrp != pid {
 		t.Fatalf("pgrp ребёнка = %d, want %d (своя группа; группа теста %d)", pgrp, pid, syscall.Getpgrp())
 	}
@@ -597,4 +597,59 @@ func TestRunWithConfigKeepsInheritedIgnoredSignal(t *testing.T) {
 	if mask&1 == 0 {
 		t.Fatalf("SIGHUP не игнорируется у ребёнка: SigIgn = %s", fields[1])
 	}
+}
+
+// Without ForwardSignals futi still catches nothing: a SIGTERM aimed at the
+// test process is not delivered to the child and is not reported as an
+// interruption.
+func TestRunWithConfigNoForwardSignals(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	// Keep the test process alive: it receives the SIGTERM itself.
+	sink := make(chan os.Signal, 1)
+	signal.Notify(sink, syscall.SIGTERM)
+	t.Cleanup(func() { signal.Stop(sink) })
+	env, mark, ready := signalChildEnv(t)
+	script := `trap 'echo term > "$MARK"; exit 9' TERM; echo ready > "$READY"; sleep 1; exit 0`
+
+	err := runUntilSignalled(t, &Config{Env: env}, ready, script, syscall.SIGTERM)
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v, want nil", err)
+	}
+	if _, statErr := os.Stat(mark); statErr == nil {
+		t.Fatal("SIGTERM forwarded to the child without ForwardSignals")
+	}
+}
+
+// GroupAlways isolates the child even with a controlling terminal, so ctx
+// cancellation reaches a grandchild that ignores SIGTERM.
+func TestRunWithConfigGroupAlwaysCancelKillsGrandchild(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("сигналы POSIX")
+	}
+	setControllingTTY(t, true)
+	origDelay := cancelWaitDelay
+	cancelWaitDelay = 200 * time.Millisecond
+	t.Cleanup(func() { cancelWaitDelay = origDelay })
+	env, _, ready := signalChildEnv(t)
+	inner := `exec 2>/dev/null; trap '' TERM; echo $$ > "$READY.tmp"; mv "$READY.tmp" "$READY"; i=0; while [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done`
+	env = append(env, "INNER="+inner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- RunWithConfig(ctx, &Config{Env: env, Group: GroupAlways}, "sh", "-c", `sh -c "$INNER" & wait`)
+	}()
+	testutil.WaitForFile(t, ready, 5*time.Second)
+	pid := readPid(t, ready)
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWithConfig не завершился")
+	}
+	waitProcessGone(t, pid, 5*cancelWaitDelay)
 }

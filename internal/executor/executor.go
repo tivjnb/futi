@@ -65,22 +65,42 @@ func signalName(sig syscall.Signal) string {
 	return sig.String()
 }
 
-// Config controls how a script is executed.
+// GroupMode selects the process group the command runs in.
+type GroupMode int
+
+const (
+	// GroupInherit keeps the child in futi's process group.
+	GroupInherit GroupMode = iota
+	// GroupIsolateWithoutTTY puts the child into its own process group only
+	// when futi has no controlling terminal at start (CI, cron, ssh without
+	// tty). Signals futi forwards (and SIGTERM on ctx cancellation) then reach
+	// the whole group, so grandchildren of a compound command are not left
+	// orphaned. With a controlling terminal (even in the background or with
+	// redirected input) the child stays in futi's group. The decision is made
+	// once, at start.
+	GroupIsolateWithoutTTY
+	// GroupAlways always puts the child into its own process group: ctx
+	// cancellation kills the whole tree.
+	GroupAlways
+)
+
+// Config controls how a command is executed. The zero value runs the command
+// with empty stdin, discarded stdout/stderr, no signal forwarding and no
+// process group isolation.
 type Config struct {
 	Dir string
 	Env []string
-	// Stdin — stdin процесса; nil = наследуется os.Stdin futi.
-	Stdin  io.Reader
+	// Stdin is the command's stdin; nil means empty stdin (/dev/null).
+	Stdin io.Reader
+	// Stdout and Stderr receive the command's output; nil discards it.
 	Stdout io.Writer
 	Stderr io.Writer
-	// IsolateWithoutTTY: если при старте у futi нет управляющего терминала
-	// (CI, cron, ssh без tty), команда запускается в своей группе процессов,
-	// и все перехваченные сигналы (и SIGTERM при отмене ctx) получает вся
-	// группа — внуки составной команды не остаются сиротами. С управляющим
-	// терминалом (в том числе в фоне или с перенаправленным вводом) флаг ни
-	// на что не влияет: команда остаётся в группе futi. Решение принимается
-	// один раз при старте.
-	IsolateWithoutTTY bool
+	// ForwardSignals makes futi catch SIGINT, SIGQUIT, SIGTERM and SIGHUP
+	// while the command runs and forward them to it. Without it futi installs
+	// no handlers and reports no *InterruptedError.
+	ForwardSignals bool
+	// Group is the process group policy.
+	Group GroupMode
 }
 
 // NewConfig returns an empty execution config.
@@ -118,24 +138,20 @@ func (cfg *Config) WithStderr(stderr io.Writer) *Config {
 	return cfg
 }
 
-// Run executes a script at scriptPath with the provided arguments.
-func Run(ctx context.Context, scriptPath string, args ...string) error {
-	return RunWithConfig(ctx, &Config{}, scriptPath, args...)
-}
-
 // RunWithConfig executes a script at scriptPath with the provided arguments and execution settings.
 //
-// nil-поля cfg (и nil cfg) означают наследование os.Stdin/os.Stdout/os.Stderr.
-// Пока ребёнок работает, futi перехватывает SIGINT, SIGQUIT, SIGTERM и SIGHUP
-// (кроме проигнорированных при старте) и ждёт завершения ребёнка:
+// A nil cfg is an empty Config; nil Stdin/Stdout/Stderr mean /dev/null
+// (empty input, discarded output).
+//
+// With cfg.ForwardSignals, while the child runs futi catches SIGINT, SIGQUIT,
+// SIGTERM and SIGHUP (except those ignored at start) and waits for the child:
 //   - SIGTERM и SIGHUP пересылаются ребёнку;
 //   - SIGINT (Ctrl+C) и SIGQUIT (Ctrl+\) в foreground-группе терминала не
 //     пересылаются — терминал сам доставил их всей группе, включая ребёнка;
 //     без управляющего терминала или не на переднем плане (CI, фон, нет
 //     управляющего терминала) они адресные (kill -INT) и пересылаются. Терминал проверяется в момент сигнала.
 //
-// С cfg.IsolateWithoutTTY и без управляющего терминала на старте команда
-// запускается в своей группе процессов: все четыре сигнала пересылаются
+// With the child in its own process group (cfg.Group, see GroupMode) all четыре сигнала пересылаются
 // группе, отмена ctx шлёт SIGTERM группе, через cancelWaitDelay — SIGKILL
 // оставшимся в ней. Этот SIGKILL может прийти уже после возврата
 // RunWithConfig (группа ещё не опустела) и только пока процесс futi жив:
@@ -158,30 +174,30 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 	command := exec.CommandContext(ctx, executablePath, args...)
 	command.Cancel = func() error { return command.Process.Signal(syscall.SIGTERM) }
 	command.WaitDelay = cancelWaitDelay
-	command.Stdin = os.Stdin
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	if cfg != nil {
-		if cfg.Dir != "" {
-			command.Dir = cfg.Dir
-		}
-		if len(cfg.Env) > 0 {
-			command.Env = cfg.Env
-		}
-		if cfg.Stdout != nil {
-			command.Stdout = cfg.Stdout
-		}
-		if cfg.Stderr != nil {
-			command.Stderr = cfg.Stderr
-		}
-		if cfg.Stdin != nil {
-			command.Stdin = cfg.Stdin
-		}
+	if cfg == nil {
+		cfg = &Config{}
+	}
+	// nil Stdin/Stdout/Stderr stay unset: os/exec then uses /dev/null without
+	// copy goroutines, so a grandchild cannot cause exec.ErrWaitDelay.
+	if cfg.Dir != "" {
+		command.Dir = cfg.Dir
+	}
+	if len(cfg.Env) > 0 {
+		command.Env = cfg.Env
+	}
+	if cfg.Stdout != nil {
+		command.Stdout = cfg.Stdout
+	}
+	if cfg.Stderr != nil {
+		command.Stderr = cfg.Stderr
+	}
+	if cfg.Stdin != nil {
+		command.Stdin = cfg.Stdin
 	}
 	// Изоляция решается один раз при старте и только без управляющего
 	// терминала: в фоне терминала хук своей группы, читающий tty, остановился
 	// бы SIGTTIN, а fg разбудил бы только группу futi.
-	isolated := cfg != nil && cfg.IsolateWithoutTTY && !controllingTTY()
+	isolated := cfg.Group == GroupAlways || (cfg.Group == GroupIsolateWithoutTTY && !controllingTTY())
 	// groupKill — таймер SIGKILL группе после отмены ctx: os/exec через
 	// WaitDelay добивает только лидера, а внук, игнорирующий SIGTERM, пережил
 	// бы его. Ставится в горутине os/exec (Cancel), читается после Wait.
@@ -206,9 +222,11 @@ func RunWithConfig(ctx context.Context, cfg *Config, executable string, args ...
 	// SIGTERM рантайм Go ставит свой обработчик, и Ignored для них не срабатывает.
 	sigCh := make(chan os.Signal, 4)
 	var watched []os.Signal
-	for _, sig := range []os.Signal{syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP} {
-		if !signal.Ignored(sig) {
-			watched = append(watched, sig)
+	if cfg.ForwardSignals {
+		for _, sig := range []os.Signal{syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP} {
+			if !signal.Ignored(sig) {
+				watched = append(watched, sig)
+			}
 		}
 	}
 	if len(watched) > 0 { // Notify без сигналов подписал бы на все

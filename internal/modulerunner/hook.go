@@ -18,16 +18,17 @@ import (
 // спека MODULE_MANAGMENT.md §3).
 //
 // Отличия от обычного cmd: результат рендера выполняется через `sh -c`
-// (hook может быть составной командой: пайпы, &&, ;). stdin хука наследуется
-// от futi (os.Stdin), таймаута нет. Доступные переменные
+// (hook может быть составной командой: пайпы, &&, ;). stdin, group и forward
+// задаёт вызывающий (executor.Config.Stdin/Group/ForwardSignals), таймаута нет. Доступные переменные
 // шаблона: {{.module_name}}, {{.module_root}}, {{.env.FOO}}, {{quote .x}}.
 // Env процесса: полное окружение пользователя + FUTI_MODULE_NAME,
 // FUTI_MODULE_ROOT. cwd = moduleRoot. FUTI_CWD удалён (WORKDIR.md §2.4):
 // cwd хука = moduleRoot, в скрипте getcwd() даёт то же.
-// Без управляющего терминала хук запускается в своей группе процессов
-// (executor.Config.IsolateWithoutTTY): сигналы futi получают и процессы,
+// С executor.GroupIsolateWithoutTTY и без управляющего терминала хук
+// запускается в своей группе процессов: сигналы futi получают и процессы,
 // порождённые составной командой.
-func RunHook(ctx context.Context, hookCmd, moduleRoot, moduleName string, stdout, stderr io.Writer) error {
+func RunHook(ctx context.Context, hookCmd, moduleRoot, moduleName string,
+	stdin io.Reader, stdout, stderr io.Writer, group executor.GroupMode, forward bool) error {
 	// Абсолютный корень: cwd (WithDir), FUTI_MODULE_ROOT и {{.module_root}}
 	// должны указывать на один и тот же каталог.
 	moduleRoot, err := filepath.Abs(moduleRoot)
@@ -45,12 +46,15 @@ func RunHook(ctx context.Context, hookCmd, moduleRoot, moduleName string, stdout
 		"FUTI_MODULE_ROOT="+moduleRoot,
 	)
 
-	cfg := executor.NewConfig().
-		WithDir(moduleRoot).
-		WithEnv(env).
-		WithStdout(stdout).
-		WithStderr(stderr)
-	cfg.IsolateWithoutTTY = true
+	cfg := &executor.Config{
+		Dir:            moduleRoot,
+		Env:            env,
+		Stdin:          stdin,
+		Stdout:         stdout,
+		Stderr:         stderr,
+		ForwardSignals: forward,
+		Group:          group,
+	}
 	return executor.RunWithConfig(ctx, cfg, "sh", "-c", rendered)
 }
 

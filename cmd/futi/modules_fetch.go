@@ -87,13 +87,13 @@ func fetchGit(ctx context.Context, url, ref, tempBase string) (string, string, e
 		args = append(args, "--branch", ref)
 	}
 	args = append(args, "--", url, dest)
-	if err := executor.RunWithConfig(ctx, executor.NewConfig(), "git", args...); err != nil {
+	if err := executor.RunWithConfig(ctx, &executor.Config{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, ForwardSignals: true}, "git", args...); err != nil {
 		return "", "", fmt.Errorf("git clone: %w", err)
 	}
 
 	// full SHA до удаления .git.
 	var buf bytes.Buffer
-	cfg := executor.NewConfig().WithDir(dest).WithStdout(&buf)
+	cfg := &executor.Config{Dir: dest, Stdin: os.Stdin, Stdout: &buf, Stderr: os.Stderr, ForwardSignals: true}
 	if err := executor.RunWithConfig(ctx, cfg, "git", "rev-parse", "HEAD"); err != nil {
 		return "", "", fmt.Errorf("git rev-parse: %w", err)
 	}
@@ -126,7 +126,7 @@ func fetchArchive(ctx context.Context, url, tempBase string) (string, error) {
 		return "", err
 	}
 	lw := &limitWriter{w: f, left: downloadLimit}
-	cfg := executor.NewConfig().WithStdout(lw)
+	cfg := &executor.Config{Stdin: os.Stdin, Stdout: lw, Stderr: os.Stderr, ForwardSignals: true}
 	err = executor.RunWithConfig(ctx, cfg, "curl",
 		"-fsSL", "--proto", "=https", "--proto-redir", "=https",
 		"--max-filesize", strconv.FormatInt(maxDownloadBytes, 10),

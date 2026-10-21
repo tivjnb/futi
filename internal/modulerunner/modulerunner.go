@@ -146,12 +146,19 @@ func Run(
 		"FUTI_MODULE_NAME="+p.ModuleName,
 		"FUTI_MODULE_ROOT="+p.ModuleRoot,
 	)
-	cfg := executor.NewConfig().WithEnv(env)
-	if stdout != nil {
-		cfg = cfg.WithStdout(stdout)
+	if stdout == nil {
+		stdout = os.Stdout
 	}
-	if stderr != nil {
-		cfg = cfg.WithStderr(stderr)
+	if stderr == nil {
+		stderr = os.Stderr
+	}
+	cfg := &executor.Config{
+		Env:            env,
+		Stdin:          os.Stdin,
+		Stdout:         stdout,
+		Stderr:         stderr,
+		ForwardSignals: true,
+		Group:          executor.GroupInherit,
 	}
 
 	return executor.RunWithConfig(ctx, cfg, p.Argv[0], p.Argv[1:]...)
