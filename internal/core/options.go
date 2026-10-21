@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/tivjnb/futi/internal/config"
+	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
 // DefaultModulesDir — глобальный каталог установки: FUTI_MODULES_DIR или
@@ -36,6 +37,8 @@ type Options struct {
 	CachePath    string           // "" = MemoryStorage (политика — из конфига)
 	CachePathErr error            // ошибка вычисления пути кэша: MemoryStorage + AlwaysPolicy + предупреждение
 	Warn         func(msg string) // nil = предупреждения отбрасываются
+
+	loader modulerunner.ModuleLoader // nil = Runtime.Cache(); шов для тестов
 }
 
 // DefaultOptions — единственное чтение окружения для Runtime CLI.
