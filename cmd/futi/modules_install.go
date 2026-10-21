@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tivjnb/futi/internal/config"
+	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/metayaml"
 	"github.com/tivjnb/futi/internal/modulecache"
@@ -119,7 +120,7 @@ func installRoot(local bool) (string, error) {
 		// Абсолютный путь: dest попадает в cwd и module_root хука.
 		return filepath.Abs(".futi")
 	}
-	return globalModulesDir()
+	return core.DefaultModulesDir()
 }
 
 // computeTreeHash считает хеш дерева модуля при install; шов для тестов.
@@ -161,7 +162,7 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 	// но невалидный — ошибка до любых изменений на диске.
 	var futiCfg *config.Config
 	if !cfg.local {
-		if futiCfg, err = loadFutiConfig(); err != nil {
+		if futiCfg, err = core.LoadDefaultConfig(); err != nil {
 			return fmt.Errorf("modules install: %w", err)
 		}
 	}

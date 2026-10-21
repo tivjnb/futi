@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/tivjnb/futi/internal/config"
+	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/execmodule"
 )
 
@@ -114,7 +115,7 @@ func parseInitArgs(args []string) (*initConfig, error) {
 
 // targetFilePath возвращает путь к файлу модуля.
 // Локально: ./.futi/<path>.yaml (доступен через auto-discovery).
-// Глобально: <globalDir>/<path>.yaml (globalDir — из globalModulesDir).
+// Глобально: <globalDir>/<path>.yaml (globalDir — из core.DefaultModulesDir).
 // #40: отклоняет path с .. (path traversal за пределы base).
 // #45: не добавляет .yaml, если path уже заканчивается на .yaml/.yml.
 func targetFilePath(cfg *initConfig, globalDir string) (string, error) {
@@ -217,10 +218,10 @@ func runModulesInit(w io.Writer, args []string) error {
 	var globalDir string
 	var futiCfg *config.Config
 	if cfg.global {
-		if globalDir, err = globalModulesDir(); err != nil {
+		if globalDir, err = core.DefaultModulesDir(); err != nil {
 			return fmt.Errorf("modules dir: %w", err)
 		}
-		if futiCfg, err = loadFutiConfig(); err != nil {
+		if futiCfg, err = core.LoadDefaultConfig(); err != nil {
 			return err
 		}
 	}

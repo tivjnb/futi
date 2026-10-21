@@ -11,13 +11,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 
 	"github.com/tivjnb/futi/internal/config"
+	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/executor"
@@ -79,7 +79,7 @@ func builtFutiBinary(t testing.TB) string {
 
 // stubLoader — тестовый загрузчик модулей, который возвращает
 // предзаготовленный модуль для любого пути и считает вызовы.
-// Используется для проверки, что localSource/printCommands/printChildren/runList
+// Используется для проверки, что printCommands/printChildren/runList
 // действительно обращаются к loader, а не к execmodule.LoadModule напрямую.
 type stubLoader struct {
 	mod   *execmodule.Module
@@ -417,106 +417,6 @@ func TestExitCodeFromErrorDefaultsToOne(t *testing.T) {
 	}
 }
 
-func TestLocalSourceFutiYaml(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-
-	manifest := []byte("name: local\ncommands:\n  greet:\n    cmd: echo hi\n")
-	if err := os.WriteFile(filepath.Join(dir, "futi.yaml"), manifest, 0o644); err != nil {
-		t.Fatalf("write futi.yaml: %v", err)
-	}
-
-	src, err := localSource(nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if src == nil {
-		t.Fatal("expected non-nil source for ./futi.yaml")
-	}
-
-	manifestPath, root, err := src.Resolve("local")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if manifestPath != filepath.Join(dir, "futi.yaml") {
-		t.Fatalf("unexpected manifest: %q", manifestPath)
-	}
-	if root != dir {
-		t.Fatalf("unexpected root: %q, want %q", root, dir)
-	}
-}
-
-func TestLocalSourceFutiDir(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-
-	futiDir := filepath.Join(dir, ".futi")
-	if err := os.Mkdir(futiDir, 0o755); err != nil {
-		t.Fatalf("mkdir .futi: %v", err)
-	}
-	writeMainTestFile(t, filepath.Join(futiDir, "local.yaml"), "name: local\ncmd: echo\n")
-
-	src, err := localSource(nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if src == nil {
-		t.Fatal("expected non-nil source for ./.futi/")
-	}
-
-	manifestPath, _, err := src.Resolve("local")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if manifestPath != filepath.Join(futiDir, "local.yaml") {
-		t.Fatalf("unexpected manifest: %q", manifestPath)
-	}
-}
-
-func TestLocalSourceNone(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-
-	src, err := localSource(nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if src != nil {
-		t.Fatalf("expected nil source, got %T", src)
-	}
-}
-
-func TestLocalSourceBothFutiYamlAndDir(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-
-	// ./futi.yaml with module "yamlmod"
-	writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), "name: yamlmod\ncmd: echo\n")
-
-	// ./.futi/local.yaml with module "local"
-	futiDir := filepath.Join(dir, ".futi")
-	if err := os.Mkdir(futiDir, 0o755); err != nil {
-		t.Fatalf("mkdir .futi: %v", err)
-	}
-	writeMainTestFile(t, filepath.Join(futiDir, "local.yaml"), "name: local\ncmd: echo\n")
-
-	src, err := localSource(nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if src == nil {
-		t.Fatal("expected non-nil source")
-	}
-
-	// Both modules should resolve
-	if _, _, err := src.Resolve("yamlmod"); err != nil {
-		t.Fatalf("expected yamlmod to resolve: %v", err)
-	}
-	if _, _, err := src.Resolve("local"); err != nil {
-		t.Fatalf("expected local to resolve: %v", err)
-	}
-}
-
 func writeMainTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -777,36 +677,6 @@ commands:
 	}
 }
 
-// TestLocalSourceUsesLoader доказывает, что localSource обращается к loader
-// для загрузки ./futi.yaml (а не к execmodule.LoadModule напрямую).
-// Stub возвращает модуль с name="spy_name"; если loader использован —
-// source.Resolve("spy_name") успешен и spy.calls == 1.
-func TestLocalSourceUsesLoader(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-	// Файл нужен, чтобы localSource вообще вызвал loader.
-	writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), "name: real\ncmd: echo\n")
-
-	spy := &stubLoader{
-		mod: &execmodule.Module{Name: "spy_name", Root: dir},
-	}
-
-	src, err := localSource(spy)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if src == nil {
-		t.Fatal("expected non-nil source")
-	}
-
-	if _, _, err := src.Resolve("spy_name"); err != nil {
-		t.Fatalf("expected spy_name to resolve (loader used): %v", err)
-	}
-	if spy.calls != 1 {
-		t.Fatalf("expected exactly 1 loader call, got %d", spy.calls)
-	}
-}
-
 // TestPrintCommandsUsesLoader доказывает, что printCommands использует loader.
 // Stub возвращает модуль с командой "spy_cmd"; файл содержит "real".
 // Если вывод содержит spy_cmd (и не содержит real) — loader использован.
@@ -923,158 +793,7 @@ commands:
 	}
 }
 
-// TestLocalSourceWithCache проверяет интеграцию localSource с *modulecache.Cache.
-func TestLocalSourceWithCache(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-	writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), "name: cached\ncmd: echo\n")
-
-	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
-	src, err := localSource(cache)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if src == nil {
-		t.Fatal("expected non-nil source")
-	}
-
-	if _, _, err := src.Resolve("cached"); err != nil {
-		t.Fatalf("expected cached to resolve: %v", err)
-	}
-}
-
 // --- Шаг 2: рефакторинг log.Fatalf в ошибках ---
-
-// TestCreateGlobalSourceInvalidConfigReturnsError проверяет, что невалидный
-// config.yaml возвращает ошибку, а не убивает процесс через log.Fatalf.
-func TestCreateGlobalSourceInvalidConfigReturnsError(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("FUTI_MODULES_DIR", "")
-
-	cfgDir := filepath.Join(dir, ".config", "futi")
-	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
-		t.Fatalf("mkdir config dir: %v", err)
-	}
-	// Невалидный YAML
-	writeMainTestFile(t, filepath.Join(cfgDir, "config.yaml"), "sources: [\n  invalid")
-
-	_, _, err := createGlobalSource()
-	if err == nil {
-		t.Fatal("expected error for invalid config, got nil")
-	}
-}
-
-// TestCreateGlobalSourceMissingHomeDirReturnsError проверяет, что отсутствие
-// HOME возвращает ошибку, а не убивает процесс.
-func TestCreateGlobalSourceMissingHomeDirReturnsError(t *testing.T) {
-	t.Setenv("HOME", "")
-	t.Setenv("FUTI_MODULES_DIR", "")
-
-	_, _, err := createGlobalSource()
-	if err == nil {
-		t.Fatal("expected error for missing home dir, got nil")
-	}
-}
-
-// TestCreateGlobalSourceValidConfigReturnsSource проверяет, что валидный
-// config с sources возвращает CompositeSource без ошибки.
-func TestCreateGlobalSourceValidConfigReturnsSource(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("FUTI_MODULES_DIR", "")
-
-	cfgDir := filepath.Join(dir, ".config", "futi")
-	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
-		t.Fatalf("mkdir config dir: %v", err)
-	}
-	modDir := filepath.Join(dir, "modules")
-	if err := os.MkdirAll(modDir, 0o755); err != nil {
-		t.Fatalf("mkdir modules dir: %v", err)
-	}
-	writeMainTestFile(t, filepath.Join(cfgDir, "config.yaml"), fmt.Sprintf("sources:\n  - path: %s\n", modDir))
-
-	_, src, err := createGlobalSource()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if src == nil {
-		t.Fatal("expected non-nil source")
-	}
-}
-
-// TestCreateGlobalSourceFallbackToModulesDir проверяет fallback на
-// FUTI_MODULES_DIR при отсутствии config.yaml.
-func TestCreateGlobalSourceFallbackToModulesDir(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", "/nonexistent-home-no-config-here")
-	t.Setenv("FUTI_MODULES_DIR", dir)
-
-	_, src, err := createGlobalSource()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if src == nil {
-		t.Fatal("expected non-nil source")
-	}
-}
-
-// TestLocalSourceInvalidFutiYamlReturnsError проверяет, что невалидный
-// ./futi.yaml возвращает ошибку (новое поведение — раньше молча игнорировалось).
-func TestLocalSourceInvalidFutiYamlReturnsError(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-	// Невалидный YAML
-	writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), "name: [\n  invalid")
-
-	_, err := localSource(nil)
-	if err == nil {
-		t.Fatal("expected error for invalid futi.yaml, got nil")
-	}
-}
-
-// TestCreateSourcePropagatesLocalSourceError проверяет, что ошибка из
-// localSource пробрасывается через createSource.
-func TestCreateSourcePropagatesLocalSourceError(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-	t.Setenv("HOME", "/nonexistent-home-no-config-here")
-	t.Setenv("FUTI_MODULES_DIR", dir)
-	// Невалидный futi.yaml
-	writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), "name: [\n  invalid")
-
-	_, global, err := createGlobalSource()
-	if err != nil {
-		t.Fatalf("createGlobalSource: %v", err)
-	}
-	_, err = createSource(nil, global)
-	if err == nil {
-		t.Fatal("expected error from invalid futi.yaml, got nil")
-	}
-}
-
-// TestCreateSourceReturnsLayeredSourceWhenLocalPresent проверяет, что
-// при наличии локального source возвращается LayeredSource.
-func TestCreateSourceReturnsLayeredSourceWhenLocalPresent(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-	t.Setenv("HOME", "/nonexistent-home-no-config-here")
-	t.Setenv("FUTI_MODULES_DIR", dir)
-
-	writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), "name: local\ncmd: echo\n")
-
-	_, global, err := createGlobalSource()
-	if err != nil {
-		t.Fatalf("createGlobalSource: %v", err)
-	}
-	src, err := createSource(nil, global)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if src == nil {
-		t.Fatal("expected non-nil source")
-	}
-}
 
 // --- Шаг 4: futi validate ---
 
@@ -1608,180 +1327,6 @@ func TestRunCacheRefreshShowsSkipped(t *testing.T) {
 }
 
 // --- Group 3b: config loading + tests (#5, #12, #26, #27) ---
-
-// TestCreateGlobalSourceReturnsConfig проверяет, что createGlobalSource
-// возвращает загруженный *config.Config (фикс #5, #12 — без двойной загрузки).
-func TestCreateGlobalSourceReturnsConfig(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("FUTI_MODULES_DIR", "")
-
-	cfgDir := filepath.Join(dir, ".config", "futi")
-	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
-		t.Fatalf("mkdir config dir: %v", err)
-	}
-	modDir := filepath.Join(dir, "modules")
-	if err := os.MkdirAll(modDir, 0o755); err != nil {
-		t.Fatalf("mkdir modules dir: %v", err)
-	}
-	writeMainTestFile(t, filepath.Join(cfgDir, "config.yaml"), fmt.Sprintf(`sources:
-  - path: %s
-cache:
-  refresh: force_only
-`, modDir))
-
-	cfg, src, err := createGlobalSource()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg == nil {
-		t.Fatal("expected non-nil Config (fixes #5, #12 — single load)")
-	}
-	if cfg.Cache.Refresh != "force_only" {
-		t.Fatalf("expected Cache.Refresh=force_only, got %q", cfg.Cache.Refresh)
-	}
-	if src == nil {
-		t.Fatal("expected non-nil source")
-	}
-}
-
-// TestCreateGlobalSourceExpandsTildeAndRelativePaths: `~/…` и относительный
-// path в config.yaml не зависят от cwd (audit F64).
-func TestCreateGlobalSourceExpandsTildeAndRelativePaths(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("FUTI_MODULES_DIR", "")
-
-	cfgDir := filepath.Join(home, ".config", "futi")
-	for _, d := range []string{"modules", "extra"} {
-		if err := os.MkdirAll(filepath.Join(cfgDir, d), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	writeMainTestFile(t, filepath.Join(cfgDir, "modules", "a.yaml"), "name: a\ncommands:\n  run:\n    cmd: echo a\n")
-	writeMainTestFile(t, filepath.Join(cfgDir, "extra", "b.yaml"), "name: b\ncommands:\n  run:\n    cmd: echo b\n")
-	writeMainTestFile(t, filepath.Join(cfgDir, "config.yaml"), "sources:\n  - path: ~/.config/futi/modules\n  - path: extra\n")
-	t.Chdir(t.TempDir())
-
-	_, src, err := createGlobalSource()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	mods, err := src.List()
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	var names []string
-	for _, m := range mods {
-		names = append(names, m.Name)
-	}
-	sort.Strings(names)
-	if got := strings.Join(names, ","); got != "a,b" {
-		t.Fatalf("modules = %q, want %q", got, "a,b")
-	}
-}
-
-// TestDefaultCachePathReturnsFutiSubpath проверяет, что defaultCachePath
-// возвращает путь, оканчивающийся на futi/modulecache.gob.
-func TestDefaultCachePathReturnsFutiSubpath(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	// На Linux XDG_CACHE_HOME может перехватить — очищаем для детерминизма.
-	t.Setenv("XDG_CACHE_HOME", "")
-
-	path, err := defaultCachePath()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.HasSuffix(path, filepath.Join("futi", "modulecache.gob")) {
-		t.Fatalf("expected path ending in futi/modulecache.gob, got %q", path)
-	}
-}
-
-// TestDefaultCachePathErrorWhenNoHome проверяет, что при отсутствии HOME
-// и XDG_CACHE_HOME defaultCachePath возвращает ошибку.
-func TestDefaultCachePathErrorWhenNoHome(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("test is Linux-specific (XDG_CACHE_HOME behavior)")
-	}
-	t.Setenv("HOME", "")
-	t.Setenv("XDG_CACHE_HOME", "")
-
-	_, err := defaultCachePath()
-	if err == nil {
-		t.Fatal("expected error when no home/cache dir")
-	}
-}
-
-// TestNewCacheFromConfigNilCfgUsesAlwaysPolicy проверяет, что nil cfg
-// → AlwaysPolicy (default). Желаемое поведение: без конфига — безопасней
-// refresh каждый раз.
-func TestNewCacheFromConfigNilCfgUsesAlwaysPolicy(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("XDG_CACHE_HOME", "")
-
-	cache := newCacheFromConfig(nil)
-	if cache == nil {
-		t.Fatal("expected non-nil cache")
-	}
-	// AlwaysPolicy → Start должен запустить Refresh. Создаём source с модулем
-	// и проверяем, что модуль попал в кэш (Refresh отработал).
-	modDir := t.TempDir()
-	writeMainTestFile(t, filepath.Join(modDir, "app.yaml"), "name: app\ncmd: echo\n")
-	src := discovery.NewGlobalSource(modDir)
-	if err := cache.Start(src); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-}
-
-// TestNewCacheFromConfigWithForceOnly проверяет, что cfg с refresh=force_only
-// → ForceOnlyPolicy (Start не Refresh-ит). Желаемое поведение: пользователь
-// явно настроил force_only.
-func TestNewCacheFromConfigWithForceOnly(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("XDG_CACHE_HOME", "")
-
-	cfg := &config.Config{
-		Cache: config.CacheConfig{
-			Refresh: "force_only",
-		},
-	}
-	cache := newCacheFromConfig(cfg)
-	if cache == nil {
-		t.Fatal("expected non-nil cache")
-	}
-	// ForceOnly → Start НЕ должен Refresh. Модуль не должен попасть в кэш.
-	modDir := t.TempDir()
-	writeMainTestFile(t, filepath.Join(modDir, "app.yaml"), "name: app\ncmd: echo\n")
-	src := discovery.NewGlobalSource(modDir)
-	if err := cache.Start(src); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-}
-
-// TestNewCacheFromConfigFallsBackToMemoryStorage проверяет, что при отсутствии
-// HOME (defaultCachePath error) newCacheFromConfig fallback-ит на MemoryStorage.
-// Желаемое поведение: CLI должен работать без persistent кэша.
-func TestNewCacheFromConfigFallsBackToMemoryStorage(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("test is Linux-specific (XDG_CACHE_HOME behavior)")
-	}
-	t.Setenv("HOME", "")
-	t.Setenv("XDG_CACHE_HOME", "")
-
-	cache := newCacheFromConfig(nil)
-	if cache == nil {
-		t.Fatal("expected non-nil cache even without HOME")
-	}
-	// MemoryStorage — Start должен работать (in-memory only, без persistent).
-	src := discovery.NewGlobalSource(t.TempDir())
-	if err := cache.Start(src); err != nil {
-		t.Fatalf("Start with MemoryStorage fallback: %v", err)
-	}
-}
 
 // TestPrintCommandsShowsDefaultCmd проверяет, что при наличии cmd на уровне
 // модуля (default cmd) в выводе list появляется маркер (default).
@@ -2536,9 +2081,21 @@ func TestRunCompleteMainPartialListingIsSilent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	src, _, _ := partialSource(t)
+	// Два source в config.yaml: читаемый (x.yaml) и несуществующий.
+	dirA := t.TempDir()
+	dirB := filepath.Join(t.TempDir(), "missing")
+	writeMainTestFile(t, filepath.Join(dirA, "x.yaml"), "name: x\ndescription: Икс\ncmd: echo x\n")
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	writeMainTestFile(t, cfgPath, fmt.Sprintf("sources:\n  - path: %s\n  - path: %s\n", dirA, dirB))
+	rt, err := core.NewRuntime(core.Options{
+		ConfigPath: cfgPath,
+		CachePath:  filepath.Join(t.TempDir(), "futi", "modulecache.gob"),
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
 	var out, errBuf bytes.Buffer
-	if code := runCompleteMain(&out, &errBuf, nil, src, []string{""}); code != 0 {
+	if code := runCompleteMain(&out, &errBuf, rt, []string{""}); code != 0 {
 		t.Fatalf("exit = %d, stderr:\n%s", code, errBuf.String())
 	}
 	if !strings.Contains(out.String(), "x\n") && !strings.Contains(out.String(), "x\t") {
@@ -2626,26 +2183,5 @@ func TestRunListVerboseStripsControlCharsInPath(t *testing.T) {
 		if strings.Contains(buf.String(), "\x1b") {
 			t.Fatalf("runList(%q) -v output contains ESC: %q", ns, buf.String())
 		}
-	}
-}
-
-// futi.yaml без name: FileSource называется futi, с name: x — x.
-func TestLocalSourceFutiYamlName(t *testing.T) {
-	for _, tt := range []struct{ name, body, ns string }{
-		{"без name", "commands:\n  greet:\n    cmd: echo hi\n", "futi"},
-		{"с name", "name: x\ncommands:\n  greet:\n    cmd: echo hi\n", "x"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			t.Chdir(dir)
-			writeMainTestFile(t, filepath.Join(dir, "futi.yaml"), tt.body)
-			src, err := localSource(nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, _, err := src.Resolve(tt.ns); err != nil {
-				t.Fatalf("Resolve(%q): %v", tt.ns, err)
-			}
-		})
 	}
 }

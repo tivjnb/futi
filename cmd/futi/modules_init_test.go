@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/google/shlex"
+	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
 )
@@ -211,7 +212,7 @@ func TestRunInitGlobalWithNamespace(t *testing.T) {
 }
 
 // TestRunInitCreatedModuleDiscoverable проверяет, что созданный локальный
-// модуль находится через localSource (auto-discovery ./.futi/).
+// модуль находится через локальный source Runtime (auto-discovery ./.futi/).
 func TestRunInitCreatedModuleDiscoverable(t *testing.T) {
 	t.Chdir(t.TempDir())
 
@@ -220,12 +221,13 @@ func TestRunInitCreatedModuleDiscoverable(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	local, err := localSource(nil)
+	rt, err := core.NewRuntime(core.Options{ModulesDir: t.TempDir(), LocalDir: "."})
 	if err != nil {
-		t.Fatalf("localSource: %v", err)
+		t.Fatalf("NewRuntime: %v", err)
 	}
-	if local == nil {
-		t.Fatal("expected local source to find .futi/mytool.yaml")
+	local, err := rt.Source()
+	if err != nil {
+		t.Fatalf("Source: %v", err)
 	}
 
 	manifestPath, moduleRoot, err := local.Resolve("mytool")

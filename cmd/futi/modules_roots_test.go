@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/metayaml"
 )
@@ -393,7 +394,7 @@ func TestModulesUpdateByNameThroughCompositeSource(t *testing.T) {
 	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
 	t.Chdir(t.TempDir())
 
-	cfg, err := loadFutiConfig()
+	cfg, err := core.LoadDefaultConfig()
 	if err != nil {
 		t.Fatal(err)
 	}

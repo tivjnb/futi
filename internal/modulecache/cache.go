@@ -8,7 +8,7 @@
 //   - Cache — orchestrator: in-memory entries (ALL модули) + persistent (только глобальные).
 //
 // In-memory кэш хранит все модули (глобальные + локальные) в рамках процесса —
-// решает двойную загрузку (localSource + Run). Persistent кэш на диске хранит
+// решает двойную загрузку (локальный source Runtime + Run). Persistent кэш на диске хранит
 // только глобальные — локальные не загрязняют общий кэш.
 package modulecache
 
