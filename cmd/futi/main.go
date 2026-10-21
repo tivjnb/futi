@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/tivjnb/futi/internal/completion"
-	"github.com/tivjnb/futi/internal/config"
+	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/executor"
@@ -203,121 +203,6 @@ func parseListRequest(namespace, flags []string) error {
 		}
 	}
 	return req
-}
-
-// createSource создаёт источник модулей: локальный source (./.futi/ или ./futi.yaml)
-// поверх глобального. global уже создан в main() и используется для cache.Start.
-// loader используется для загрузки ./futi.yaml при определении имени модуля
-// (если передан *modulecache.Cache — повторная загрузка того же файла в Run
-// возьмёт модуль из кэша).
-func createSource(loader modulerunner.ModuleLoader, global discovery.Source) (discovery.Source, error) {
-	local, err := localSource(loader)
-	if err != nil {
-		return nil, err
-	}
-	if local != nil {
-		return discovery.NewLayeredSource(local, global), nil
-	}
-	return global, nil
-}
-
-// createGlobalSource создаёт глобальный источник модулей из config.yaml
-// или fallback на ~/.config/futi/modules/.
-// Возвращает загруженный *config.Config (для настроек кэша) вместе с Source —
-// устраняет двойную загрузку config.yaml (REVIEW #12).
-// Возвращает ошибку вместо log.Fatalf — позволяет тестировать и инъектить
-// ошибки (невалидный config, отсутствие home dir).
-func createGlobalSource() (*config.Config, discovery.Source, error) {
-	cfgPath, err := config.DefaultConfigPath()
-	if err != nil {
-		return nil, nil, fmt.Errorf("config path: %w", err)
-	}
-
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("config: %w", err)
-	}
-
-	if cfg != nil && len(cfg.Sources) > 0 {
-		return cfg, discovery.NewCompositeSource(cfg), nil
-	}
-
-	// Fallback: нет конфига — одиночный GlobalSource
-	modDir, err := globalModulesDir()
-	if err != nil {
-		return nil, nil, fmt.Errorf("modules dir: %w", err)
-	}
-	return cfg, discovery.NewGlobalSource(modDir), nil
-}
-
-// localSource проверяет CWD на наличие локальных модулей:
-//   - ./.futi/ — каталог модулей (GlobalSource)
-//   - ./futi.yaml — одиночный файл модуля (FileSource, имя из поля name)
-//
-// Возвращает (nil, nil), если локальных модулей нет.
-// При наличии обоих — ./.futi/ имеет приоритет над ./futi.yaml.
-// loader загружает ./futi.yaml для извлечения name; используется abs-путь,
-// чтобы ключ кэша совпадал с тем, что использует Run через FileSource.
-// Возвращает ошибку при невалидном futi.yaml — автор модуля получает раннюю
-// диагностику вместо непонятного "module not found" в runtime.
-func localSource(loader modulerunner.ModuleLoader) (discovery.Source, error) {
-	var layers []discovery.Source
-
-	if info, err := os.Stat(".futi"); err == nil && info.IsDir() {
-		abs, _ := filepath.Abs(".futi")
-		layers = append(layers, discovery.NewGlobalSource(abs))
-	}
-
-	if _, err := os.Stat("futi.yaml"); err == nil {
-		abs, _ := filepath.Abs("futi.yaml")
-		absRoot, _ := filepath.Abs(".")
-		mod, err := modulerunner.LoadModule(loader, abs, absRoot)
-		if err != nil {
-			return nil, fmt.Errorf("local source: %w", err)
-		}
-		layers = append(layers, discovery.NewFileSource(abs, absRoot, execmodule.EffectiveName(mod.Name, abs)))
-	}
-
-	if len(layers) == 0 {
-		return nil, nil
-	}
-	if len(layers) == 1 {
-		return layers[0], nil
-	}
-	return discovery.NewLayeredSource(layers...), nil
-}
-
-// defaultCachePath возвращает путь к gob-файлу кэша: ~/.cache/futi/modulecache.gob.
-// Использует os.UserCacheDir() (поддерживает XDG_CACHE_HOME на Linux).
-func defaultCachePath() (string, error) {
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		return "", fmt.Errorf("cache path: get cache dir: %w", err)
-	}
-	return filepath.Join(cacheDir, "futi", "modulecache.gob"), nil
-}
-
-// newCacheFromConfig создаёт *modulecache.Cache из конфига.
-// При ошибке получения cache path — fallback на MemoryStorage (in-memory only).
-// При ошибке создания policy — fallback на AlwaysPolicy с warning.
-func newCacheFromConfig(cfg *config.Config) *modulecache.Cache {
-	cachePath, err := defaultCachePath()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "cache: %v (using in-memory only)\n", err)
-		return modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
-	}
-	storage := modulecache.NewDiskStorage(cachePath)
-
-	policy := modulecache.RefreshPolicy(modulecache.AlwaysPolicy{})
-	if cfg != nil {
-		p, err := modulecache.NewPolicyFromConfig(cfg.Cache.Refresh, cfg.Cache.Time)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "cache config: %v (using default every_time)\n", err)
-		} else {
-			policy = p
-		}
-	}
-	return modulecache.New(storage, policy)
 }
 
 // cacheSubcommand извлекает cache subcommand из args (os.Args[1:]).
@@ -1170,8 +1055,15 @@ func main() {
 		return
 	}
 
-	// Создаём глобальный source и загружаем config (один раз — REVIEW #5, #12).
-	cfg, globalSource, err := createGlobalSource()
+	// Runtime: config и глобальный source строятся сразу (ошибка конфига — до любых
+	// команд), кэш и локальный source — лениво, при первом обращении.
+	opts, err := core.DefaultOptions()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "source: %v\n", err)
+		os.Exit(1)
+	}
+	opts.Warn = func(msg string) { fmt.Fprintln(os.Stderr, msg) }
+	rt, err := core.NewRuntime(opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "source: %v\n", err)
 		os.Exit(1)
@@ -1182,15 +1074,15 @@ func main() {
 	// (самообновление при холодном/устаревшем), и не запускает Refresh по политике
 	// на каждый TAB.
 	if os.Args[1] == "__complete" {
-		os.Exit(runCompleteMain(os.Stdout, os.Stderr, cfg, globalSource, os.Args[2:]))
+		os.Exit(runCompleteMain(os.Stdout, os.Stderr, rt, os.Args[2:]))
 	}
 
 	// Быстрый путь: `futi modules <subcommand>` — до cache.Start, чтобы не
 	// гонять Refresh по политике: мутирующие подкоманды сами инвалидируют
 	// кэш, read-only обходятся загрузкой по требованию.
 	if os.Args[1] == "modules" {
-		cache := newCacheFromConfig(cfg)
-		source, err := createSource(cache, globalSource)
+		cache := rt.Cache()
+		source, err := rt.Source()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "source: %v\n", err)
 			os.Exit(1)
@@ -1212,8 +1104,8 @@ func main() {
 	// cache.Load() загружает с диска без Refresh, затем runCacheRefresh —
 	// единственный Refresh с корректным mtime+size сравнением.
 	if subcmd, ok := cacheSubcommand(os.Args[1:]); ok {
-		cache := newCacheFromConfig(cfg)
-		cachePath, pathErr := defaultCachePath()
+		cache := rt.Cache()
+		cachePath := rt.CachePath()
 		switch subcmd {
 		case "refresh":
 			// Парсим --verbose/-v из оставшихся аргументов.
@@ -1224,25 +1116,19 @@ func main() {
 				}
 			}
 			cache.Load() // load from disk without Refresh
-			if err := runCacheRefresh(os.Stdout, cache, globalSource, verbose); err != nil && !printPartialWarnings(os.Stderr, err) {
+			if err := runCacheRefresh(os.Stdout, cache, rt.GlobalSource(), verbose); err != nil && !printPartialWarnings(os.Stderr, err) {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
 			}
 			return
 		case "status":
 			cache.Load() // populate from disk for accurate module count
-			if pathErr != nil {
-				cachePath = ""
-			}
 			if err := runCacheStatus(os.Stdout, cache, cachePath); err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
 			}
 			return
 		case "clear":
-			if pathErr != nil {
-				cachePath = ""
-			}
 			if err := runCacheClear(os.Stdout, cachePath); err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
@@ -1258,8 +1144,8 @@ func main() {
 	}
 
 	// Создаём и запускаем кэш. Ошибки кэша не фатальны — CLI работает и без него.
-	cache := newCacheFromConfig(cfg)
-	if err := cache.Start(globalSource); err != nil && !printPartialWarnings(os.Stderr, err) {
+	cache := rt.Cache()
+	if err := rt.Start(); err != nil && !printPartialWarnings(os.Stderr, err) {
 		fmt.Fprintf(os.Stderr, "cache: %v (continuing without cache)\n", err)
 	}
 
@@ -1272,7 +1158,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, errDryRunScope)
 			os.Exit(1)
 		case errors.As(err, &listReq):
-			source, err := createSource(cache, globalSource)
+			source, err := rt.Source()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "source: %v\n", err)
 				os.Exit(1)
@@ -1283,7 +1169,7 @@ func main() {
 			}
 			return
 		case errors.As(err, &helpReq):
-			source, err := createSource(cache, globalSource)
+			source, err := rt.Source()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "source: %v\n", err)
 				os.Exit(1)
@@ -1306,7 +1192,7 @@ func main() {
 		}
 	}
 
-	source, err := createSource(cache, globalSource)
+	source, err := rt.Source()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "source: %v\n", err)
 		os.Exit(1)

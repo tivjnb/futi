@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/tivjnb/futi/internal/completion"
+	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/modulecache"
 )
@@ -196,21 +197,28 @@ func TestCompletionNeedsRefreshFresh(t *testing.T) {
 func TestCompletionNoRefreshAfterEmptyRefresh(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	src := discovery.NewGlobalSource(t.TempDir())
+	opts := core.Options{
+		ModulesDir: t.TempDir(),
+		CachePath:  filepath.Join(t.TempDir(), "futi", "modulecache.gob"),
+	}
+	rt, err := core.NewRuntime(opts)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
 
 	var stdout, stderr bytes.Buffer
-	if code := runCompleteMain(&stdout, &stderr, nil, src, []string{""}); code != 0 {
+	if code := runCompleteMain(&stdout, &stderr, rt, []string{""}); code != 0 {
 		t.Fatalf("first runCompleteMain code = %d, stderr: %s", code, stderr.String())
 	}
-	cachePath, err := defaultCachePath()
-	if err != nil {
-		t.Fatalf("defaultCachePath: %v", err)
-	}
-	if _, err := os.Stat(cachePath); err != nil {
+	if _, err := os.Stat(opts.CachePath); err != nil {
 		t.Fatalf("cache file should exist after first __complete: %v", err)
 	}
 
-	second := newCacheFromConfig(nil)
+	rt2, err := core.NewRuntime(opts)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	second := rt2.Cache()
 	second.Load()
 	if second.LastRefresh().IsZero() {
 		t.Fatal("LastRefresh should survive Save/Load after refresh of empty modules dir")

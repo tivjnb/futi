@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/tivjnb/futi/internal/completion"
-	"github.com/tivjnb/futi/internal/config"
+	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/modulecache"
 	"github.com/tivjnb/futi/internal/modulerunner"
@@ -91,11 +91,11 @@ func runComplete(w io.Writer, stderr io.Writer, source discovery.Source, loader 
 	return nil
 }
 
-// runCompleteMain — оркестрация `futi __complete`: строит source (local + global),
+// runCompleteMain — оркестрация `futi __complete`: берёт у Runtime source (local + global),
 // кэш, прогревает его при необходимости и вызывает runComplete.
 // Возвращает код завершения: 0 — подсказки выведены, 1 — ошибка.
-func runCompleteMain(stdout, stderr io.Writer, cfg *config.Config, globalSource discovery.Source, args []string) int {
-	cache := newCacheFromConfig(cfg)
+func runCompleteMain(stdout, stderr io.Writer, rt *core.Runtime, args []string) int {
+	cache := rt.Cache()
 	cache.Load()
 
 	// Самообновление: если кэш холодный/устаревший — прогреваем один раз.
@@ -103,12 +103,12 @@ func runCompleteMain(stdout, stderr io.Writer, cfg *config.Config, globalSource 
 	if completionNeedsRefresh(cache) {
 		// Частичный листинг (нечитаемый source) в completion молчит.
 		var partial *discovery.PartialError
-		if _, err := cache.Refresh(globalSource); err != nil && !errors.As(err, &partial) {
+		if _, err := cache.Refresh(rt.GlobalSource()); err != nil && !errors.As(err, &partial) {
 			fmt.Fprintf(stderr, "__complete: cache refresh: %v (continuing with existing data)\n", err)
 		}
 	}
 
-	source, err := createSource(cache, globalSource)
+	source, err := rt.Source()
 	if err != nil {
 		fmt.Fprintf(stderr, "__complete: %v\n", err)
 		return 1
