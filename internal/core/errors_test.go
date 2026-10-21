@@ -134,3 +134,39 @@ func TestExitCodeSignaled(t *testing.T) {
 		})
 	}
 }
+
+func TestSplitRunError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	exit3 := fmt.Errorf("executor: run %q: %w", "sh", exec.Command("sh", "-c", "exit 3").Run())
+	intr := &executor.InterruptedError{Signal: syscall.SIGTERM}
+	_, lookErr := exec.LookPath("futi-no-such-binary-xyz")
+	lookWrapped := fmt.Errorf("failed to resolve path: %w", lookErr)
+	writeErr := errors.New("write: broken")
+	waitDelay := fmt.Errorf("executor: run %q: %w", "sh", exec.ErrWaitDelay)
+
+	cases := []struct {
+		name      string
+		err       error
+		wantWait  error
+		wantCode  int
+		wantFatal error
+	}{
+		{"nil", nil, nil, 0, nil},
+		{"exit status", exit3, exit3, 3, nil},
+		{"interrupted", intr, intr, 143, nil},
+		{"wait delay", waitDelay, nil, 0, nil},
+		{"writer error", writeErr, nil, 0, writeErr},
+		{"lookpath", lookWrapped, nil, 0, lookWrapped},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wait, code, fatal := splitRunError(tc.err)
+			if wait != tc.wantWait || code != tc.wantCode || fatal != tc.wantFatal {
+				t.Fatalf("splitRunError(%v) = (%v, %d, %v), want (%v, %d, %v)",
+					tc.err, wait, code, fatal, tc.wantWait, tc.wantCode, tc.wantFatal)
+			}
+		})
+	}
+}
