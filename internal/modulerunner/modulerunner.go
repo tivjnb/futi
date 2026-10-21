@@ -1,17 +1,14 @@
 package modulerunner
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"sort"
 	"strings"
 
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
-	"github.com/tivjnb/futi/internal/executor"
 
 	"github.com/google/shlex"
 )
@@ -123,86 +120,6 @@ func (r *Resolved) Prepare(resolved map[string]string, argsList []string) (*Prep
 	}
 
 	return &Prepared{Argv: parts, ModuleName: moduleName, ModuleRoot: r.ModuleRoot}, nil
-}
-
-// Prepare находит модуль через source, загружает его, валидирует параметры,
-// рендерит cmd-шаблон и разбирает результат в argv, ничего не исполняя.
-// Тонкая обёртка над Resolve + Validate + Prepare. args игнорируется:
-// {{.args}} выводится из argsList (CLI всегда передаёт их согласованными).
-// command="" означает вызов default cmd модуля (Module.Cmd).
-// loader — опциональный загрузчик модулей с кэшем (nil = без кэша, прямой LoadModule).
-func Prepare(
-	source discovery.Source,
-	namespace, command string,
-	params map[string]string,
-	args string,
-	argsList []string,
-	loader ModuleLoader,
-) (*Prepared, error) {
-	r, err := Resolve(source, loader, namespace, command)
-	if err != nil {
-		return nil, err
-	}
-	resolved, err := r.Validate(params, argsList)
-	if err != nil {
-		return nil, err
-	}
-	return r.Prepare(resolved, argsList)
-}
-
-// Run готовит команду через Prepare и выполняет её.
-// stdout/stderr — опциональные writers для перехвата вывода (nil = os.Stdout/os.Stderr).
-// stdin команды всегда наследуется от futi (os.Stdin).
-// Остальные параметры — как у Prepare.
-func Run(
-	ctx context.Context,
-	source discovery.Source,
-	namespace, command string,
-	params map[string]string,
-	args string,
-	argsList []string,
-	stdout, stderr io.Writer,
-	loader ModuleLoader,
-) error {
-	p, err := Prepare(source, namespace, command, params, args, argsList, loader)
-	if err != nil {
-		return err
-	}
-
-	// Unix-семантика для первого токена cmd: относительные пути резолвятся
-	// ОС от cwd вызова (Go exec при Dir=="" наследует cwd родительского
-	// процесса); bare-имя ищется в PATH. Свои скрипты пакета — явно через
-	// {{quote .module_root}}/scripts/x.py. См. WORKDIR.md §2, §3.1.
-	if stdout == nil {
-		stdout = os.Stdout
-	}
-	if stderr == nil {
-		stderr = os.Stderr
-	}
-	cfg := &executor.Config{
-		Env:            p.Env(),
-		Stdin:          os.Stdin,
-		Stdout:         stdout,
-		Stderr:         stderr,
-		ForwardSignals: true,
-		Group:          executor.GroupInherit,
-	}
-
-	return executor.RunWithConfig(ctx, cfg, p.Argv[0], p.Argv[1:]...)
-}
-
-// ResolveCommand находит модуль и команду (progressive resolution, как в Run)
-// и возвращает схему команды: params/positional. command="" — default cmd
-// модуля. Схема нужна для исполнения, поэтому модуль грузится так же, как в Run —
-// через LoadModuleVerified (свежесть относительно манифеста на диске); иначе
-// привязка флагов могла бы разойтись со схемой, по которой Run валидирует.
-// Ошибки те же, что у Run до валидации параметров.
-func ResolveCommand(source discovery.Source, loader ModuleLoader, namespace, command string) (*execmodule.Command, error) {
-	r, err := Resolve(source, loader, namespace, command)
-	if err != nil {
-		return nil, err
-	}
-	return r.Command, nil
 }
 
 // ErrModuleNotFound — ни один префикс пути не резолвится в модуль.
