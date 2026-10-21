@@ -1,4 +1,4 @@
-// Package core — общее ядро futi: параметры окружения и (далее) Runtime.
+// Package core — общее ядро futi: параметры окружения и Runtime.
 package core
 
 import (

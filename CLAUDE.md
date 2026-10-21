@@ -25,9 +25,10 @@ GOOS=windows go build -o /dev/null ./cmd/futi # Windows: только сборк
 
 ## Архитектура
 
-`cmd/futi` — CLI: парсинг аргументов, диспетчер, help, completion-скрипты; пока здесь же конструирование source/cache, `list`/`validate`/`cache` и менеджер модулей (`modules_*.go`) — вынос в `internal/core`, `internal/modules`, `internal/cli` запланирован (фаза 1). Остальное — в `internal/`:
+`cmd/futi` — CLI: парсинг аргументов, диспетчер, help, completion-скрипты; пока здесь же `list`/`validate`/`cache` и менеджер модулей (`modules_*.go`) — вынос в `internal/core`, `internal/modules`, `internal/cli` запланирован (фаза 1). Остальное — в `internal/`:
 
 - `discovery` — поиск модулей по SaltStack-модели: `dev/deploy.yaml` или `dev/deploy/config.yaml` → namespace `dev.deploy`; источники: глобальный, локальный (проект), из конфига; `composite.go` объединяет их. Конфликт `.yaml` vs `/config.yaml` — ошибка Resolve, в листинге — пометка. Частичный листинг (часть источников не читается) — `*PartialError` с валидным результатом; вызывающий различает его через `errors.As`.
+- `core` — `Options`/`DefaultOptions` (единственное чтение окружения: `FUTI_MODULES_DIR`, `HOME`, каталог кэша, cwd), `Runtime`: конфиг и глобальный source сразу, `Cache()`/`Source()` лениво (`sync.Once`), предупреждения через `Options.Warn`.
 - `config` — `config.yaml` futi (источники, политика кэша).
 - `execmodule` — модель модуля/команд (вложенные `commands`, `params`, fallback `cmd`), резолв команды, валидация, рендер шаблонов (`{{.param}}`, `{{quote .param}}`, `{{.module_root}}`), help.
 - `modulerunner` — запуск команды модуля и хуки; `executor` — низкоуровневый exec (stdin, пересылка сигналов, код выхода 128+N, группа процессов для хука без терминала).

@@ -138,12 +138,17 @@ func TestRuntimeLocalSourceWithCache(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "futi.yaml"), "name: cached\ncmd: echo\n")
 
-	src, err := newRT(t, dir).Source()
+	rt := newRT(t, dir)
+	src, err := rt.Source()
 	if err != nil {
 		t.Fatalf("Source: %v", err)
 	}
 	if _, _, err := src.Resolve("cached"); err != nil {
 		t.Fatalf("Resolve: %v", err)
+	}
+	// Loader по умолчанию — rt.Cache(): модуль уже лежит в его in-memory записях.
+	if n := rt.Cache().ModuleCount(); n != 1 {
+		t.Fatalf("Cache().ModuleCount() = %d, want 1 (futi.yaml загружен через rt.Cache())", n)
 	}
 }
 
@@ -372,6 +377,9 @@ func TestRuntimeInvalidPolicyWarnsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(warns) != 0 {
+		t.Fatalf("warnings after NewRuntime = %q, want none (policy is lazy)", warns)
+	}
 	c1, c2 := rt.Cache(), rt.Cache()
 	if c1 != c2 {
 		t.Fatal("Cache() returned different pointers")
@@ -431,22 +439,27 @@ func TestRuntimeNoLocalDir(t *testing.T) {
 func TestRuntimeLocalDirDot(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".futi", "local.yaml"), "name: local\ncmd: echo\n")
+	writeFile(t, filepath.Join(dir, "futi.yaml"), "name: root\ncmd: echo\n")
 	t.Chdir(dir)
 
-	var got [2]string
-	for i, ld := range []string{".", dir} {
-		src, err := newRT(t, ld).Source()
-		if err != nil {
-			t.Fatal(err)
+	for _, name := range []string{"local", "root"} {
+		var manifests, roots [2]string
+		for i, ld := range []string{".", dir} {
+			src, err := newRT(t, ld).Source()
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifests[i], roots[i], err = src.Resolve(name)
+			if err != nil {
+				t.Fatalf("%s, LocalDir %q: %v", name, ld, err)
+			}
 		}
-		manifest, _, err := src.Resolve("local")
-		if err != nil {
-			t.Fatalf("LocalDir %q: %v", ld, err)
+		if manifests[0] != manifests[1] || !filepath.IsAbs(manifests[0]) {
+			t.Fatalf("%s: manifests = %q, want equal absolute paths", name, manifests)
 		}
-		got[i] = manifest
-	}
-	if got[0] != got[1] || !filepath.IsAbs(got[0]) {
-		t.Fatalf("manifests = %q, want equal absolute paths", got)
+		if roots[0] != roots[1] || !filepath.IsAbs(roots[0]) {
+			t.Fatalf("%s: module roots = %q, want equal absolute paths", name, roots)
+		}
 	}
 }
 

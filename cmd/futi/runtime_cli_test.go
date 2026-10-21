@@ -131,10 +131,15 @@ func TestCLICacheConfigWarningOnce(t *testing.T) {
 	for _, args := range [][]string{
 		{"list"},
 		{"cache", "status"},
+		{"cache", "refresh"},
+		{"cache", "clear"},
 		{"modules", "list"},
 		{"__complete", ""},
 	} {
-		_, stderr, _ := runFutiEnv(t, cwd, env, args...)
+		_, stderr, code := runFutiEnv(t, cwd, env, args...)
+		if code != 0 {
+			t.Errorf("futi %q: code = %d, want 0; stderr: %q", args, code, stderr)
+		}
 		if n := strings.Count(stderr, "cache config: "); n != 1 {
 			t.Errorf("futi %q: %q встречается %d раз, want 1; stderr: %q", args, "cache config: ", n, stderr)
 		}
