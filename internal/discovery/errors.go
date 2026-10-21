@@ -10,6 +10,9 @@ import (
 // поэтому вызывающий код не должен трактовать их как «не найдено».
 var ErrNotFound = errors.New("discovery: not found")
 
+// ErrInvalidNamespace — namespace синтаксически неверен (например, пустой сегмент).
+var ErrInvalidNamespace = errors.New("invalid namespace")
+
 // notFoundError сохраняет прежний текст сообщения и совпадает с ErrNotFound по errors.Is.
 type notFoundError struct{ msg string }
 

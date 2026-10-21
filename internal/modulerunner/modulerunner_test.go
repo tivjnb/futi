@@ -1367,3 +1367,115 @@ func TestPrepareValidationError(t *testing.T) {
 		t.Errorf("Prepared = %+v, want nil", p)
 	}
 }
+
+// countLoader counts LoadModule calls and delegates to execmodule.LoadModule.
+type countLoader struct{ calls int }
+
+func (c *countLoader) LoadModule(manifestPath, moduleRoot string) (*execmodule.Module, error) {
+	c.calls++
+	return execmodule.LoadModule(manifestPath, moduleRoot)
+}
+
+func writeValueFixture(t *testing.T) (discovery.Source, string) {
+	t.Helper()
+	dir := t.TempDir()
+	m := `name: mod
+commands:
+  c:
+    params:
+      - name: x
+        type: string
+    cmd: "echo {{.x}}"
+  a:
+    cmd: "echo {{.args}} {{len .args_list}}"
+`
+	if err := os.WriteFile(filepath.Join(dir, "m.yaml"), []byte(m), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return discovery.NewGlobalSource(dir), dir
+}
+
+func TestResolveLoadsOnce(t *testing.T) {
+	src, _ := writeValueFixture(t)
+	loader := &countLoader{}
+
+	r, err := Resolve(src, loader, "m", "c")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	resolved, err := r.Validate(map[string]string{"x": "hi"}, nil)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	p, err := r.Prepare(resolved, nil)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if loader.calls != 1 {
+		t.Errorf("LoadModule calls = %d, want 1", loader.calls)
+	}
+	if want := []string{"echo", "hi"}; !slices.Equal(p.Argv, want) {
+		t.Errorf("Argv = %q, want %q", p.Argv, want)
+	}
+}
+
+func TestResolvedPrepareArgsJoin(t *testing.T) {
+	src, _ := writeValueFixture(t)
+	r, err := Resolve(src, nil, "m", "a")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	p, err := r.Prepare(nil, []string{"a b", "c"})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	want := []string{"echo", "a", "b", "c", "2"}
+	if !slices.Equal(p.Argv, want) {
+		t.Errorf("Argv = %q, want %q", p.Argv, want)
+	}
+}
+
+func TestPreparedEnv(t *testing.T) {
+	p := &Prepared{ModuleName: "nm", ModuleRoot: "/some/root"}
+	env := p.Env()
+	if len(env) < 2 {
+		t.Fatalf("Env too short: %q", env)
+	}
+	tail := env[len(env)-2:]
+	want := []string{"FUTI_MODULE_NAME=nm", "FUTI_MODULE_ROOT=/some/root"}
+	if !slices.Equal(tail, want) {
+		t.Errorf("Env tail = %q, want %q", tail, want)
+	}
+}
+
+func TestResolveNoDefaultCommandSentinel(t *testing.T) {
+	source := writeResolveFixture(t)
+	_, err := Resolve(source, nil, "nodef", "")
+	if !errors.Is(err, ErrNoDefaultCommand) {
+		t.Fatalf("err = %v, want ErrNoDefaultCommand", err)
+	}
+	want := `modulerunner: module "nodef" has no default command; specify one`
+	if err.Error() != want {
+		t.Errorf("err text = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestResolveRequiresSubcommandSentinel(t *testing.T) {
+	source := writeResolveFixture(t)
+	_, err := ResolveCommand(source, nil, "m", "grp")
+	if !errors.Is(err, execmodule.ErrRequiresSubcommand) {
+		t.Fatalf("err = %v, want ErrRequiresSubcommand", err)
+	}
+}
+
+func TestResolveInvalidNamespaceSentinel(t *testing.T) {
+	source := discovery.NewGlobalSource(t.TempDir())
+	_, _, err := source.Resolve("a..b")
+	if !errors.Is(err, discovery.ErrInvalidNamespace) {
+		t.Fatalf("err = %v, want ErrInvalidNamespace", err)
+	}
+	want := `discovery: invalid namespace "a..b": empty segment`
+	if err.Error() != want {
+		t.Errorf("err text = %q, want %q", err.Error(), want)
+	}
+}
