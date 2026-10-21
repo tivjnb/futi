@@ -384,39 +384,6 @@ func TestParseArgsDoubleDashWithFlags(t *testing.T) {
 	}
 }
 
-func TestExitCodeFromErrorExtractsExitCode(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell scripts not supported on Windows")
-	}
-
-	cmd := exec.Command("sh", "-c", "exit 42")
-	runErr := cmd.Run()
-
-	cases := []struct {
-		name string
-		err  error
-		want int
-	}{
-		{"direct exit error", runErr, 42},
-		{"wrapped (executor style)", fmt.Errorf("executor: run %q: %w", "sh", runErr), 42},
-		{"double-wrapped (modulerunner style)", fmt.Errorf("modulerunner: %w", fmt.Errorf("executor: run %q: %w", "sh", runErr)), 42},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if code := exitCodeFromError(tc.err); code != tc.want {
-				t.Fatalf("expected %d, got %d", tc.want, code)
-			}
-		})
-	}
-}
-
-func TestExitCodeFromErrorDefaultsToOne(t *testing.T) {
-	if code := exitCodeFromError(errors.New("something went wrong")); code != 1 {
-		t.Fatalf("plain error: expected 1, got %d", code)
-	}
-}
-
 func writeMainTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -1533,35 +1500,6 @@ func TestRunListEmptyNamespaceOnProdSourceChain(t *testing.T) {
 	}
 }
 
-func TestExitCodeFromErrorSignaled(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("сигналы POSIX")
-	}
-	runErr := exec.Command("sh", "-c", "kill -TERM $$").Run()
-
-	cases := []struct {
-		name string
-		err  error
-		want int
-	}{
-		{"direct", runErr, 143},
-		{"wrapped", fmt.Errorf("x: %w", runErr), 143},
-		// Ребёнок перехватил пересланный SIGQUIT и вышел с 0: код как при гибели от него.
-		{"InterruptedError QUIT", &executor.InterruptedError{Signal: syscall.SIGQUIT}, 131},
-		// Ребёнок после пересланного SIGQUIT вышел с 2: код по сигналу futi.
-		{"InterruptedError QUIT с кодом 2", &executor.InterruptedError{Signal: syscall.SIGQUIT, Err: exec.Command("sh", "-c", "exit 2").Run()}, 131},
-		// Ребёнок добит SIGKILL после пересланного SIGTERM: код по его гибели.
-		{"InterruptedError TERM, убит KILL", &executor.InterruptedError{Signal: syscall.SIGTERM, Err: exec.Command("sh", "-c", "kill -KILL $$").Run()}, 137},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := exitCodeFromError(tc.err); got != tc.want {
-				t.Fatalf("exitCodeFromError(%v) = %d, want %d", tc.err, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestInterruptSignal(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("сигналы POSIX")
@@ -2183,5 +2121,19 @@ func TestRunListVerboseStripsControlCharsInPath(t *testing.T) {
 		if strings.Contains(buf.String(), "\x1b") {
 			t.Fatalf("runList(%q) -v output contains ESC: %q", ns, buf.String())
 		}
+	}
+}
+
+func TestRunParsedPassesStdin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cat is not available on Windows")
+	}
+	dir := t.TempDir()
+	writeMainTestFile(t, filepath.Join(dir, "m.yaml"), "cmd: cat\n")
+	rt := testRuntime(t, core.Options{ModulesDir: dir})
+	var stdout, stderr bytes.Buffer
+	code, err := runParsed(t.Context(), strings.NewReader("x"), &stdout, &stderr, rt, &parsedArgs{command: "m"})
+	if code != 0 || err != nil || stdout.String() != "x" {
+		t.Fatalf("code=%d err=%v stdout=%q stderr=%q, want 0, nil, %q", code, err, stdout.String(), stderr.String(), "x")
 	}
 }

@@ -781,32 +781,6 @@ ENVIRONMENT
 `)
 }
 
-// exitCodeFromError извлекает код завершения из ошибки.
-// При гибели процесса от сигнала N (*exec.ExitError) — 128+N (как в shell);
-// иначе, если команда прервана сигналом N, полученным futi
-// (*executor.InterruptedError), — тоже 128+N; иначе ExitCode() из
-// *exec.ExitError. Остальное — 1 (стандартный код ошибки для futi).
-func exitCodeFromError(err error) int {
-	if err == nil {
-		return 0
-	}
-	var exitErr *exec.ExitError
-	hasExitErr := errors.As(err, &exitErr)
-	if hasExitErr {
-		if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-			return 128 + int(ws.Signal())
-		}
-	}
-	var intErr *executor.InterruptedError
-	if errors.As(err, &intErr) {
-		return 128 + int(intErr.Signal)
-	}
-	if hasExitErr {
-		return exitErr.ExitCode()
-	}
-	return 1
-}
-
 // interruptSignal возвращает прерывающий сигнал (SIGINT, SIGTERM или SIGHUP)
 // из err: полученный futi и пересланный команде (*executor.InterruptedError —
 // даже если команда его перехватила и вышла обычным кодом) или тот, которым
@@ -852,7 +826,7 @@ func exitAfterRunError(err error) {
 			}
 		}
 	}
-	os.Exit(exitCodeFromError(err))
+	os.Exit(core.ExitCode(err))
 }
 
 // formatRunError форматирует ошибку выполнения команды для вывода в stderr.
@@ -938,19 +912,21 @@ func systemHelpCode(stdout, stderr io.Writer, source discovery.Source, loader mo
 // возвращаем наружу, чтобы вызывающий через exitAfterRunError корректно
 // обработал сигнальный путь (процесс гибнет тем же сигналом), а тесты
 // проверяли код без os.Exit.
-func runParsed(ctx context.Context, stdout, stderr io.Writer, source discovery.Source, loader modulerunner.ModuleLoader, pa *parsedArgs) (int, error) {
+func runParsed(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt *core.Runtime, pa *parsedArgs) (int, error) {
+	source, _ := rt.Source() // main has already checked the error
+	loader := rt.Cache()
 	// Схема команды нужна для привязки флагов (bool/string/int). -h/--help —
 	// справка по пути, в том числе для веток без своей команды (futi docker -h).
 	helpPath := commandPath(pa)
-	cmd, err := modulerunner.ResolveCommand(source, loader, pa.namespace, pa.command)
+	t, err := rt.Resolve(pa.namespace, pa.command)
 	if err != nil {
 		if hasHelpFlag(pa.flags) {
 			return systemHelpCode(stdout, stderr, source, loader, helpPath), nil
 		}
 		fmt.Fprintf(stderr, "%s\n", withPathHint(withValidateHint(runErrorText(err, helpPath), err, helpPath, source), pa.flags))
-		return exitCodeFromError(err), err
+		return core.ExitCode(err), err
 	}
-	params, help, err := bindFlags(cmd, pa.flags)
+	params, help, err := bindFlags(t.Command(), pa.flags)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s\n", withPathHint(err.Error(), pa.flags))
 		return 1, nil
@@ -958,20 +934,22 @@ func runParsed(ctx context.Context, stdout, stderr io.Writer, source discovery.S
 	if help {
 		return systemHelpCode(stdout, stderr, source, loader, helpPath), nil
 	}
+	res, err := rt.Execute(ctx, t, core.ExecuteRequest{
+		Params: params, Args: pa.argsList,
+		Stdin: stdin, Stdout: stdout, Stderr: stderr,
+		DryRun: pa.dryRun,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "%s\n", formatRunError(err))
+		return core.ExitCode(err), err
+	}
 	if pa.dryRun {
-		// Только Prepare: команда и хуки не исполняются. Ошибки печатаем и
-		// кодируем так же, как ошибки Run.
-		p, err := modulerunner.Prepare(source, pa.namespace, pa.command, params, pa.args, pa.argsList, loader)
-		if err != nil {
-			fmt.Fprintf(stderr, "%s\n", formatRunError(err))
-			return exitCodeFromError(err), err
-		}
-		fmt.Fprintln(stdout, shellJoin(p.Argv))
+		fmt.Fprintln(stdout, shellJoin(res.Argv))
 		return 0, nil
 	}
-	if err := modulerunner.Run(ctx, source, pa.namespace, pa.command, params, pa.args, pa.argsList, stdout, stderr, loader); err != nil {
-		fmt.Fprintf(stderr, "%s\n", formatRunError(err))
-		return exitCodeFromError(err), err
+	if res.WaitErr != nil {
+		fmt.Fprintf(stderr, "%s\n", formatRunError(res.WaitErr))
+		return res.ExitCode, res.WaitErr
 	}
 	return 0, nil
 }
@@ -1169,13 +1147,12 @@ func main() {
 			}
 			return
 		case errors.As(err, &helpReq):
-			source, err := rt.Source()
-			if err != nil {
+			if _, err := rt.Source(); err != nil {
 				fmt.Fprintf(os.Stderr, "source: %v\n", err)
 				os.Exit(1)
 			}
 			helpReq.dryRun = dryRun
-			code, runErr := runHelp(context.Background(), os.Stdout, os.Stderr, source, cache, helpReq)
+			code, runErr := runHelp(context.Background(), os.Stdin, os.Stdout, os.Stderr, rt, helpReq)
 			if runErr != nil {
 				exitAfterRunError(runErr)
 			}
@@ -1192,13 +1169,12 @@ func main() {
 		}
 	}
 
-	source, err := rt.Source()
-	if err != nil {
+	if _, err := rt.Source(); err != nil {
 		fmt.Fprintf(os.Stderr, "source: %v\n", err)
 		os.Exit(1)
 	}
 	pa.dryRun = dryRun
-	code, runErr := runParsed(context.Background(), os.Stdout, os.Stderr, source, cache, pa)
+	code, runErr := runParsed(context.Background(), os.Stdin, os.Stdout, os.Stderr, rt, pa)
 	if runErr != nil {
 		exitAfterRunError(runErr)
 	}

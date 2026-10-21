@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/tivjnb/futi/internal/config"
+	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
 )
 
@@ -149,9 +150,10 @@ func TestRunErrorShortWhenCoveredByWarning(t *testing.T) {
 		{"a", &parsedArgs{namespace: "a"}, "run: cannot read namespace \"a\" (see warning above)\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			src, _ := unreadableNamespace(t)
+			_, mods := unreadableNamespace(t)
+			rt := compositeRuntime(t, mods)
 			var stdout, stderr bytes.Buffer
-			code, runErr := runParsed(t.Context(), &stdout, &stderr, src, nil, tt.pa)
+			code, runErr := runParsed(t.Context(), nil, &stdout, &stderr, rt, tt.pa)
 			if code != 1 || runErr == nil || stderr.String() != tt.want {
 				t.Errorf("code=%d runErr=%v stderr=%q, want 1 и %q", code, runErr, stderr.String(), tt.want)
 			}
@@ -160,9 +162,10 @@ func TestRunErrorShortWhenCoveredByWarning(t *testing.T) {
 }
 
 func TestRunErrorFullWhenNotFoundInReadableDir(t *testing.T) {
-	src, _ := unreadableNamespace(t)
+	_, mods := unreadableNamespace(t)
+	rt := compositeRuntime(t, mods)
 	var stdout, stderr bytes.Buffer
-	code, _ := runParsed(t.Context(), &stdout, &stderr, src, nil, &parsedArgs{namespace: "nope", command: "x"})
+	code, _ := runParsed(t.Context(), nil, &stdout, &stderr, rt, &parsedArgs{namespace: "nope", command: "x"})
 	if code != 1 || !strings.HasPrefix(stderr.String(), "run: ") || strings.Contains(stderr.String(), "see warning above") {
 		t.Errorf("code=%d stderr=%q, want полное сообщение без сокращения", code, stderr.String())
 	}
@@ -194,10 +197,18 @@ func TestRunErrorFullWhenExecFailsUnderWarnedDir(t *testing.T) {
 	if !printPartialWarnings(&warn, partialWith(pe)) {
 		t.Fatal("printPartialWarnings = false")
 	}
-	src := discovery.NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: mods}}})
+	rt := compositeRuntime(t, mods)
 	var stdout, stderr bytes.Buffer
-	code, runErr := runParsed(t.Context(), &stdout, &stderr, src, nil, &parsedArgs{command: "m"})
+	code, runErr := runParsed(t.Context(), nil, &stdout, &stderr, rt, &parsedArgs{command: "m"})
 	if runErr == nil || strings.Contains(stderr.String(), "see warning above") || !strings.Contains(stderr.String(), script) {
 		t.Errorf("code=%d runErr=%v stderr=%q, want полная ошибка exec с путём %s", code, runErr, stderr.String(), script)
 	}
+}
+
+// compositeRuntime builds a Runtime whose config lists mods as a source.
+func compositeRuntime(t *testing.T, mods string) *core.Runtime {
+	t.Helper()
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	writeMainTestFile(t, cfgPath, "sources:\n  - path: "+mods+"\n")
+	return testRuntime(t, core.Options{ConfigPath: cfgPath})
 }

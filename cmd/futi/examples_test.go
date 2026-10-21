@@ -75,7 +75,7 @@ func TestExamplesRender(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p, err := modulerunner.Prepare(src, tt.ns, tt.cmd, tt.params, tt.args, tt.argsList, nil)
+			p, err := prepareExample(src, tt.ns, tt.cmd, tt.params, tt.argsList)
 			if err != nil {
 				t.Fatalf("Prepare: %v", err)
 			}
@@ -86,9 +86,22 @@ func TestExamplesRender(t *testing.T) {
 	}
 }
 
+// prepareExample resolves, validates and renders a module command without running it.
+func prepareExample(src discovery.Source, ns, cmd string, params map[string]string, argsList []string) (*modulerunner.Prepared, error) {
+	r, err := modulerunner.Resolve(src, nil, ns, cmd)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := r.Validate(params, argsList)
+	if err != nil {
+		return nil, err
+	}
+	return r.Prepare(resolved, argsList)
+}
+
 func TestExamplesRenderBackup(t *testing.T) {
 	src := discovery.NewGlobalSource(examplesDir)
-	p, err := modulerunner.Prepare(src, "backup", "", map[string]string{"src": "my docs", "dest": "/tmp/out"}, "", nil, nil)
+	p, err := prepareExample(src, "backup", "", map[string]string{"src": "my docs", "dest": "/tmp/out"}, nil)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
