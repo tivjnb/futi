@@ -405,11 +405,7 @@ commands:
   help:
     cmd: "echo CUSTOM"
 `)
-	manifest, root, err := src.Resolve("stale")
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if !isExecutableHelp(src, cache, manifest, root, []string{"help"}) {
+	if _, ok := core.ExecutableHelpIn(src, cache, []string{"stale", "help"}); !ok {
 		t.Error("isExecutableHelp = false, want true (help добавлена на диске)")
 	}
 }
