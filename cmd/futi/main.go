@@ -333,24 +333,16 @@ func printCommands(w io.Writer, manifestPath, moduleRoot string, verbose bool, l
 // списка ошибок и предупреждений за один проход.
 // Возвращает error только если есть errors (warnings не блокируют).
 func runValidate(w io.Writer, source discovery.Source, namespace string) error {
-	manifestPath, moduleRoot, err := source.Resolve(namespace)
+	rep, err := core.ValidateIn(source, namespace)
 	if err != nil {
-		return fmt.Errorf("validate: %w", err)
+		return err
 	}
 
-	// ParseModule — raw парсинг без валидации. LoadModule здесь не подходит,
-	// т.к. он падает на первой ошибке, а validate должен показать все.
-	mod, err := execmodule.ParseModule(manifestPath, moduleRoot)
-	if err != nil {
-		return fmt.Errorf("validate: %w", err)
-	}
-
-	errors, warnings := mod.Validate()
-	report, hasErrors := execmodule.FormatValidateReport(errors, warnings)
+	report, hasErrors := execmodule.FormatValidateReport(rep.Errors, rep.Warnings)
 	fmt.Fprint(w, report)
 
 	if hasErrors {
-		return fmt.Errorf("validate: module %q has %d error(s)", namespace, len(errors))
+		return fmt.Errorf("validate: module %q has %d error(s)", namespace, len(rep.Errors))
 	}
 	return nil
 }
