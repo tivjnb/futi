@@ -406,6 +406,6 @@ commands:
     cmd: "echo CUSTOM"
 `)
 	if _, ok := core.ExecutableHelpIn(src, cache, []string{"stale", "help"}); !ok {
-		t.Error("isExecutableHelp = false, want true (help добавлена на диске)")
+		t.Error("ExecutableHelpIn executable = false, want true (help добавлена на диске)")
 	}
 }
