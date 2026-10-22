@@ -106,7 +106,7 @@ func listIn(src discovery.Source, loader modulerunner.ModuleLoader, namespace st
 	} else {
 		children, listErr = src.ListChildren(namespace)
 	}
-	// Частичный листинг: результат валиден, возвращаем его вместе с ошибкой.
+	// Partial listing: the result is valid, return it together with the error.
 	var partial *discovery.PartialError
 	if listErr != nil && !errors.As(listErr, &partial) {
 		return ListResult{}, fmt.Errorf("list: %w", listErr)
@@ -149,7 +149,7 @@ func DescribeChildren(children []discovery.Child, loader modulerunner.ModuleLoad
 		}
 		if e.IsModule {
 			e.Path = c.ManifestPath
-			// Resolve для конфликтного имени вернёт ошибку: описание не грузим.
+			// Resolve of a conflicting name returns an error: do not load the description.
 			if !c.Conflict {
 				if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err != nil {
 					e.LoadErr = err

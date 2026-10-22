@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/tivjnb/futi/internal/config"
@@ -172,5 +173,33 @@ func TestExecutableHelpIn(t *testing.T) {
 					tc.path, resolved, executable, tc.wantResolved, tc.wantExecutable)
 			}
 		})
+	}
+}
+
+func TestRuntimeHelpUsesRuntimeLoader(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "db.yaml"), "name: db\ncmd: echo\n")
+	spy := &verifiedSpy{}
+	opts := core.Options{ModulesDir: dir}
+	core.SetLoader(&opts, spy)
+	rt, err := core.NewRuntime(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := rt.Help([]string{"db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Module == nil || doc.Module.Description != "VERIFIED" || spy.verified != 1 {
+		t.Errorf("doc = %+v verified=%d, want runtime loader reached", doc, spy.verified)
+	}
+}
+
+func TestRuntimeHelpPropagatesSourceError(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "futi.yaml"), "name: [\n  invalid")
+	_, err := newRT(t, dir).Help([]string{"db"})
+	if err == nil || !strings.HasPrefix(err.Error(), "local source: ") {
+		t.Fatalf("err = %v, want prefix %q", err, "local source: ")
 	}
 }

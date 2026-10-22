@@ -163,3 +163,48 @@ func TestRuntimeListUsesRuntimeLoader(t *testing.T) {
 		t.Errorf("calls = %d, want 1", spy.calls)
 	}
 }
+
+func TestListInConflictSources(t *testing.T) {
+	dirA, dirB := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(dirA, "x.yaml"), "name: x\ncmd: echo a\n")
+	writeFile(t, filepath.Join(dirB, "x.yaml"), "name: x\ncmd: echo b\n")
+	cfg := &config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: dirB}}}
+	spy := &stubLoader{mod: &execmodule.Module{Description: "never"}}
+
+	res, err := core.ListIn(discovery.NewCompositeSource(cfg), spy, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Children) != 1 {
+		t.Fatalf("Children = %+v, want one", res.Children)
+	}
+	c := res.Children[0]
+	if c.Name != "x" || !c.Conflict || !reflect.DeepEqual(c.ConflictSources, []string{dirA, dirB}) {
+		t.Errorf("child = %+v, want conflict x with sources [%s %s]", c, dirA, dirB)
+	}
+	if c.LoadErr != nil || c.Description != "" || spy.calls != 0 {
+		t.Errorf("conflict must not load: LoadErr=%v Description=%q calls=%d", c.LoadErr, c.Description, spy.calls)
+	}
+}
+
+func TestListInConflictFileVsConfigYaml(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "x.yaml"), "name: x\ncmd: echo a\n")
+	writeFile(t, filepath.Join(dir, "x", "config.yaml"), "name: x\ncmd: echo b\n")
+	spy := &stubLoader{mod: &execmodule.Module{Description: "never"}}
+
+	res, err := core.ListIn(discovery.NewGlobalSource(dir), spy, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Children) != 1 {
+		t.Fatalf("Children = %+v, want one", res.Children)
+	}
+	c := res.Children[0]
+	if c.Name != "x" || !c.Conflict || len(c.ConflictSources) != 0 {
+		t.Errorf("child = %+v, want conflict x without ConflictSources", c)
+	}
+	if spy.calls != 0 {
+		t.Errorf("loader calls = %d, want 0", spy.calls)
+	}
+}

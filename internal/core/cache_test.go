@@ -100,6 +100,11 @@ func TestRefreshCachePartial(t *testing.T) {
 	if !strings.HasPrefix(err.Error(), "cache refresh: ") {
 		t.Errorf("err text = %q, want cache refresh: prefix", err)
 	}
+	for _, class := range []error{core.ErrNotFound, core.ErrInvalidInput} {
+		if errors.Is(err, class) {
+			t.Errorf("partial error must not carry class %v: %v", class, err)
+		}
+	}
 	if res.Total != 1 {
 		t.Errorf("Total = %d, want 1", res.Total)
 	}

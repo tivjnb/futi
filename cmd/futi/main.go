@@ -344,10 +344,10 @@ func runValidate(w io.Writer, source discovery.Source, namespace string) error {
 	return nil
 }
 
-// renderCommandTable выводит команды в виде таблицы.
-// Используется для top-level команд модуля и для subcommands.
-// res.HasDefault добавляет строку (default) первой в таблице
-// (для отображения default cmd модуля или fallback cmd subcommand).
+// renderCommandTable prints commands as a table, used for a module's
+// top-level commands and for subcommands.
+// res.HasDefault adds a (default) row first in the table (the module's
+// default cmd or the subcommand's fallback cmd).
 func renderCommandTable(w io.Writer, res core.ListResult, verbose bool) error {
 	if len(res.Commands) == 0 && !res.HasDefault {
 		fmt.Fprintln(w, "No commands found.")
@@ -363,7 +363,7 @@ func renderCommandTable(w io.Writer, res core.ListResult, verbose bool) error {
 		}
 	}
 
-	// Сортировка по санитизированному имени (как раньше).
+	// Sort by the sanitized name.
 	sort.SliceStable(rows, func(i, j int) bool {
 		return rows[i][0] < rows[j][0]
 	})
@@ -397,7 +397,7 @@ func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader
 	return renderChildren(w, core.DescribeChildren(children, loader), verbose)
 }
 
-// renderChildren выводит детей namespace таблицей.
+// renderChildren prints the children of a namespace as a table.
 func renderChildren(w io.Writer, children []core.ChildEntry, verbose bool) error {
 	var rows [][]string
 	for _, c := range children {
@@ -1025,9 +1025,9 @@ func main() {
 	}
 
 	// `futi cache <subcommand>` — fast path ДО cache.Start, чтобы избежать
-	// двойного Refresh (Start с AlwaysPolicy + runCacheRefresh). Загрузка с диска
-	// (Load) происходит внутри core.RefreshCache / core.CacheStatusOf, затем
-	// runCacheRefresh — единственный Refresh с корректным mtime+size сравнением.
+	// двойного Refresh (Start с AlwaysPolicy + runCacheRefresh). Loading from disk
+	// (Load) happens inside core.RefreshCache / core.CacheStatusOf; runCacheRefresh
+	// is then the only Refresh, with a correct mtime+size comparison.
 	if subcmd, ok := cacheSubcommand(os.Args[1:]); ok {
 		cache := rt.Cache()
 		cachePath := rt.CachePath()

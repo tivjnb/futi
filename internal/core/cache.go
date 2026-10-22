@@ -54,10 +54,15 @@ func ClearCache(path string) error {
 }
 
 // CacheStatus reports the runtime cache state, see CacheStatusOf.
+// Every call re-reads the cache from disk (Load), which matches the CLI
+// (one process runs one command). With in-memory storage Load resets
+// LastRefresh to zero; revisit this for long-lived transports.
 func (r *Runtime) CacheStatus() CacheStatus { return CacheStatusOf(r.Cache(), r.CachePath()) }
 
 // CacheRefresh refreshes the cache from the global source (not the merged
 // one with local layers), see RefreshCache.
+// Like CacheStatus, every call re-reads the cache from disk (Load); see the
+// note there about in-memory storage and long-lived transports.
 func (r *Runtime) CacheRefresh() (modulecache.RefreshResult, error) {
 	return RefreshCache(r.Cache(), r.GlobalSource())
 }
