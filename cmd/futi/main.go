@@ -224,10 +224,10 @@ func cacheSubcommand(args []string) (subcommand string, present bool) {
 // При verbose=true дополнительно выводит списки обновлённых и пропущенных
 // модулей (фикс #15).
 func runCacheRefresh(w io.Writer, cache *modulecache.Cache, globalSource discovery.Source, verbose bool) error {
-	result, err := cache.Refresh(globalSource)
+	result, err := core.RefreshCache(cache, globalSource)
 	var partial *discovery.PartialError
 	if err != nil && !errors.As(err, &partial) {
-		return fmt.Errorf("cache refresh: %w", err)
+		return err
 	}
 	// Частичный листинг: сводка по читаемым sources выводится, ошибка
 	// возвращается в конце — вызывающий покажет предупреждения.
@@ -251,30 +251,27 @@ func runCacheRefresh(w io.Writer, cache *modulecache.Cache, globalSource discove
 			}
 		}
 	}
-	if partial != nil {
-		return fmt.Errorf("cache refresh: %w", err)
-	}
-	return nil
+	return err
 }
 
 // runCacheStatus выводит текущее состояние кэша: политику, время последнего
 // обновления, количество модулей, путь к gob-файлу (фикс #17).
 func runCacheStatus(w io.Writer, cache *modulecache.Cache, cachePath string) error {
-	fmt.Fprintf(w, "Policy: %s\n", cache.PolicyName())
+	st := core.CacheStatusOf(cache, cachePath)
+	fmt.Fprintf(w, "Policy: %s\n", st.Policy)
 
-	lr := cache.LastRefresh()
-	if lr.IsZero() {
+	if st.LastRefresh.IsZero() {
 		fmt.Fprintln(w, "Last refresh: never")
 	} else {
-		fmt.Fprintf(w, "Last refresh: %s\n", lr.Format("2006-01-02 15:04:05"))
+		fmt.Fprintf(w, "Last refresh: %s\n", st.LastRefresh.Format("2006-01-02 15:04:05"))
 	}
 
-	fmt.Fprintf(w, "Modules: %d\n", cache.ModuleCount())
+	fmt.Fprintf(w, "Modules: %d\n", st.Modules)
 
-	if cachePath == "" {
+	if st.Path == "" {
 		fmt.Fprintln(w, "Storage: in-memory (no persistent cache)")
 	} else {
-		fmt.Fprintf(w, "Cache file: %s\n", cachePath)
+		fmt.Fprintf(w, "Cache file: %s\n", st.Path)
 	}
 	return nil
 }
@@ -286,8 +283,8 @@ func runCacheClear(w io.Writer, cachePath string) error {
 		fmt.Fprintln(w, "cache: in-memory only, nothing to clear")
 		return nil
 	}
-	if err := os.Remove(cachePath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("cache clear: remove %s: %w", cachePath, err)
+	if err := core.ClearCache(cachePath); err != nil {
+		return err
 	}
 	fmt.Fprintf(w, "Cache cleared: %s\n", cachePath)
 	return nil
@@ -1028,9 +1025,9 @@ func main() {
 	}
 
 	// `futi cache <subcommand>` — fast path ДО cache.Start, чтобы избежать
-	// двойного Refresh (Start с AlwaysPolicy + runCacheRefresh). Для refresh:
-	// cache.Load() загружает с диска без Refresh, затем runCacheRefresh —
-	// единственный Refresh с корректным mtime+size сравнением.
+	// двойного Refresh (Start с AlwaysPolicy + runCacheRefresh). Загрузка с диска
+	// (Load) происходит внутри core.RefreshCache / core.CacheStatusOf, затем
+	// runCacheRefresh — единственный Refresh с корректным mtime+size сравнением.
 	if subcmd, ok := cacheSubcommand(os.Args[1:]); ok {
 		cache := rt.Cache()
 		cachePath := rt.CachePath()
@@ -1043,14 +1040,12 @@ func main() {
 					verbose = true
 				}
 			}
-			cache.Load() // load from disk without Refresh
 			if err := runCacheRefresh(os.Stdout, cache, rt.GlobalSource(), verbose); err != nil && !printPartialWarnings(os.Stderr, err) {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
 			}
 			return
 		case "status":
-			cache.Load() // populate from disk for accurate module count
 			if err := runCacheStatus(os.Stdout, cache, cachePath); err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
