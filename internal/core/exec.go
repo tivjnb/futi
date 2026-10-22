@@ -55,11 +55,7 @@ func (r *Runtime) Resolve(namespace, command string) (*Target, error) {
 	if err != nil {
 		return nil, err
 	}
-	var loader modulerunner.ModuleLoader = r.opts.loader
-	if loader == nil {
-		loader = r.Cache()
-	}
-	res, err := modulerunner.Resolve(src, loader, namespace, command)
+	res, err := modulerunner.Resolve(src, r.loader(), namespace, command)
 	if err != nil {
 		return nil, classify(err)
 	}

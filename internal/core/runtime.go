@@ -108,6 +108,14 @@ func (r *Runtime) Cache() *modulecache.Cache {
 	return r.cache
 }
 
+// loader returns the module loader: the injected one, else the cache.
+func (r *Runtime) loader() modulerunner.ModuleLoader {
+	if r.opts.loader != nil {
+		return r.opts.loader
+	}
+	return r.Cache()
+}
+
 // Start запускает кэш по глобальному source (обновление по политике).
 func (r *Runtime) Start() error {
 	return r.Cache().Start(r.global)
@@ -157,11 +165,7 @@ func (r *Runtime) localSource() (discovery.Source, error) {
 	if _, err := os.Stat(futiYaml); err == nil {
 		abs, _ := filepath.Abs(futiYaml)
 		absRoot, _ := filepath.Abs(r.opts.LocalDir)
-		var loader modulerunner.ModuleLoader = r.opts.loader
-		if loader == nil {
-			loader = r.Cache()
-		}
-		mod, err := modulerunner.LoadModule(loader, abs, absRoot)
+		mod, err := modulerunner.LoadModule(r.loader(), abs, absRoot)
 		if err != nil {
 			return nil, fmt.Errorf("local source: %w", err)
 		}

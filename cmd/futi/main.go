@@ -300,81 +300,32 @@ func runCacheClear(w io.Writer, cachePath string) error {
 // При verbose=true добавляет колонку PATH.
 // loader используется для загрузки модулей (с кэшем или без).
 func runList(w io.Writer, source discovery.Source, namespace string, verbose, recurse bool, loader modulerunner.ModuleLoader) error {
-	// Сначала пробуем резолвить как модуль. Пустой namespace — запрос корня:
-	// Resolve("") вернул бы «invalid namespace», а не ErrNotFound.
-	if namespace != "" {
-		manifestPath, moduleRoot, err := source.Resolve(namespace)
-		if err == nil {
-			return printCommands(w, manifestPath, moduleRoot, verbose, loader)
-		}
-		if !errors.Is(err, discovery.ErrNotFound) {
-			return fmt.Errorf("list: %w", err)
-		}
-	}
-
-	// Не модуль — пробуем progressive resolution для subcommands
-	if namespace != "" {
-		segments := strings.Split(namespace, ".")
-		for i := len(segments) - 1; i > 0; i-- {
-			ns := strings.Join(segments[:i], ".")
-			commandPath := segments[i:]
-
-			manifestPath, moduleRoot, err := source.Resolve(ns)
-			if err != nil {
-				if errors.Is(err, discovery.ErrNotFound) {
-					continue
-				}
-				return fmt.Errorf("list: %w", err)
-			}
-
-			mod, err := modulerunner.LoadModule(loader, manifestPath, moduleRoot)
-			if err != nil {
-				return fmt.Errorf("list: %w", err)
-			}
-
-			cmd, err := mod.ResolveCommandPath(commandPath)
-			if err != nil {
-				return fmt.Errorf("list: %w", err)
-			}
-
-			if len(cmd.Commands) > 0 {
-				return renderCommandTable(w, cmd.Commands, manifestPath, verbose, cmd.Cmd)
-			}
-
-			return fmt.Errorf("list: command %q has no subcommands", strings.Join(commandPath, " "))
-		}
-	}
-
-	// Не модуль и не subcommand — пробуем как namespace
-	var children []discovery.Child
-	var listErr error
-	if recurse {
-		children, listErr = source.ListChildrenRecursive(namespace)
-	} else {
-		children, listErr = source.ListChildren(namespace)
-	}
+	res, err := core.ListIn(source, loader, namespace, recurse)
 	// Частичный листинг: результат валиден, выводим его и возвращаем ошибку,
 	// чтобы вызывающий показал предупреждения.
 	var partial *discovery.PartialError
-	if listErr != nil && !errors.As(listErr, &partial) {
-		return fmt.Errorf("list: %w", listErr)
-	}
-	if len(children) == 0 {
-		fmt.Fprintln(w, "No modules found.")
-		return listErr
-	}
-	if err := printChildren(w, children, verbose, loader); err != nil {
+	if err != nil && !errors.As(err, &partial) {
 		return err
 	}
-	return listErr
+	if res.Kind == core.ListNamespace {
+		if len(res.Children) == 0 {
+			fmt.Fprintln(w, "No modules found.")
+			return err
+		}
+		if rerr := renderChildren(w, res.Children, verbose); rerr != nil {
+			return rerr
+		}
+		return err
+	}
+	return renderCommandTable(w, res, verbose)
 }
 
 func printCommands(w io.Writer, manifestPath, moduleRoot string, verbose bool, loader modulerunner.ModuleLoader) error {
-	mod, err := modulerunner.LoadModule(loader, manifestPath, moduleRoot)
+	res, err := core.ModuleCommands(loader, manifestPath, moduleRoot)
 	if err != nil {
-		return fmt.Errorf("list: %w", err)
+		return err
 	}
-	return renderCommandTable(w, mod.Commands, manifestPath, verbose, mod.Cmd)
+	return renderCommandTable(w, res, verbose)
 }
 
 // runValidate загружает модуль и выводит отчёт валидации схемы.
@@ -404,33 +355,34 @@ func runValidate(w io.Writer, source discovery.Source, namespace string) error {
 	return nil
 }
 
-// renderCommandTable выводит map команд в виде отсортированной таблицы.
+// renderCommandTable выводит команды в виде таблицы.
 // Используется для top-level команд модуля и для subcommands.
-// defaultCmd — если не пустой, добавляет строку (default) первой в таблице
+// res.HasDefault добавляет строку (default) первой в таблице
 // (для отображения default cmd модуля или fallback cmd subcommand).
-func renderCommandTable(w io.Writer, commands map[string]*execmodule.Command, manifestPath string, verbose bool, defaultCmd string) error {
-	if len(commands) == 0 && defaultCmd == "" {
+func renderCommandTable(w io.Writer, res core.ListResult, verbose bool) error {
+	if len(res.Commands) == 0 && !res.HasDefault {
 		fmt.Fprintln(w, "No commands found.")
 		return nil
 	}
 
 	var rows [][]string
-	for name, cmd := range commands {
+	for _, c := range res.Commands {
 		if verbose {
-			rows = append(rows, []string{termtext.Line(name), termtext.Line(cmd.Description), termtext.Line(manifestPath)})
+			rows = append(rows, []string{termtext.Line(c.Name), termtext.Line(c.Description), termtext.Line(res.Manifest)})
 		} else {
-			rows = append(rows, []string{termtext.Line(name), termtext.Line(cmd.Description)})
+			rows = append(rows, []string{termtext.Line(c.Name), termtext.Line(c.Description)})
 		}
 	}
 
-	sort.Slice(rows, func(i, j int) bool {
+	// Сортировка по санитизированному имени (как раньше).
+	sort.SliceStable(rows, func(i, j int) bool {
 		return rows[i][0] < rows[j][0]
 	})
 
-	if defaultCmd != "" {
+	if res.HasDefault {
 		var defaultRow []string
 		if verbose {
-			defaultRow = []string{"(default)", "", termtext.Line(manifestPath)}
+			defaultRow = []string{"(default)", "", termtext.Line(res.Manifest)}
 		} else {
 			defaultRow = []string{"(default)", ""}
 		}
@@ -453,33 +405,39 @@ func renderCommandTable(w io.Writer, commands map[string]*execmodule.Command, ma
 }
 
 func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader modulerunner.ModuleLoader) error {
+	return renderChildren(w, core.DescribeChildren(children, loader), verbose)
+}
+
+// renderChildren выводит детей namespace таблицей.
+func renderChildren(w io.Writer, children []core.ChildEntry, verbose bool) error {
 	var rows [][]string
 	for _, c := range children {
+		typ := "namespace"
 		var desc, path string
-		if c.Type == "module" {
-			path = termtext.Line(c.ManifestPath)
+		if c.IsModule {
+			typ = "module"
+			path = termtext.Line(c.Path)
 			if c.Conflict && len(c.ConflictSources) > 0 {
 				// Модуль с одним именем в нескольких sources.
 				desc = "conflict: module in several sources: " + termtext.Line(strings.Join(c.ConflictSources, ", "))
 			} else if c.Conflict {
-				// Resolve для такого имени вернёт ошибку конфликта: описание не грузим.
 				// ManifestPath конфликтной записи — от x.yaml; c.Name в `list -r` —
 				// полный путь (ns.x), поэтому имена файлов берём из пути.
-				base := filepath.Base(c.ManifestPath)
+				base := filepath.Base(c.Path)
 				desc = termtext.Line("conflict: " + base + " and " + strings.TrimSuffix(base, ".yaml") + "/config.yaml")
-			} else if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err != nil {
+			} else if c.LoadErr != nil {
 				// Битый модуль не должен быть неотличим от модуля без описания.
 				// Полную причину (с путём) не печатаем: колонка раздувается, путь
 				// есть в PATH при -v, причину покажет validate.
 				desc = "(error: cannot load module; run 'futi modules validate <namespace>')"
 			} else {
-				desc = termtext.Line(mod.Description)
+				desc = termtext.Line(c.Description)
 			}
 		}
 		if verbose {
-			rows = append(rows, []string{c.Type, termtext.Line(c.Name), desc, path})
+			rows = append(rows, []string{typ, termtext.Line(c.Name), desc, path})
 		} else {
-			rows = append(rows, []string{c.Type, termtext.Line(c.Name), desc})
+			rows = append(rows, []string{typ, termtext.Line(c.Name), desc})
 		}
 	}
 
