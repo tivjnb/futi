@@ -45,6 +45,16 @@ func classify(err error) error {
 	return err
 }
 
+// classifyUnlessPartial classifies err, except when a *discovery.PartialError
+// is in its chain: the result is valid then and the error stays as is.
+func classifyUnlessPartial(err error) error {
+	var partial *discovery.PartialError
+	if errors.As(err, &partial) {
+		return err
+	}
+	return classify(err)
+}
+
 // invalidInput unconditionally marks err as ErrInvalidInput.
 func invalidInput(err error) error {
 	return &classError{err: err, class: ErrInvalidInput}

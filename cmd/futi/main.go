@@ -224,10 +224,10 @@ func cacheSubcommand(args []string) (subcommand string, present bool) {
 // При verbose=true дополнительно выводит списки обновлённых и пропущенных
 // модулей (фикс #15).
 func runCacheRefresh(w io.Writer, cache *modulecache.Cache, globalSource discovery.Source, verbose bool) error {
-	result, err := cache.Refresh(globalSource)
+	result, err := core.RefreshCache(cache, globalSource)
 	var partial *discovery.PartialError
 	if err != nil && !errors.As(err, &partial) {
-		return fmt.Errorf("cache refresh: %w", err)
+		return err
 	}
 	// Частичный листинг: сводка по читаемым sources выводится, ошибка
 	// возвращается в конце — вызывающий покажет предупреждения.
@@ -251,30 +251,27 @@ func runCacheRefresh(w io.Writer, cache *modulecache.Cache, globalSource discove
 			}
 		}
 	}
-	if partial != nil {
-		return fmt.Errorf("cache refresh: %w", err)
-	}
-	return nil
+	return err
 }
 
 // runCacheStatus выводит текущее состояние кэша: политику, время последнего
 // обновления, количество модулей, путь к gob-файлу (фикс #17).
 func runCacheStatus(w io.Writer, cache *modulecache.Cache, cachePath string) error {
-	fmt.Fprintf(w, "Policy: %s\n", cache.PolicyName())
+	st := core.CacheStatusOf(cache, cachePath)
+	fmt.Fprintf(w, "Policy: %s\n", st.Policy)
 
-	lr := cache.LastRefresh()
-	if lr.IsZero() {
+	if st.LastRefresh.IsZero() {
 		fmt.Fprintln(w, "Last refresh: never")
 	} else {
-		fmt.Fprintf(w, "Last refresh: %s\n", lr.Format("2006-01-02 15:04:05"))
+		fmt.Fprintf(w, "Last refresh: %s\n", st.LastRefresh.Format("2006-01-02 15:04:05"))
 	}
 
-	fmt.Fprintf(w, "Modules: %d\n", cache.ModuleCount())
+	fmt.Fprintf(w, "Modules: %d\n", st.Modules)
 
-	if cachePath == "" {
+	if st.Path == "" {
 		fmt.Fprintln(w, "Storage: in-memory (no persistent cache)")
 	} else {
-		fmt.Fprintf(w, "Cache file: %s\n", cachePath)
+		fmt.Fprintf(w, "Cache file: %s\n", st.Path)
 	}
 	return nil
 }
@@ -286,8 +283,8 @@ func runCacheClear(w io.Writer, cachePath string) error {
 		fmt.Fprintln(w, "cache: in-memory only, nothing to clear")
 		return nil
 	}
-	if err := os.Remove(cachePath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("cache clear: remove %s: %w", cachePath, err)
+	if err := core.ClearCache(cachePath); err != nil {
+		return err
 	}
 	fmt.Fprintf(w, "Cache cleared: %s\n", cachePath)
 	return nil
@@ -300,81 +297,32 @@ func runCacheClear(w io.Writer, cachePath string) error {
 // При verbose=true добавляет колонку PATH.
 // loader используется для загрузки модулей (с кэшем или без).
 func runList(w io.Writer, source discovery.Source, namespace string, verbose, recurse bool, loader modulerunner.ModuleLoader) error {
-	// Сначала пробуем резолвить как модуль. Пустой namespace — запрос корня:
-	// Resolve("") вернул бы «invalid namespace», а не ErrNotFound.
-	if namespace != "" {
-		manifestPath, moduleRoot, err := source.Resolve(namespace)
-		if err == nil {
-			return printCommands(w, manifestPath, moduleRoot, verbose, loader)
-		}
-		if !errors.Is(err, discovery.ErrNotFound) {
-			return fmt.Errorf("list: %w", err)
-		}
-	}
-
-	// Не модуль — пробуем progressive resolution для subcommands
-	if namespace != "" {
-		segments := strings.Split(namespace, ".")
-		for i := len(segments) - 1; i > 0; i-- {
-			ns := strings.Join(segments[:i], ".")
-			commandPath := segments[i:]
-
-			manifestPath, moduleRoot, err := source.Resolve(ns)
-			if err != nil {
-				if errors.Is(err, discovery.ErrNotFound) {
-					continue
-				}
-				return fmt.Errorf("list: %w", err)
-			}
-
-			mod, err := modulerunner.LoadModule(loader, manifestPath, moduleRoot)
-			if err != nil {
-				return fmt.Errorf("list: %w", err)
-			}
-
-			cmd, err := mod.ResolveCommandPath(commandPath)
-			if err != nil {
-				return fmt.Errorf("list: %w", err)
-			}
-
-			if len(cmd.Commands) > 0 {
-				return renderCommandTable(w, cmd.Commands, manifestPath, verbose, cmd.Cmd)
-			}
-
-			return fmt.Errorf("list: command %q has no subcommands", strings.Join(commandPath, " "))
-		}
-	}
-
-	// Не модуль и не subcommand — пробуем как namespace
-	var children []discovery.Child
-	var listErr error
-	if recurse {
-		children, listErr = source.ListChildrenRecursive(namespace)
-	} else {
-		children, listErr = source.ListChildren(namespace)
-	}
+	res, err := core.ListIn(source, loader, namespace, recurse)
 	// Частичный листинг: результат валиден, выводим его и возвращаем ошибку,
 	// чтобы вызывающий показал предупреждения.
 	var partial *discovery.PartialError
-	if listErr != nil && !errors.As(listErr, &partial) {
-		return fmt.Errorf("list: %w", listErr)
-	}
-	if len(children) == 0 {
-		fmt.Fprintln(w, "No modules found.")
-		return listErr
-	}
-	if err := printChildren(w, children, verbose, loader); err != nil {
+	if err != nil && !errors.As(err, &partial) {
 		return err
 	}
-	return listErr
+	if res.Kind == core.ListNamespace {
+		if len(res.Children) == 0 {
+			fmt.Fprintln(w, "No modules found.")
+			return err
+		}
+		if rerr := renderChildren(w, res.Children, verbose); rerr != nil {
+			return rerr
+		}
+		return err
+	}
+	return renderCommandTable(w, res, verbose)
 }
 
 func printCommands(w io.Writer, manifestPath, moduleRoot string, verbose bool, loader modulerunner.ModuleLoader) error {
-	mod, err := modulerunner.LoadModule(loader, manifestPath, moduleRoot)
+	res, err := core.ModuleCommands(loader, manifestPath, moduleRoot)
 	if err != nil {
-		return fmt.Errorf("list: %w", err)
+		return err
 	}
-	return renderCommandTable(w, mod.Commands, manifestPath, verbose, mod.Cmd)
+	return renderCommandTable(w, res, verbose)
 }
 
 // runValidate загружает модуль и выводит отчёт валидации схемы.
@@ -382,55 +330,48 @@ func printCommands(w io.Writer, manifestPath, moduleRoot string, verbose bool, l
 // списка ошибок и предупреждений за один проход.
 // Возвращает error только если есть errors (warnings не блокируют).
 func runValidate(w io.Writer, source discovery.Source, namespace string) error {
-	manifestPath, moduleRoot, err := source.Resolve(namespace)
+	rep, err := core.ValidateIn(source, namespace)
 	if err != nil {
-		return fmt.Errorf("validate: %w", err)
+		return err
 	}
 
-	// ParseModule — raw парсинг без валидации. LoadModule здесь не подходит,
-	// т.к. он падает на первой ошибке, а validate должен показать все.
-	mod, err := execmodule.ParseModule(manifestPath, moduleRoot)
-	if err != nil {
-		return fmt.Errorf("validate: %w", err)
-	}
-
-	errors, warnings := mod.Validate()
-	report, hasErrors := execmodule.FormatValidateReport(errors, warnings)
+	report, hasErrors := execmodule.FormatValidateReport(rep.Errors, rep.Warnings)
 	fmt.Fprint(w, report)
 
 	if hasErrors {
-		return fmt.Errorf("validate: module %q has %d error(s)", namespace, len(errors))
+		return fmt.Errorf("validate: module %q has %d error(s)", namespace, len(rep.Errors))
 	}
 	return nil
 }
 
-// renderCommandTable выводит map команд в виде отсортированной таблицы.
-// Используется для top-level команд модуля и для subcommands.
-// defaultCmd — если не пустой, добавляет строку (default) первой в таблице
-// (для отображения default cmd модуля или fallback cmd subcommand).
-func renderCommandTable(w io.Writer, commands map[string]*execmodule.Command, manifestPath string, verbose bool, defaultCmd string) error {
-	if len(commands) == 0 && defaultCmd == "" {
+// renderCommandTable prints commands as a table, used for a module's
+// top-level commands and for subcommands.
+// res.HasDefault adds a (default) row first in the table (the module's
+// default cmd or the subcommand's fallback cmd).
+func renderCommandTable(w io.Writer, res core.ListResult, verbose bool) error {
+	if len(res.Commands) == 0 && !res.HasDefault {
 		fmt.Fprintln(w, "No commands found.")
 		return nil
 	}
 
 	var rows [][]string
-	for name, cmd := range commands {
+	for _, c := range res.Commands {
 		if verbose {
-			rows = append(rows, []string{termtext.Line(name), termtext.Line(cmd.Description), termtext.Line(manifestPath)})
+			rows = append(rows, []string{termtext.Line(c.Name), termtext.Line(c.Description), termtext.Line(res.Manifest)})
 		} else {
-			rows = append(rows, []string{termtext.Line(name), termtext.Line(cmd.Description)})
+			rows = append(rows, []string{termtext.Line(c.Name), termtext.Line(c.Description)})
 		}
 	}
 
-	sort.Slice(rows, func(i, j int) bool {
+	// Sort by the sanitized name.
+	sort.SliceStable(rows, func(i, j int) bool {
 		return rows[i][0] < rows[j][0]
 	})
 
-	if defaultCmd != "" {
+	if res.HasDefault {
 		var defaultRow []string
 		if verbose {
-			defaultRow = []string{"(default)", "", termtext.Line(manifestPath)}
+			defaultRow = []string{"(default)", "", termtext.Line(res.Manifest)}
 		} else {
 			defaultRow = []string{"(default)", ""}
 		}
@@ -453,33 +394,39 @@ func renderCommandTable(w io.Writer, commands map[string]*execmodule.Command, ma
 }
 
 func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader modulerunner.ModuleLoader) error {
+	return renderChildren(w, core.DescribeChildren(children, loader), verbose)
+}
+
+// renderChildren prints the children of a namespace as a table.
+func renderChildren(w io.Writer, children []core.ChildEntry, verbose bool) error {
 	var rows [][]string
 	for _, c := range children {
+		typ := "namespace"
 		var desc, path string
-		if c.Type == "module" {
-			path = termtext.Line(c.ManifestPath)
+		if c.IsModule {
+			typ = "module"
+			path = termtext.Line(c.Path)
 			if c.Conflict && len(c.ConflictSources) > 0 {
 				// Модуль с одним именем в нескольких sources.
 				desc = "conflict: module in several sources: " + termtext.Line(strings.Join(c.ConflictSources, ", "))
 			} else if c.Conflict {
-				// Resolve для такого имени вернёт ошибку конфликта: описание не грузим.
 				// ManifestPath конфликтной записи — от x.yaml; c.Name в `list -r` —
 				// полный путь (ns.x), поэтому имена файлов берём из пути.
-				base := filepath.Base(c.ManifestPath)
+				base := filepath.Base(c.Path)
 				desc = termtext.Line("conflict: " + base + " and " + strings.TrimSuffix(base, ".yaml") + "/config.yaml")
-			} else if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err != nil {
+			} else if c.LoadErr != nil {
 				// Битый модуль не должен быть неотличим от модуля без описания.
 				// Полную причину (с путём) не печатаем: колонка раздувается, путь
 				// есть в PATH при -v, причину покажет validate.
 				desc = "(error: cannot load module; run 'futi modules validate <namespace>')"
 			} else {
-				desc = termtext.Line(mod.Description)
+				desc = termtext.Line(c.Description)
 			}
 		}
 		if verbose {
-			rows = append(rows, []string{c.Type, termtext.Line(c.Name), desc, path})
+			rows = append(rows, []string{typ, termtext.Line(c.Name), desc, path})
 		} else {
-			rows = append(rows, []string{c.Type, termtext.Line(c.Name), desc})
+			rows = append(rows, []string{typ, termtext.Line(c.Name), desc})
 		}
 	}
 
@@ -1078,9 +1025,9 @@ func main() {
 	}
 
 	// `futi cache <subcommand>` — fast path ДО cache.Start, чтобы избежать
-	// двойного Refresh (Start с AlwaysPolicy + runCacheRefresh). Для refresh:
-	// cache.Load() загружает с диска без Refresh, затем runCacheRefresh —
-	// единственный Refresh с корректным mtime+size сравнением.
+	// двойного Refresh (Start с AlwaysPolicy + runCacheRefresh). Loading from disk
+	// (Load) happens inside core.RefreshCache / core.CacheStatusOf; runCacheRefresh
+	// is then the only Refresh, with a correct mtime+size comparison.
 	if subcmd, ok := cacheSubcommand(os.Args[1:]); ok {
 		cache := rt.Cache()
 		cachePath := rt.CachePath()
@@ -1093,14 +1040,12 @@ func main() {
 					verbose = true
 				}
 			}
-			cache.Load() // load from disk without Refresh
 			if err := runCacheRefresh(os.Stdout, cache, rt.GlobalSource(), verbose); err != nil && !printPartialWarnings(os.Stderr, err) {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
 			}
 			return
 		case "status":
-			cache.Load() // populate from disk for accurate module count
 			if err := runCacheStatus(os.Stdout, cache, cachePath); err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
