@@ -21,9 +21,9 @@ var stdinIsTerminal = func() bool {
 // remove_command/uninstall/update) и кэш (Invalidate после install/uninstall/
 // update) берутся из него внутри ветки подкоманды; init, usage и unknown
 // работают с rt == nil.
-// args — аргументы после "modules" (os.Args[2:]).
-// stdin — для интерактивных подтверждений install/update/uninstall (os.Stdin в main).
-func runModules(w io.Writer, stdin io.Reader, rt *core.Runtime, args []string) error {
+// args — аргументы после "modules" (args[2:]).
+// stdin — для интерактивных подтверждений install/update/uninstall (stdin, переданный в Main).
+func runModules(w, errw io.Writer, stdin io.Reader, rt *core.Runtime, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: futi modules <subcommand> (subcommands: init, install, uninstall, update, info, validate, list, add_command, remove_command, path)")
 	}
@@ -31,15 +31,15 @@ func runModules(w io.Writer, stdin io.Reader, rt *core.Runtime, args []string) e
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "init":
-		return runModulesInit(w, rest)
+		return runModulesInit(w, errw, rest)
 	case "install":
-		return runModulesInstall(w, stdin, rt, rest)
+		return runModulesInstall(w, errw, stdin, rt, rest)
 	case "uninstall":
-		return runModulesUninstall(w, stdin, rt, rest)
+		return runModulesUninstall(w, errw, stdin, rt, rest)
 	case "update":
-		return runModulesUpdate(w, stdin, rt, rest)
+		return runModulesUpdate(w, errw, stdin, rt, rest)
 	case "info":
-		return runModulesInfo(w, rt, rest)
+		return runModulesInfo(w, errw, rt, rest)
 	case "validate":
 		source, err := rt.Source()
 		if err != nil {
@@ -47,13 +47,13 @@ func runModules(w io.Writer, stdin io.Reader, rt *core.Runtime, args []string) e
 		}
 		return runModulesValidate(w, source, rest)
 	case "list":
-		return runModulesList(w, rt, rest)
+		return runModulesList(w, errw, rt, rest)
 	case "add_command":
-		return runModulesAddCommand(w, rt, rest)
+		return runModulesAddCommand(w, errw, rt, rest)
 	case "remove_command":
-		return runModulesRemoveCommand(w, rt, rest)
+		return runModulesRemoveCommand(w, errw, rt, rest)
 	case "path":
-		return runModulesPath(w, rt, rest)
+		return runModulesPath(w, errw, rt, rest)
 	default:
 		return fmt.Errorf("unknown modules subcommand %q", sub)
 	}

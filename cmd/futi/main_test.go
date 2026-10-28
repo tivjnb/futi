@@ -791,7 +791,7 @@ func TestModulesValidate(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := runModules(&buf, nil, rt, []string{"validate", "good"}); err != nil {
+	if err := runModules(&buf, io.Discard, nil, rt, []string{"validate", "good"}); err != nil {
 		t.Fatalf("good: %v", err)
 	}
 	if !strings.Contains(buf.String(), "OK") {
@@ -799,7 +799,7 @@ func TestModulesValidate(t *testing.T) {
 	}
 
 	buf.Reset()
-	err = runModules(&buf, nil, rt, []string{"validate", "bad"})
+	err = runModules(&buf, io.Discard, nil, rt, []string{"validate", "bad"})
 	if err == nil || !strings.Contains(buf.String(), "ERROR") {
 		t.Errorf("bad: err=%v out=%q, want ERROR report and error", err, buf.String())
 	}
@@ -808,13 +808,13 @@ func TestModulesValidate(t *testing.T) {
 	for _, args := range [][]string{
 		{"validate"}, {"validate", "a", "b"}, {"validate", "-h"}, {"validate", "--help"}, {"validate", "good", "--x"},
 	} {
-		err := runModules(io.Discard, nil, rt, args)
+		err := runModules(io.Discard, io.Discard, nil, rt, args)
 		if err == nil || err.Error() != usage {
 			t.Errorf("%v: err = %v, want %q", args, err, usage)
 		}
 	}
 
-	if err := runModules(io.Discard, nil, rt, []string{"validate", "a/b"}); err == nil || !strings.Contains(err.Error(), "invalid module name") {
+	if err := runModules(io.Discard, io.Discard, nil, rt, []string{"validate", "a/b"}); err == nil || !strings.Contains(err.Error(), "invalid module name") {
 		t.Errorf("a/b: err = %v, want invalid module name", err)
 	}
 }

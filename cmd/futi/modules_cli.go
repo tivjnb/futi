@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/olekukonko/tablewriter"
@@ -14,29 +13,29 @@ import (
 	"github.com/tivjnb/futi/internal/termtext"
 )
 
-// cliStreams wires the manager to the process streams. w receives progress
-// output; stdin supplies answers to prompts. The Interactive check is a
-// closure so tests can replace stdinIsTerminal.
-func cliStreams(w io.Writer, stdin io.Reader) modules.Streams {
+// cliStreams wires the manager to the given streams. out receives progress
+// output, errw diagnostics; stdin supplies answers to prompts. The Interactive
+// check is a closure so tests can replace stdinIsTerminal.
+func cliStreams(out, errw io.Writer, stdin io.Reader) modules.Streams {
 	return modules.Streams{
 		Prompt: modules.NewPrompter(stdin, func() bool { return stdinIsTerminal() }),
-		Out:    w,
-		Err:    os.Stderr,
-		Stdin:  os.Stdin,
+		Out:    out,
+		Err:    errw,
+		Stdin:  stdin,
 	}
 }
 
-// newCLIManager builds a Manager writing to w and reading answers from stdin.
-func newCLIManager(w io.Writer, stdin io.Reader, rt *core.Runtime) *modules.Manager {
-	return modules.New(rt, cliStreams(w, stdin))
+// newCLIManager builds a Manager writing to out and errw and reading answers from stdin.
+func newCLIManager(out, errw io.Writer, stdin io.Reader, rt *core.Runtime) *modules.Manager {
+	return modules.New(rt, cliStreams(out, errw, stdin))
 }
 
 // runModulesPath — `futi modules path <name>`: prints the module directory.
-func runModulesPath(w io.Writer, rt *core.Runtime, args []string) error {
+func runModulesPath(w, errw io.Writer, rt *core.Runtime, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: futi modules path <name>")
 	}
-	dir, err := newCLIManager(w, nil, rt).Path(args[0])
+	dir, err := newCLIManager(w, errw, nil, rt).Path(args[0])
 	if err != nil {
 		return err
 	}
@@ -46,11 +45,11 @@ func runModulesPath(w io.Writer, rt *core.Runtime, args []string) error {
 
 // runModulesInfo — `futi modules info <name>`: prints the path and the
 // __futi_meta.yaml contents. A module without a sidecar gets a note.
-func runModulesInfo(w io.Writer, rt *core.Runtime, args []string) error {
+func runModulesInfo(w, errw io.Writer, rt *core.Runtime, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: futi modules info <name>")
 	}
-	info, err := newCLIManager(w, nil, rt).Info(args[0])
+	info, err := newCLIManager(w, errw, nil, rt).Info(args[0])
 	if info.Root != "" {
 		fmt.Fprintf(w, "Path: %s\n", termtext.Line(info.Root))
 	}
@@ -99,11 +98,11 @@ func runModulesInfo(w io.Writer, rt *core.Runtime, args []string) error {
 }
 
 // runModulesList — `futi modules list`: prints the installed modules.
-func runModulesList(w io.Writer, rt *core.Runtime, args []string) error {
+func runModulesList(w, errw io.Writer, rt *core.Runtime, args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: futi modules list")
 	}
-	entries, err := newCLIManager(w, nil, rt).List()
+	entries, err := newCLIManager(w, errw, nil, rt).List()
 	if err != nil {
 		return err
 	}
@@ -223,12 +222,12 @@ func parseInitArgs(args []string) (*modules.InitOptions, error) {
 }
 
 // runModulesInit — `futi modules init`: parses args and creates the module.
-func runModulesInit(w io.Writer, args []string) error {
+func runModulesInit(w, errw io.Writer, args []string) error {
 	opts, err := parseInitArgs(args)
 	if err != nil {
 		return err
 	}
-	return modules.Init(w, os.Stderr, *opts)
+	return modules.Init(w, errw, *opts)
 }
 
 // parseAddCommandArgs разбирает аргументы: позиционные module, command;
@@ -290,24 +289,24 @@ func parseAddCommandArgs(args []string) (*modules.AddCommandOptions, error) {
 
 // runModulesAddCommand — `futi modules add_command`: adds a command to the
 // module's config.yaml.
-func runModulesAddCommand(w io.Writer, rt *core.Runtime, args []string) error {
+func runModulesAddCommand(w, errw io.Writer, rt *core.Runtime, args []string) error {
 	opts, err := parseAddCommandArgs(args)
 	if err != nil {
 		return err
 	}
-	return newCLIManager(w, nil, rt).AddCommand(*opts)
+	return newCLIManager(w, errw, nil, rt).AddCommand(*opts)
 }
 
 // runModulesRemoveCommand — `futi modules remove_command`: removes a command
 // from the module's config.yaml.
-func runModulesRemoveCommand(w io.Writer, rt *core.Runtime, args []string) error {
+func runModulesRemoveCommand(w, errw io.Writer, rt *core.Runtime, args []string) error {
 	if len(args) != 2 {
 		return fmt.Errorf("usage: futi modules remove_command <module> <command>")
 	}
 	if err := modules.ValidateResolveName(args[0]); err != nil {
 		return err
 	}
-	return newCLIManager(w, nil, rt).RemoveCommand(modules.RemoveCommandOptions{Module: args[0], Command: args[1]})
+	return newCLIManager(w, errw, nil, rt).RemoveCommand(modules.RemoveCommandOptions{Module: args[0], Command: args[1]})
 }
 
 // parseUninstallArgs разбирает аргументы uninstall.
@@ -350,12 +349,12 @@ func parseUninstallArgs(args []string) (*modules.UninstallOptions, error) {
 
 // runModulesUninstall — `futi modules uninstall`: parses args and removes the
 // module. stdin supplies the confirmation answer.
-func runModulesUninstall(w io.Writer, stdin io.Reader, rt *core.Runtime, args []string) error {
+func runModulesUninstall(w, errw io.Writer, stdin io.Reader, rt *core.Runtime, args []string) error {
 	opts, err := parseUninstallArgs(args)
 	if err != nil {
 		return err
 	}
-	return newCLIManager(w, stdin, rt).Uninstall(context.Background(), *opts)
+	return newCLIManager(w, errw, stdin, rt).Uninstall(context.Background(), *opts)
 }
 
 // parseInstallArgs разбирает аргументы install (паттерн requireValue).
@@ -431,12 +430,12 @@ func parseInstallArgs(args []string) (*modules.InstallOptions, error) {
 
 // runModulesInstall — `futi modules install`: parses args and installs the
 // module. stdin supplies the attach confirmation answer.
-func runModulesInstall(w io.Writer, stdin io.Reader, rt *core.Runtime, args []string) error {
+func runModulesInstall(w, errw io.Writer, stdin io.Reader, rt *core.Runtime, args []string) error {
 	opts, err := parseInstallArgs(args)
 	if err != nil {
 		return err
 	}
-	return newCLIManager(w, stdin, rt).Install(context.Background(), *opts)
+	return newCLIManager(w, errw, stdin, rt).Install(context.Background(), *opts)
 }
 
 // parseUpdateArgs разбирает аргументы update.
@@ -474,10 +473,10 @@ func parseUpdateArgs(args []string) (*modules.UpdateOptions, error) {
 
 // runModulesUpdate — `futi modules update`: parses args and updates the named
 // module or all installed ones. stdin answers replacement and attach prompts.
-func runModulesUpdate(w io.Writer, stdin io.Reader, rt *core.Runtime, args []string) error {
+func runModulesUpdate(w, errw io.Writer, stdin io.Reader, rt *core.Runtime, args []string) error {
 	opts, err := parseUpdateArgs(args)
 	if err != nil {
 		return err
 	}
-	return newCLIManager(w, stdin, rt).Update(context.Background(), *opts)
+	return newCLIManager(w, errw, stdin, rt).Update(context.Background(), *opts)
 }
