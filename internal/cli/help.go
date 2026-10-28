@@ -90,3 +90,21 @@ func runSystemHelp(w io.Writer, source discovery.Source, loader modulerunner.Mod
 	}
 	return err
 }
+
+// systemHelpCode печатает справку по пути в stdout и возвращает код выхода:
+// 0 (в том числе при частичном листинге — предупреждения в stderr) или 1 с
+// ошибкой в stderr.
+func systemHelpCode(stdout, stderr io.Writer, source discovery.Source, loader modulerunner.ModuleLoader, path []string) int {
+	if err := runSystemHelp(stdout, source, loader, path); err != nil {
+		if printPartialWarnings(stderr, err) {
+			return 0
+		}
+		msg := err.Error()
+		if coveredByWarning(err) {
+			msg = coveredReadMessage("help", strings.Join(path, "."))
+		}
+		fmt.Fprintf(stderr, "%s\n", withValidateHint(msg, err, path, source))
+		return 1
+	}
+	return 0
+}
