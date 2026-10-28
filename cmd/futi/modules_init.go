@@ -12,105 +12,29 @@ import (
 	"github.com/tivjnb/futi/internal/execmodule"
 )
 
-// initConfig — параметры подкоманды futi modules init.
-type initConfig struct {
-	path        string   // путь модуля (может содержать / для namespace)
-	global      bool     // создавать в ~/.config/futi/modules/ вместо CWD
-	description string   // описание модуля
-	defaultCmd  string   // cmd на уровне модуля
-	commands    []string // имена команд для шаблона
+// InitOptions are the parameters of `futi modules init`.
+type InitOptions struct {
+	Path        string   // путь модуля (может содержать / для namespace)
+	Global      bool     // создавать в ~/.config/futi/modules/ вместо CWD
+	Description string   // описание модуля
+	DefaultCmd  string   // cmd на уровне модуля
+	Commands    []string // имена команд для шаблона
 }
 
-// parseInitArgs разбирает аргументы подкоманды futi modules init.
-// Позиционный аргумент — path (обязательный). Флаги:
-// --global, --desc <value>, --default-cmd <value>, --command <name> (repeatable).
-// Флаги, требующие значение (--desc, --default-cmd, --command), отклоняют
-// значения, начинающиеся с -- (фикс #48).
-func parseInitArgs(args []string) (*initConfig, error) {
-	cfg := &initConfig{}
-	var positional []string
-
-	// requireValue извлекает значение для флага и проверяет, что оно не
-	// начинается с -- (фикс #48 — --desc --global не должно захватывать --global).
-	requireValue := func(flagName string, i int) (string, error) {
-		if i+1 >= len(args) {
-			return "", fmt.Errorf("%s requires a value", flagName)
-		}
-		val := args[i+1]
-		if strings.HasPrefix(val, "--") {
-			return "", fmt.Errorf("%s requires a value, got flag %s", flagName, val)
-		}
-		return val, nil
-	}
-
-	i := 0
-	for i < len(args) {
-		arg := args[i]
-		switch {
-		case arg == "--global":
-			cfg.global = true
-		case arg == "--desc":
-			val, err := requireValue("--desc", i)
-			if err != nil {
-				return nil, err
-			}
-			cfg.description = val
-			i++
-		case strings.HasPrefix(arg, "--desc="):
-			cfg.description = strings.TrimPrefix(arg, "--desc=")
-		case arg == "--default-cmd":
-			val, err := requireValue("--default-cmd", i)
-			if err != nil {
-				return nil, err
-			}
-			cfg.defaultCmd = val
-			i++
-		case strings.HasPrefix(arg, "--default-cmd="):
-			cfg.defaultCmd = strings.TrimPrefix(arg, "--default-cmd=")
-		case arg == "--command":
-			val, err := requireValue("--command", i)
-			if err != nil {
-				return nil, err
-			}
-			cfg.commands = append(cfg.commands, val)
-			i++
-		case strings.HasPrefix(arg, "--command="):
-			cfg.commands = append(cfg.commands, strings.TrimPrefix(arg, "--command="))
-		case strings.HasPrefix(arg, "--"):
-			return nil, fmt.Errorf("unknown flag: %s", arg)
-		default:
-			positional = append(positional, arg)
-		}
-		i++
-	}
-
-	if len(positional) == 0 {
-		return nil, fmt.Errorf("usage: futi modules init <name> [flags]")
-	}
-	if len(positional) > 1 {
-		return nil, fmt.Errorf("expected one path argument, got %d", len(positional))
-	}
-	cfg.path = positional[0]
-
+// validateInitPath checks the module path given to init: the name must be
+// valid and no segment may be a reserved word.
+func validateInitPath(path string) error {
 	// F57: зарезервированное слово запрещено в любом сегменте пути.
-	trimmed := cfg.path
+	trimmed := path
 	if strings.HasSuffix(trimmed, ".yaml") {
 		trimmed = strings.TrimSuffix(trimmed, ".yaml")
 	} else {
 		trimmed = strings.TrimSuffix(trimmed, ".yml")
 	}
 	if err := validateModuleName(filepath.ToSlash(trimmed)); err != nil {
-		return nil, err
+		return err
 	}
-	if err := checkReservedSegments(filepath.ToSlash(trimmed), "/"); err != nil {
-		return nil, err
-	}
-
-	if cfg.description == "" {
-		cfg.description = "My tool"
-	}
-
-	return cfg, nil
+	return checkReservedSegments(filepath.ToSlash(trimmed), "/")
 }
 
 // targetFilePath возвращает путь к файлу модуля.
@@ -118,14 +42,14 @@ func parseInitArgs(args []string) (*initConfig, error) {
 // Глобально: <globalDir>/<path>.yaml (globalDir — из core.DefaultModulesDir).
 // #40: отклоняет path с .. (path traversal за пределы base).
 // #45: не добавляет .yaml, если path уже заканчивается на .yaml/.yml.
-func targetFilePath(cfg *initConfig, globalDir string) (string, error) {
+func targetFilePath(opts *InitOptions, globalDir string) (string, error) {
 	base := ".futi"
-	if cfg.global {
+	if opts.Global {
 		base = globalDir
 	}
 
 	// #45: не добавляем .yaml, если уже есть расширение.
-	path := cfg.path
+	path := opts.Path
 	if !strings.HasSuffix(path, ".yaml") && !strings.HasSuffix(path, ".yml") {
 		path += ".yaml"
 	}
@@ -138,7 +62,7 @@ func targetFilePath(cfg *initConfig, globalDir string) (string, error) {
 		return "", fmt.Errorf("path: %w", err)
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q is outside the modules directory", cfg.path)
+		return "", fmt.Errorf("path %q is outside the modules directory", opts.Path)
 	}
 	if err := validateSegmentsNoDot(strings.TrimSuffix(strings.TrimSuffix(rel, ".yaml"), ".yml")); err != nil {
 		return "", err
@@ -147,14 +71,14 @@ func targetFilePath(cfg *initConfig, globalDir string) (string, error) {
 	if strings.HasSuffix(fullPath, ".yaml") {
 		dirConfig := filepath.Join(strings.TrimSuffix(fullPath, ".yaml"), "config.yaml")
 		if _, err := os.Stat(dirConfig); err == nil {
-			return "", fmt.Errorf("module %q already exists at %s", cfg.path, dirConfig)
+			return "", fmt.Errorf("module %q already exists at %s", opts.Path, dirConfig)
 		}
 	}
 	// Симметрично: x/config.yaml при существующем x.yaml.
 	if filepath.Base(fullPath) == "config.yaml" && filepath.Dir(fullPath) != base {
 		siblingYAML := filepath.Dir(fullPath) + ".yaml"
 		if _, err := os.Stat(siblingYAML); err == nil {
-			return "", fmt.Errorf("module %q already exists at %s", cfg.path, siblingYAML)
+			return "", fmt.Errorf("module %q already exists at %s", opts.Path, siblingYAML)
 		}
 	}
 
@@ -202,22 +126,24 @@ func quoteYAMLValue(s string) string {
 	return fmt.Sprintf("%q", s)
 }
 
-// runModulesInit создаёт новый модуль с шаблоном YAML
-// (подкоманда `futi modules init`).
-// Парсит path + флаги, генерирует шаблон, пишет файл.
+// Init создаёт новый модуль с шаблоном YAML (подкоманда `futi modules init`).
+// Генерирует шаблон и пишет файл; сообщения идут в out, предупреждения — в errOut.
 // Возвращает ошибку при существующем файле (без перезаписи).
 // #44: использует O_EXCL вместо Stat+WriteFile для атомарной проверки.
-func runModulesInit(w io.Writer, args []string) error {
-	cfg, err := parseInitArgs(args)
-	if err != nil {
+func Init(out, errOut io.Writer, opts InitOptions) error {
+	if err := validateInitPath(opts.Path); err != nil {
 		return err
+	}
+	if opts.Description == "" {
+		opts.Description = "My tool"
 	}
 
 	// Глобальный каталог и config.yaml — до записи: ошибка не должна
 	// прийти после «Created:». Конфиг нужен для сообщения о видимости модуля.
+	var err error
 	var globalDir string
 	var futiCfg *config.Config
-	if cfg.global {
+	if opts.Global {
 		if globalDir, err = core.DefaultModulesDir(); err != nil {
 			return fmt.Errorf("modules dir: %w", err)
 		}
@@ -225,15 +151,15 @@ func runModulesInit(w io.Writer, args []string) error {
 			return err
 		}
 	}
-	targetPath, err := targetFilePath(cfg, globalDir)
+	targetPath, err := targetFilePath(&opts, globalDir)
 	if err != nil {
 		return err
 	}
 
-	name := filepath.Base(cfg.path)
+	name := filepath.Base(opts.Path)
 	name = strings.TrimSuffix(name, ".yaml")
 	name = strings.TrimSuffix(name, ".yml")
-	yaml := generateModuleYAML(name, cfg.description, cfg.defaultCmd, cfg.commands)
+	yaml := generateModuleYAML(name, opts.Description, opts.DefaultCmd, opts.Commands)
 
 	// Сгенерированный манифест проверяется правилами схемы до записи:
 	// иначе init сообщит об успехе, а модуль не загрузится.
@@ -275,9 +201,9 @@ func runModulesInit(w io.Writer, args []string) error {
 	if resolved, err := filepath.EvalSymlinks(targetPath); err == nil {
 		displayPath = resolved
 	}
-	fmt.Fprintf(w, "Created: %s\n", displayPath)
-	if cfg.global {
-		reportSourcesVisibility(w, os.Stderr, futiCfg, globalDir, initModuleName(cfg.path))
+	fmt.Fprintf(out, "Created: %s\n", displayPath)
+	if opts.Global {
+		reportSourcesVisibility(out, errOut, futiCfg, globalDir, initModuleName(opts.Path))
 	}
 	return nil
 }

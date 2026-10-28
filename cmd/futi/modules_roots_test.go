@@ -243,15 +243,12 @@ func TestModulesInitGlobalWarnsRootNotInSources(t *testing.T) {
 	t.Setenv("FUTI_MODULES_DIR", global)
 	t.Chdir(t.TempDir())
 
-	var err error
-	stderr := captureStderr(t, func() {
-		err = runModulesInit(&bytes.Buffer{}, []string{"tools/qr", "--global"})
-	})
-	if err != nil {
-		t.Fatalf("runModulesInit: %v", err)
+	var stderr bytes.Buffer
+	if err := Init(&bytes.Buffer{}, &stderr, InitOptions{Path: "tools/qr", Global: true}); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
-	if !strings.Contains(stderr, global+" is not listed in config.yaml sources; add it there to use, update or uninstall the module by name") {
-		t.Fatalf("stderr lacks sources warning:\n%s", stderr)
+	if !strings.Contains(stderr.String(), global+" is not listed in config.yaml sources; add it there to use, update or uninstall the module by name") {
+		t.Fatalf("stderr lacks sources warning:\n%s", stderr.String())
 	}
 }
 
@@ -262,8 +259,8 @@ func TestModulesInitGlobalReportsPrefixedName(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var b bytes.Buffer
-	if err := runModulesInit(&b, []string{"tools/qr", "--global"}); err != nil {
-		t.Fatalf("runModulesInit: %v", err)
+	if err := Init(&b, io.Discard, InitOptions{Path: "tools/qr", Global: true}); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
 	if !strings.Contains(b.String(), "Module is available as dev.tools.qr") {
 		t.Fatalf("output lacks prefixed name:\n%s", b.String())

@@ -204,3 +204,44 @@ func TestModulesRootsInvalidConfig(t *testing.T) {
 		t.Fatalf("NewRuntime err = %v, want config: error", err)
 	}
 }
+
+// TestRunInitNoArgsError проверяет, что без path возвращается ошибка.
+func TestRunInitNoArgsError(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var buf bytes.Buffer
+	err := runModulesInit(&buf, []string{})
+	if err == nil {
+		t.Fatal("expected error for missing path")
+	}
+}
+
+// --- #48: --desc captures next flag ---
+
+// TestParseInitArgsDescDoesNotCaptureFlag проверяет, что --desc --global
+// возвращает ошибку, а не захватывает --global как значение (фикс #48).
+func TestParseInitArgsDescDoesNotCaptureFlag(t *testing.T) {
+	_, err := parseInitArgs([]string{"mytool", "--desc", "--global"})
+	if err == nil {
+		t.Fatal("expected error when --desc is followed by --global")
+	}
+	if !strings.Contains(err.Error(), "--desc") {
+		t.Fatalf("expected error mentioning --desc, got: %v", err)
+	}
+}
+
+// TestParseInitArgsDefaultCmdDoesNotCaptureFlag проверяет тоже для --default-cmd.
+func TestParseInitArgsDefaultCmdDoesNotCaptureFlag(t *testing.T) {
+	_, err := parseInitArgs([]string{"mytool", "--default-cmd", "--global"})
+	if err == nil {
+		t.Fatal("expected error when --default-cmd is followed by --global")
+	}
+}
+
+// TestParseInitArgsCommandDoesNotCaptureFlag проверяет тоже для --command.
+func TestParseInitArgsCommandDoesNotCaptureFlag(t *testing.T) {
+	_, err := parseInitArgs([]string{"mytool", "--command", "--global"})
+	if err == nil {
+		t.Fatal("expected error when --command is followed by --global")
+	}
+}

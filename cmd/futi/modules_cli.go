@@ -138,3 +138,94 @@ func runModulesList(w io.Writer, rt *core.Runtime, args []string) error {
 	}
 	return tw.Render()
 }
+
+// parseInitArgs разбирает аргументы подкоманды futi modules init.
+// Позиционный аргумент — path (обязательный). Флаги:
+// --global, --desc <value>, --default-cmd <value>, --command <name> (repeatable).
+// Флаги, требующие значение (--desc, --default-cmd, --command), отклоняют
+// значения, начинающиеся с -- (фикс #48).
+func parseInitArgs(args []string) (*InitOptions, error) {
+	cfg := &InitOptions{}
+	var positional []string
+
+	// requireValue извлекает значение для флага и проверяет, что оно не
+	// начинается с -- (фикс #48 — --desc --global не должно захватывать --global).
+	requireValue := func(flagName string, i int) (string, error) {
+		if i+1 >= len(args) {
+			return "", fmt.Errorf("%s requires a value", flagName)
+		}
+		val := args[i+1]
+		if strings.HasPrefix(val, "--") {
+			return "", fmt.Errorf("%s requires a value, got flag %s", flagName, val)
+		}
+		return val, nil
+	}
+
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		switch {
+		case arg == "--global":
+			cfg.Global = true
+		case arg == "--desc":
+			val, err := requireValue("--desc", i)
+			if err != nil {
+				return nil, err
+			}
+			cfg.Description = val
+			i++
+		case strings.HasPrefix(arg, "--desc="):
+			cfg.Description = strings.TrimPrefix(arg, "--desc=")
+		case arg == "--default-cmd":
+			val, err := requireValue("--default-cmd", i)
+			if err != nil {
+				return nil, err
+			}
+			cfg.DefaultCmd = val
+			i++
+		case strings.HasPrefix(arg, "--default-cmd="):
+			cfg.DefaultCmd = strings.TrimPrefix(arg, "--default-cmd=")
+		case arg == "--command":
+			val, err := requireValue("--command", i)
+			if err != nil {
+				return nil, err
+			}
+			cfg.Commands = append(cfg.Commands, val)
+			i++
+		case strings.HasPrefix(arg, "--command="):
+			cfg.Commands = append(cfg.Commands, strings.TrimPrefix(arg, "--command="))
+		case strings.HasPrefix(arg, "--"):
+			return nil, fmt.Errorf("unknown flag: %s", arg)
+		default:
+			positional = append(positional, arg)
+		}
+		i++
+	}
+
+	if len(positional) == 0 {
+		return nil, fmt.Errorf("usage: futi modules init <name> [flags]")
+	}
+	if len(positional) > 1 {
+		return nil, fmt.Errorf("expected one path argument, got %d", len(positional))
+	}
+	cfg.Path = positional[0]
+
+	if err := validateInitPath(cfg.Path); err != nil {
+		return nil, err
+	}
+
+	if cfg.Description == "" {
+		cfg.Description = "My tool"
+	}
+
+	return cfg, nil
+}
+
+// runModulesInit — `futi modules init`: parses args and creates the module.
+func runModulesInit(w io.Writer, args []string) error {
+	opts, err := parseInitArgs(args)
+	if err != nil {
+		return err
+	}
+	return Init(w, os.Stderr, *opts)
+}

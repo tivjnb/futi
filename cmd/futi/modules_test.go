@@ -37,17 +37,17 @@ func TestRunModulesUnknownSubcommand(t *testing.T) {
 func TestRunModulesInitRejectsInvalidManifest(t *testing.T) {
 	tests := []struct {
 		name string
-		args []string
+		opts InitOptions
 	}{
-		{"command with space", []string{"foo", "--command", "build image"}},
-		{"command starts with dash", []string{"foo", "--command", "-x"}},
-		{"command with dot", []string{"foo", "--command", "a.b"}},
-		{"broken default cmd template", []string{"foo", "--default-cmd", "echo {{"}},
+		{"command with space", InitOptions{Path: "foo", Commands: []string{"build image"}}},
+		{"command starts with dash", InitOptions{Path: "foo", Commands: []string{"-x"}}},
+		{"command with dot", InitOptions{Path: "foo", Commands: []string{"a.b"}}},
+		{"broken default cmd template", InitOptions{Path: "foo", DefaultCmd: "echo {{"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Chdir(t.TempDir())
-			err := runModulesInit(io.Discard, tc.args)
+			err := Init(io.Discard, io.Discard, tc.opts)
 			if err == nil || !strings.Contains(err.Error(), "invalid module") {
 				t.Fatalf("err = %v, want invalid module error", err)
 			}
@@ -61,8 +61,8 @@ func TestRunModulesInitRejectsInvalidManifest(t *testing.T) {
 func TestRunModulesInitValidManifestStillWritten(t *testing.T) {
 	t.Chdir(t.TempDir())
 	var b bytes.Buffer
-	if err := runModulesInit(&b, []string{"foo", "--command", "build", "--default-cmd", "echo hi"}); err != nil {
-		t.Fatalf("runModulesInit: %v", err)
+	if err := Init(&b, io.Discard, InitOptions{Path: "foo", Commands: []string{"build"}, DefaultCmd: "echo hi"}); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(".futi", "foo.yaml")); err != nil {
 		t.Fatalf("module not created: %v", err)
