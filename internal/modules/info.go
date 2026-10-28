@@ -1,4 +1,4 @@
-package main
+package modules
 
 import (
 	"fmt"
@@ -17,7 +17,7 @@ type Info struct {
 
 // Path returns the directory of the module name.
 func (m *Manager) Path(name string) (string, error) {
-	if err := validateResolveName(name); err != nil {
+	if err := ValidateResolveName(name); err != nil {
 		return "", err
 	}
 	source, err := m.rt.Source()
@@ -35,7 +35,7 @@ func (m *Manager) Path(name string) (string, error) {
 // without a sidecar is not an error: Meta is nil. When the sidecar is
 // unreadable, Info.Root is still set next to the error.
 func (m *Manager) Info(name string) (Info, error) {
-	if err := validateResolveName(name); err != nil {
+	if err := ValidateResolveName(name); err != nil {
 		return Info{}, err
 	}
 	source, err := m.rt.Source()

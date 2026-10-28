@@ -1,4 +1,4 @@
-package main
+package modules
 
 import (
 	"bytes"
@@ -225,7 +225,7 @@ type RemoveCommandOptions struct {
 
 // AddCommand adds a command to the module's config.yaml.
 func (m *Manager) AddCommand(opts AddCommandOptions) error {
-	if err := validateResolveName(opts.Module); err != nil {
+	if err := ValidateResolveName(opts.Module); err != nil {
 		return err
 	}
 	source, err := m.rt.Source()
@@ -253,7 +253,7 @@ func (m *Manager) AddCommand(opts AddCommandOptions) error {
 
 // RemoveCommand removes a command from the module's config.yaml.
 func (m *Manager) RemoveCommand(opts RemoveCommandOptions) error {
-	if err := validateResolveName(opts.Module); err != nil {
+	if err := ValidateResolveName(opts.Module); err != nil {
 		return err
 	}
 	source, err := m.rt.Source()

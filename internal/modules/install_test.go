@@ -1,4 +1,4 @@
-package main
+package modules
 
 import (
 	"bytes"
@@ -15,7 +15,6 @@ import (
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/metayaml"
 	"github.com/tivjnb/futi/internal/modulecache"
-	"github.com/tivjnb/futi/internal/modules"
 )
 
 // makeSourceModule создаёт каталог модуля-источника в temp-каталоге.
@@ -199,7 +198,7 @@ func TestRunModulesInstallInvalidatesCache(t *testing.T) {
 	}
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
-	if err := newCLIManager(&bytes.Buffer{}, nil, rt).Install(context.Background(), InstallOptions{Source: src}); err != nil {
+	if err := newManagerWithRuntime(&bytes.Buffer{}, nil, rt).Install(context.Background(), InstallOptions{Source: src}); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 	if got := cache.ModuleCount(); got != 0 {
@@ -542,7 +541,7 @@ func TestInstallLocalWithoutLocalDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
 	}
-	m := New(rt, modules.Streams{Out: io.Discard, Err: io.Discard})
+	m := New(rt, Streams{Out: io.Discard, Err: io.Discard})
 
 	err = m.Install(context.Background(), InstallOptions{Source: src, Local: true, Yes: true})
 	if err == nil || !strings.Contains(err.Error(), "local modules are not available") {

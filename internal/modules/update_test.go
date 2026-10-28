@@ -1,4 +1,4 @@
-package main
+package modules
 
 import (
 	"bytes"
@@ -188,7 +188,7 @@ func TestRunModulesUpdateInterruptedAttachInvalidatesCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := newCLIManager(&bytes.Buffer{}, nil, rt).Update(context.Background(), UpdateOptions{Name: "qr", Yes: true})
+	err := newManagerWithRuntime(&bytes.Buffer{}, nil, rt).Update(context.Background(), UpdateOptions{Name: "qr", Yes: true})
 	if err == nil {
 		t.Fatal("ожидалась ошибка прерывания")
 	}

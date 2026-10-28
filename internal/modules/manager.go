@@ -1,20 +1,19 @@
-package main
+package modules
 
 import (
 	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/executor"
-	"github.com/tivjnb/futi/internal/modules"
 )
 
 // Manager performs module management actions over a Runtime. I/O goes through
 // Streams only.
 type Manager struct {
 	rt *core.Runtime
-	s  modules.Streams
+	s  Streams
 }
 
 // New returns a Manager over rt writing to the given streams.
-func New(rt *core.Runtime, s modules.Streams) *Manager {
+func New(rt *core.Runtime, s Streams) *Manager {
 	return &Manager{rt: rt, s: s}
 }
 

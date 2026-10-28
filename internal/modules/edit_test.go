@@ -1,4 +1,4 @@
-package main
+package modules
 
 import (
 	"bytes"
@@ -351,7 +351,7 @@ func TestAddCommandInvalidatesCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := newCLIManager(&bytes.Buffer{}, nil, rt).AddCommand(AddCommandOptions{Module: "qr", Command: "scan"}); err != nil {
+	if err := newManagerWithRuntime(&bytes.Buffer{}, nil, rt).AddCommand(AddCommandOptions{Module: "qr", Command: "scan"}); err != nil {
 		t.Fatalf("AddCommand: %v", err)
 	}
 	if got := cache.ModuleCount(); got != 0 {
@@ -371,7 +371,7 @@ func TestRemoveCommandInvalidatesCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := newCLIManager(&bytes.Buffer{}, nil, rt).RemoveCommand(RemoveCommandOptions{Module: "qr", Command: "make"}); err != nil {
+	if err := newManagerWithRuntime(&bytes.Buffer{}, nil, rt).RemoveCommand(RemoveCommandOptions{Module: "qr", Command: "make"}); err != nil {
 		t.Fatalf("RemoveCommand: %v", err)
 	}
 	if got := cache.ModuleCount(); got != 0 {

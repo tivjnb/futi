@@ -1,4 +1,4 @@
-package main
+package modules
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tivjnb/futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/metayaml"
 	"github.com/tivjnb/futi/internal/modulerunner"
 	"github.com/tivjnb/futi/internal/termtext"
@@ -35,7 +36,7 @@ type UpdateOptions struct {
 // manager's Prompter.
 func (m *Manager) Update(ctx context.Context, opts UpdateOptions) error {
 	if opts.Name != "" {
-		if err := validateResolveName(opts.Name); err != nil {
+		if err := ValidateResolveName(opts.Name); err != nil {
 			return err
 		}
 	}
@@ -86,7 +87,7 @@ func (m *Manager) Update(ctx context.Context, opts UpdateOptions) error {
 		manifestPath := filepath.Join(e.Dir, "config.yaml")
 		if err := m.updateAt(ctx, gate, e.Name, label, e.Dir, manifestPath); err != nil {
 			// Прерывание печатает main возвращённой ошибкой — здесь не дублируем.
-			if _, interrupted := interruptSignal(err); interrupted {
+			if _, interrupted := executor.InterruptSignal(err); interrupted {
 				return fmt.Errorf("update %s interrupted: %w", label, err)
 			}
 			fmt.Fprintf(s.Err, "update %s: %v\n", label, err)
@@ -280,7 +281,7 @@ func (m *Manager) updateAt(ctx context.Context, gate attachGate, name, label, mo
 	var interruptErr error
 	if runAttach {
 		if err := modulerunner.RunHook(ctx, mod.Attach, moduleRoot, execmodule.EffectiveName(mod.Name, filepath.Join(moduleRoot, "config.yaml")), s.Stdin, s.Out, s.Err, m.rt.Exec().HookGroup, m.rt.Exec().ForwardSignals); err != nil {
-			if _, interrupted := interruptSignal(err); interrupted {
+			if _, interrupted := executor.InterruptSignal(err); interrupted {
 				interruptErr = fmt.Errorf("attach interrupted: %w", err)
 			} else {
 				fmt.Fprintf(s.Err, "Warning: attach failed; module may be partially initialized: %v\n", err)

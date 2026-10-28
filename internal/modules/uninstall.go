@@ -1,4 +1,4 @@
-package main
+package modules
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/tivjnb/futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/metayaml"
 	"github.com/tivjnb/futi/internal/modulerunner"
 )
@@ -25,7 +26,7 @@ type UninstallOptions struct {
 func (m *Manager) Uninstall(ctx context.Context, opts UninstallOptions) error {
 	// Имя проверяем до Resolve: "" / "." иначе резолвятся в корень каталога модулей,
 	// а "a/b" обходит проверки пакета в Resolve.
-	if err := validateResolveName(opts.Name); err != nil {
+	if err := ValidateResolveName(opts.Name); err != nil {
 		return err
 	}
 	source, err := m.rt.Source()
@@ -91,7 +92,7 @@ func (m *Manager) Uninstall(ctx context.Context, opts UninstallOptions) error {
 		} else if mod.Detach != "" {
 			policy := m.rt.Exec()
 			if err := modulerunner.RunHook(ctx, mod.Detach, moduleRoot, execmodule.EffectiveName(mod.Name, manifestPath), m.s.Stdin, m.s.Out, m.s.Err, policy.HookGroup, policy.ForwardSignals); err != nil {
-				if _, interrupted := interruptSignal(err); interrupted {
+				if _, interrupted := executor.InterruptSignal(err); interrupted {
 					return fmt.Errorf("detach interrupted, nothing deleted: %w", err)
 				}
 				if opts.StrictDetach {

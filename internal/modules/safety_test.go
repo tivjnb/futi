@@ -1,12 +1,10 @@
-package main
+package modules
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/tivjnb/futi/internal/modules"
 )
 
 func TestValidateModuleName(t *testing.T) {
@@ -27,13 +25,13 @@ func TestValidateModuleName(t *testing.T) {
 
 func TestValidateResolveName(t *testing.T) {
 	for _, name := range []string{"qr", "dev.deploy", "my-mod"} {
-		if err := validateResolveName(name); err != nil {
-			t.Errorf("validateResolveName(%q) unexpected error: %v", name, err)
+		if err := ValidateResolveName(name); err != nil {
+			t.Errorf("ValidateResolveName(%q) unexpected error: %v", name, err)
 		}
 	}
 	for _, name := range []string{"", "dev/config", "images/qr", "a/../b", "/abs"} {
-		if err := validateResolveName(name); err == nil {
-			t.Errorf("validateResolveName(%q) must fail", name)
+		if err := ValidateResolveName(name); err == nil {
+			t.Errorf("ValidateResolveName(%q) must fail", name)
 		}
 	}
 }
@@ -82,7 +80,7 @@ func TestConfirmDelete(t *testing.T) {
 	}
 	for _, tt := range tests {
 		var b strings.Builder
-		got, err := confirmDelete(modules.NewPrompter(strings.NewReader(tt.input), nil), &b, "/some/path", 3, 4096)
+		got, err := confirmDelete(NewPrompter(strings.NewReader(tt.input), nil), &b, "/some/path", 3, 4096)
 		if err != nil {
 			t.Fatalf("%s: unexpected error: %v", tt.name, err)
 		}

@@ -27,8 +27,8 @@ func cliStreams(w io.Writer, stdin io.Reader) modules.Streams {
 }
 
 // newCLIManager builds a Manager writing to w and reading answers from stdin.
-func newCLIManager(w io.Writer, stdin io.Reader, rt *core.Runtime) *Manager {
-	return New(rt, cliStreams(w, stdin))
+func newCLIManager(w io.Writer, stdin io.Reader, rt *core.Runtime) *modules.Manager {
+	return modules.New(rt, cliStreams(w, stdin))
 }
 
 // runModulesPath — `futi modules path <name>`: prints the module directory.
@@ -145,8 +145,8 @@ func runModulesList(w io.Writer, rt *core.Runtime, args []string) error {
 // --global, --desc <value>, --default-cmd <value>, --command <name> (repeatable).
 // Флаги, требующие значение (--desc, --default-cmd, --command), отклоняют
 // значения, начинающиеся с -- (фикс #48).
-func parseInitArgs(args []string) (*InitOptions, error) {
-	cfg := &InitOptions{}
+func parseInitArgs(args []string) (*modules.InitOptions, error) {
+	cfg := &modules.InitOptions{}
 	var positional []string
 
 	// requireValue извлекает значение для флага и проверяет, что оно не
@@ -211,7 +211,7 @@ func parseInitArgs(args []string) (*InitOptions, error) {
 	}
 	cfg.Path = positional[0]
 
-	if err := validateInitPath(cfg.Path); err != nil {
+	if err := modules.ValidateInitPath(cfg.Path); err != nil {
 		return nil, err
 	}
 
@@ -228,13 +228,13 @@ func runModulesInit(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	return Init(w, os.Stderr, *opts)
+	return modules.Init(w, os.Stderr, *opts)
 }
 
 // parseAddCommandArgs разбирает аргументы: позиционные module, command;
 // флаги --desc <text>, --cmd <shell> (паттерн requireValue).
-func parseAddCommandArgs(args []string) (*AddCommandOptions, error) {
-	cfg := &AddCommandOptions{}
+func parseAddCommandArgs(args []string) (*modules.AddCommandOptions, error) {
+	cfg := &modules.AddCommandOptions{}
 	var positional []string
 
 	requireValue := func(flagName string, i int) (string, error) {
@@ -282,7 +282,7 @@ func parseAddCommandArgs(args []string) (*AddCommandOptions, error) {
 		return nil, fmt.Errorf("usage: futi modules add_command <module> <command> [--desc <text>] [--cmd <shell>]")
 	}
 	cfg.Module, cfg.Command = positional[0], positional[1]
-	if err := validateResolveName(cfg.Module); err != nil {
+	if err := modules.ValidateResolveName(cfg.Module); err != nil {
 		return nil, err
 	}
 	return cfg, nil
@@ -304,15 +304,15 @@ func runModulesRemoveCommand(w io.Writer, rt *core.Runtime, args []string) error
 	if len(args) != 2 {
 		return fmt.Errorf("usage: futi modules remove_command <module> <command>")
 	}
-	if err := validateResolveName(args[0]); err != nil {
+	if err := modules.ValidateResolveName(args[0]); err != nil {
 		return err
 	}
-	return newCLIManager(w, nil, rt).RemoveCommand(RemoveCommandOptions{Module: args[0], Command: args[1]})
+	return newCLIManager(w, nil, rt).RemoveCommand(modules.RemoveCommandOptions{Module: args[0], Command: args[1]})
 }
 
 // parseUninstallArgs разбирает аргументы uninstall.
-func parseUninstallArgs(args []string) (*UninstallOptions, error) {
-	cfg := &UninstallOptions{}
+func parseUninstallArgs(args []string) (*modules.UninstallOptions, error) {
+	cfg := &modules.UninstallOptions{}
 	var positional []string
 
 	i := 0
@@ -342,7 +342,7 @@ func parseUninstallArgs(args []string) (*UninstallOptions, error) {
 		return nil, fmt.Errorf("expected one module name, got %d", len(positional))
 	}
 	cfg.Name = positional[0]
-	if err := validateResolveName(cfg.Name); err != nil {
+	if err := modules.ValidateResolveName(cfg.Name); err != nil {
 		return nil, err
 	}
 	return cfg, nil
@@ -359,8 +359,8 @@ func runModulesUninstall(w io.Writer, stdin io.Reader, rt *core.Runtime, args []
 }
 
 // parseInstallArgs разбирает аргументы install (паттерн requireValue).
-func parseInstallArgs(args []string) (*InstallOptions, error) {
-	cfg := &InstallOptions{}
+func parseInstallArgs(args []string) (*modules.InstallOptions, error) {
+	cfg := &modules.InstallOptions{}
 	var positional []string
 
 	requireValue := func(flagName string, i int) (string, error) {
@@ -423,7 +423,7 @@ func parseInstallArgs(args []string) (*InstallOptions, error) {
 		return nil, fmt.Errorf("expected one source argument, got %d", len(positional))
 	}
 	cfg.Source = positional[0]
-	if err := validateInstallOptions(*cfg); err != nil {
+	if err := modules.ValidateInstallOptions(*cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
@@ -440,8 +440,8 @@ func runModulesInstall(w io.Writer, stdin io.Reader, rt *core.Runtime, args []st
 }
 
 // parseUpdateArgs разбирает аргументы update.
-func parseUpdateArgs(args []string) (*UpdateOptions, error) {
-	cfg := &UpdateOptions{}
+func parseUpdateArgs(args []string) (*modules.UpdateOptions, error) {
+	cfg := &modules.UpdateOptions{}
 	var positional []string
 
 	i := 0
@@ -465,7 +465,7 @@ func parseUpdateArgs(args []string) (*UpdateOptions, error) {
 	}
 	if len(positional) == 1 {
 		cfg.Name = positional[0]
-		if err := validateResolveName(cfg.Name); err != nil {
+		if err := modules.ValidateResolveName(cfg.Name); err != nil {
 			return nil, err
 		}
 	}

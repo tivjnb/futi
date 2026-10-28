@@ -1,4 +1,4 @@
-package main
+package modules
 
 import (
 	"fmt"
@@ -21,9 +21,9 @@ type InitOptions struct {
 	Commands    []string // имена команд для шаблона
 }
 
-// validateInitPath checks the module path given to init: the name must be
+// ValidateInitPath checks the module path given to init: the name must be
 // valid and no segment may be a reserved word.
-func validateInitPath(path string) error {
+func ValidateInitPath(path string) error {
 	// F57: зарезервированное слово запрещено в любом сегменте пути.
 	trimmed := path
 	if strings.HasSuffix(trimmed, ".yaml") {
@@ -131,7 +131,7 @@ func quoteYAMLValue(s string) string {
 // Возвращает ошибку при существующем файле (без перезаписи).
 // #44: использует O_EXCL вместо Stat+WriteFile для атомарной проверки.
 func Init(out, errOut io.Writer, opts InitOptions) error {
-	if err := validateInitPath(opts.Path); err != nil {
+	if err := ValidateInitPath(opts.Path); err != nil {
 		return err
 	}
 	if opts.Description == "" {

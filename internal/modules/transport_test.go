@@ -1,4 +1,4 @@
-package main
+package modules
 
 import (
 	"bytes"
@@ -167,18 +167,6 @@ func TestDetectSourceTypeHTTPArchiveStillArchive(t *testing.T) {
 	kind, err := detectSourceType("http://e.com/m.tar.gz", false, false, false)
 	if err != nil || kind != kindArchive {
 		t.Fatalf("got (%v, %v), want (archive, nil)", kind, err)
-	}
-}
-
-func TestParseInstallArgsRejectsRefWithLeadingDash(t *testing.T) {
-	for _, args := range [][]string{
-		{"https://e.com/r.git", "--ref", "-x"},
-		{"https://e.com/r.git", "--ref=-x"},
-	} {
-		_, err := parseInstallArgs(args)
-		if err == nil || !strings.Contains(err.Error(), `must not start with "-"`) {
-			t.Errorf("args %q: err = %v, want leading-dash error", args, err)
-		}
 	}
 }
 

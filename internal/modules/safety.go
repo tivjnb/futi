@@ -1,4 +1,4 @@
-package main
+package modules
 
 import (
 	"errors"
@@ -11,7 +11,6 @@ import (
 
 	"github.com/tivjnb/futi/internal/completion"
 	"github.com/tivjnb/futi/internal/metayaml"
-	"github.com/tivjnb/futi/internal/modules"
 	"github.com/tivjnb/futi/internal/termtext"
 )
 
@@ -58,13 +57,13 @@ func validateSegmentsNoDot(name string) error {
 	return nil
 }
 
-// validateResolveName проверяет имя, которое пойдёт в Source.Resolve
+// ValidateResolveName проверяет имя, которое пойдёт в Source.Resolve
 // (uninstall, info, path, update, add_command, remove_command): namespace
 // только в точечной форме (a.b). Слэш запрещён: Resolve режет имя по ".",
 // и "dev/config" обходил бы проверки пакета/сегмента config, а uninstall
 // удалял бы весь каталог. Слэш остаётся допустимым для install/init —
 // там имя задаёт путь размещения и в Resolve не попадает.
-func validateResolveName(name string) error {
+func ValidateResolveName(name string) error {
 	if err := validateModuleName(name); err != nil {
 		return err
 	}
@@ -147,7 +146,7 @@ func countTree(root string) (files int, size int64) {
 
 // confirmDelete спрашивает подтверждение: summary + "Delete? [y/N]".
 // p — источник ответов, w — вывод prompt.
-func confirmDelete(p modules.Prompter, w io.Writer, path string, files int, size int64) (bool, error) {
+func confirmDelete(p Prompter, w io.Writer, path string, files int, size int64) (bool, error) {
 	fmt.Fprintf(w, "About to delete: %s (%d files, %d KB)\n", path, files, size/1024)
 	fmt.Fprintf(w, "Delete? [y/N] ")
 
@@ -181,7 +180,7 @@ const maxListedChanges = 50
 // про каждый модуль, а свой буфер на каждый вопрос съел бы следующие ответы.
 // errW — куда печатаются вопросы и списки изменений (stderr в CLI).
 type attachGate struct {
-	p    modules.Prompter
+	p    Prompter
 	errW io.Writer
 	skip bool
 	yes  bool
@@ -278,7 +277,7 @@ func (g attachGate) allowReplace(label, dir, attach string, diff metayaml.TreeDi
 // readYes читает строку ответа из p: true — "y"/"yes" без учёта регистра и
 // пробелов, любой другой ответ — false. Пустой stdin — errNoAnswer; перед ним
 // печатается перевод строки, чтобы сообщение об ошибке не слиплось с вопросом.
-func readYes(p modules.Prompter, errW io.Writer) (bool, error) {
+func readYes(p Prompter, errW io.Writer) (bool, error) {
 	line, err := p.ReadLine()
 	if errors.Is(err, io.EOF) && line == "" {
 		// Пустой stdin при char device (/dev/null: docker run без -i,

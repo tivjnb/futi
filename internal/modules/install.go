@@ -1,4 +1,4 @@
-package main
+package modules
 
 import (
 	"context"
@@ -28,9 +28,9 @@ type InstallOptions struct {
 	FromArchive bool
 }
 
-// validateInstallOptions rejects a ref that could be taken for a git flag and
+// ValidateInstallOptions rejects a ref that could be taken for a git flag and
 // a namespace that is not a valid module name or uses reserved segments.
-func validateInstallOptions(opts InstallOptions) error {
+func ValidateInstallOptions(opts InstallOptions) error {
 	if strings.HasPrefix(opts.Ref, "-") {
 		return fmt.Errorf("ref %q must not start with \"-\"", opts.Ref)
 	}
@@ -66,7 +66,7 @@ var computeTreeHash = metayaml.ComputeTreeHash
 // Install installs a module from a source (spec §5.1). Confirmation of the
 // attach hook goes through the manager's Prompter.
 func (m *Manager) Install(ctx context.Context, opts InstallOptions) (retErr error) {
-	if err := validateInstallOptions(opts); err != nil {
+	if err := ValidateInstallOptions(opts); err != nil {
 		return err
 	}
 

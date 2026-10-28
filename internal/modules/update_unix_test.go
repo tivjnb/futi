@@ -1,6 +1,6 @@
 //go:build linux || darwin || freebsd || netbsd || openbsd || dragonfly
 
-package main
+package modules
 
 import (
 	"bytes"
@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/metayaml"
 	"github.com/tivjnb/futi/internal/testutil"
 )
@@ -58,8 +59,8 @@ func TestRunModulesUpdateStopsWhenHookCatchesSIGTERM(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("Update не завершился")
 	}
-	if sig, ok := interruptSignal(err); !ok || sig != syscall.SIGTERM {
-		t.Fatalf("interruptSignal(%v) = (%v, %v), want (SIGTERM, true)", err, sig, ok)
+	if sig, ok := executor.InterruptSignal(err); !ok || sig != syscall.SIGTERM {
+		t.Fatalf("executor.InterruptSignal(%v) = (%v, %v), want (SIGTERM, true)", err, sig, ok)
 	}
 	data, _ := os.ReadFile(filepath.Join(global, "b", "config.yaml"))
 	if strings.Contains(string(data), "echo v2") {

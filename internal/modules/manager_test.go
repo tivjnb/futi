@@ -1,4 +1,4 @@
-package main
+package modules
 
 import (
 	"bytes"
@@ -9,7 +9,6 @@ import (
 	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/metayaml"
-	"github.com/tivjnb/futi/internal/modules"
 )
 
 func TestManagerInfoRejectsSlashName(t *testing.T) {
@@ -61,7 +60,7 @@ func TestCommandConfigFollowsPolicy(t *testing.T) {
 			}
 			in := strings.NewReader("")
 			var out, errOut bytes.Buffer
-			m := New(rt, modules.Streams{Out: &out, Err: &errOut, Stdin: in})
+			m := New(rt, Streams{Out: &out, Err: &errOut, Stdin: in})
 
 			cfg := m.commandConfig()
 			if cfg.Group != tc.wantGroup || cfg.ForwardSignals != tc.wantForward {

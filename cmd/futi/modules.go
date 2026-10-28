@@ -7,6 +7,7 @@ import (
 
 	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/modules"
 )
 
 // stdinIsTerminal сообщает, подключён ли stdin к терминалу; шов для тестов.
@@ -64,7 +65,7 @@ func runModulesValidate(w io.Writer, source discovery.Source, args []string) err
 	if len(args) != 1 || isFlagToken(args[0]) {
 		return fmt.Errorf("usage: futi modules validate <namespace>")
 	}
-	if err := validateResolveName(args[0]); err != nil {
+	if err := modules.ValidateResolveName(args[0]); err != nil {
 		return err
 	}
 	return runValidate(w, source, args[0])

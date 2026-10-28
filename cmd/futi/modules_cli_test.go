@@ -14,6 +14,7 @@ import (
 
 	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/modules"
 )
 
 func TestCLIStreamsWiring(t *testing.T) {
@@ -267,18 +268,18 @@ func TestParseInstallArgs(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    []string
-		want    InstallOptions
+		want    modules.InstallOptions
 		wantErr string
 	}{
-		{"short yes", []string{"src", "-y"}, InstallOptions{Source: "src", Yes: true}, ""},
+		{"short yes", []string{"src", "-y"}, modules.InstallOptions{Source: "src", Yes: true}, ""},
 		{"all flags", []string{"--local", "--skip-attach", "--yes", "--from-git", "--ref=v1", "--namespace", "a.b", "src"},
-			InstallOptions{Source: "src", Local: true, SkipAttach: true, Yes: true, FromGit: true, Ref: "v1", Namespace: "a.b"}, ""},
-		{"namespace equals form", []string{"src", "--namespace=ns"}, InstallOptions{Source: "src", Namespace: "ns"}, ""},
-		{"reserved namespace", []string{"src", "--namespace", "a.list"}, InstallOptions{}, "--namespace: "},
-		{"ref with leading dash", []string{"src", "--ref", "-x"}, InstallOptions{}, `must not start with "-"`},
-		{"missing source", []string{"--yes"}, InstallOptions{}, "usage: futi modules install <source> [flags]"},
-		{"two sources", []string{"a", "b"}, InstallOptions{}, "expected one source argument, got 2"},
-		{"unknown flag", []string{"src", "--bogus"}, InstallOptions{}, "unknown flag: --bogus"},
+			modules.InstallOptions{Source: "src", Local: true, SkipAttach: true, Yes: true, FromGit: true, Ref: "v1", Namespace: "a.b"}, ""},
+		{"namespace equals form", []string{"src", "--namespace=ns"}, modules.InstallOptions{Source: "src", Namespace: "ns"}, ""},
+		{"reserved namespace", []string{"src", "--namespace", "a.list"}, modules.InstallOptions{}, "--namespace: "},
+		{"ref with leading dash", []string{"src", "--ref", "-x"}, modules.InstallOptions{}, `must not start with "-"`},
+		{"missing source", []string{"--yes"}, modules.InstallOptions{}, "usage: futi modules install <source> [flags]"},
+		{"two sources", []string{"a", "b"}, modules.InstallOptions{}, "expected one source argument, got 2"},
+		{"unknown flag", []string{"src", "--bogus"}, modules.InstallOptions{}, "unknown flag: --bogus"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -389,5 +390,25 @@ func TestFutiModulesOrdinaryErrorExitsWithOne(t *testing.T) {
 	}
 	if code := cmd.ProcessState.ExitCode(); code != 1 {
 		t.Fatalf("код выхода = %d, want 1", code)
+	}
+}
+
+// setStdinTerminal replaces the stdin TTY check for the duration of a test.
+func setStdinTerminal(t *testing.T, tty bool) {
+	t.Helper()
+	orig := stdinIsTerminal
+	stdinIsTerminal = func() bool { return tty }
+	t.Cleanup(func() { stdinIsTerminal = orig })
+}
+
+func TestParseInstallArgsRejectsRefWithLeadingDash(t *testing.T) {
+	for _, args := range [][]string{
+		{"https://e.com/r.git", "--ref", "-x"},
+		{"https://e.com/r.git", "--ref=-x"},
+	} {
+		_, err := parseInstallArgs(args)
+		if err == nil || !strings.Contains(err.Error(), `must not start with "-"`) {
+			t.Errorf("args %q: err = %v, want leading-dash error", args, err)
+		}
 	}
 }
