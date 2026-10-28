@@ -832,6 +832,15 @@ func runParsed(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, r
 		fmt.Fprintf(stderr, "%s\n", withPathHint(withValidateHint(runErrorText(err, helpPath), err, helpPath, source), pa.flags))
 		return core.ExitCode(err), err
 	}
+	return runTarget(ctx, stdin, stdout, stderr, rt, t, pa)
+}
+
+// runTarget runs an already resolved target: flag binding, -h, execution,
+// dry-run output and the wait error.
+func runTarget(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt *core.Runtime, t *core.Target, pa *parsedArgs) (int, error) {
+	source, _ := rt.Source() // main has already checked the error
+	loader := rt.Cache()
+	helpPath := commandPath(pa)
 	params, help, err := bindFlags(t.Command(), pa.flags)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s\n", withPathHint(err.Error(), pa.flags))

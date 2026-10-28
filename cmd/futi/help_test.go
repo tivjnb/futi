@@ -408,3 +408,64 @@ commands:
 		t.Error("ExecutableHelpIn executable = false, want true (help добавлена на диске)")
 	}
 }
+
+// TestRunHelpDecision pins which path runHelp takes (user-defined help vs
+// system help) and what each path prints.
+func TestRunHelpDecision(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "leaf.yaml"), `
+name: leaf
+commands:
+  help:
+    params:
+      - name: x
+        type: string
+    cmd: "echo leafhelp x={{.x}}"
+`)
+	writeFile(t, filepath.Join(dir, "branch.yaml"), `
+name: branch
+description: Branch module
+commands:
+  help:
+    commands:
+      sub:
+        cmd: "echo sub"
+`)
+	writeFile(t, filepath.Join(dir, "plain.yaml"), `
+name: plain
+description: Plain module
+commands:
+  run:
+    cmd: "echo running"
+`)
+	writeFile(t, filepath.Join(dir, "x", "help.yaml"), `
+name: xhelp
+cmd: "echo xhelp"
+`)
+	writeFile(t, filepath.Join(dir, "bad.yaml"), "commands: [")
+	rt := testRuntime(t, core.Options{ModulesDir: dir})
+
+	tests := []struct {
+		name       string
+		req        *helpRequest
+		wantCode   int
+		wantStdout string
+		wantStderr string
+	}{
+		{"executable leaf binds flag", &helpRequest{positional: []string{"leaf"}, flags: []string{"--x", "1"}}, 0, "leafhelp x=1\n", ""},
+		{"branch without cmd gives system help", helpArgs("branch"), 0, "branch — Branch module\ncommands:\n  help\n", ""},
+		{"module without help gives system help", helpArgs("plain"), 0, "plain — Plain module\ncommands:\n  run\n", ""},
+		{"positional x resolves to module x.help", helpArgs("x"), 0, "xhelp\n", ""},
+		{"broken yaml", helpArgs("bad"), 1, "", "help: execmodule: parse manifest \"" + filepath.Join(dir, "bad.yaml") + "\": yaml: line 1: did not find expected node content\n"},
+		{"unknown path with dry-run is plain not-found", &helpRequest{positional: []string{"nope"}, dryRun: true}, 1, "", "help: module not found for \"nope\"\n"},
+		{"known module without help with dry-run is rejected", &helpRequest{positional: []string{"plain"}, dryRun: true}, 1, "", "futi: --dry-run applies only to module commands\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			code, stdout, stderr := runHelpFor(t, rt, tc.req)
+			if code != tc.wantCode || stdout != tc.wantStdout || stderr != tc.wantStderr {
+				t.Errorf("got (%d, %q, %q), want (%d, %q, %q)", code, stdout, stderr, tc.wantCode, tc.wantStdout, tc.wantStderr)
+			}
+		})
+	}
+}

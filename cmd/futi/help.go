@@ -27,11 +27,22 @@ func runHelp(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt 
 	copy(full, req.positional)
 	full[len(req.positional)] = "help"
 
-	resolved, executable := core.ExecutableHelpIn(source, loader, full)
-	if executable {
-		pa := &parsedArgs{flags: req.flags, argsList: req.argsList, dryRun: req.dryRun}
-		pa.namespace, pa.command = splitPath(full)
-		return runParsed(ctx, stdin, stdout, stderr, rt, pa)
+	pa := &parsedArgs{flags: req.flags, argsList: req.argsList, dryRun: req.dryRun}
+	pa.namespace, pa.command = splitPath(full)
+	var resolved bool
+	t, err := rt.Resolve(pa.namespace, pa.command)
+	switch {
+	case err == nil && t.Command().Cmd != "":
+		return runTarget(ctx, stdin, stdout, stderr, rt, t, pa) // single module load
+	case err == nil || helpMiss(err):
+		resolved = true // module loaded, no executable help
+	default:
+		// Module not found, broken module, source error: the original path.
+		var executable bool
+		resolved, executable = core.ExecutableHelpIn(source, loader, full)
+		if executable {
+			return runParsed(ctx, stdin, stdout, stderr, rt, pa)
+		}
 	}
 
 	if req.dryRun && resolved {
@@ -41,6 +52,14 @@ func runHelp(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt 
 		return 1, nil
 	}
 	return systemHelpCode(stdout, stderr, source, loader, req.positional), nil
+}
+
+// helpMiss reports errors that Resolve returns only after the module was
+// loaded and the path had no executable command.
+func helpMiss(err error) bool {
+	return errors.Is(err, execmodule.ErrCommandNotFound) ||
+		errors.Is(err, execmodule.ErrRequiresSubcommand) ||
+		errors.Is(err, modulerunner.ErrNoDefaultCommand)
 }
 
 // runSystemHelp показывает системную справку для positional:
