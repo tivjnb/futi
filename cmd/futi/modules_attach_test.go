@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -454,7 +455,7 @@ func TestHooksGetSameModuleName(t *testing.T) {
 				t.Fatalf("update hook name = %q, want %q", got, want)
 			}
 
-			if err := runModulesUninstall(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{tt.dotName, "--yes"}); err != nil {
+			if err := newTestManager(t, &bytes.Buffer{}, nil).Uninstall(context.Background(), UninstallOptions{Name: tt.dotName, Yes: true}); err != nil {
 				t.Fatalf("uninstall: %v", err)
 			}
 			if got := readTrim(t, filepath.Join(out, "detach")); got != want {
@@ -470,7 +471,7 @@ func TestUninstallDetachGetsManifestName(t *testing.T) {
 	out := t.TempDir()
 	installRawModule(t, global, hookNameModule("name: x\n", out)) // каталог qr
 
-	err := runModulesUninstall(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "--yes"})
+	err := newTestManager(t, &bytes.Buffer{}, nil).Uninstall(context.Background(), UninstallOptions{Name: "qr", Yes: true})
 	if err != nil {
 		t.Fatalf("uninstall: %v", err)
 	}

@@ -34,11 +34,7 @@ func runModules(w io.Writer, stdin io.Reader, rt *core.Runtime, args []string) e
 	case "install":
 		return runModulesInstall(w, stdin, rt.Cache(), rest)
 	case "uninstall":
-		source, err := rt.Source()
-		if err != nil {
-			return err
-		}
-		return runModulesUninstall(w, stdin, source, rt.Cache(), rest)
+		return runModulesUninstall(w, stdin, rt, rest)
 	case "update":
 		source, err := rt.Source()
 		if err != nil {

@@ -2,12 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/metayaml"
 )
 
@@ -24,9 +25,8 @@ func TestRunModulesUninstallPackage(t *testing.T) {
 	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644)
 	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
 
-	src := discovery.NewGlobalSource(global)
 	var b bytes.Buffer
-	if err := runModulesUninstall(&b, strings.NewReader("\n"), src, newTestCache(), []string{"qr", "--yes"}); err != nil {
+	if err := newTestManager(t, &b, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "qr", Yes: true}); err != nil {
 		t.Fatalf("runModulesUninstall: %v", err)
 	}
 	if _, err := os.Stat(moduleDir); !os.IsNotExist(err) {
@@ -46,13 +46,12 @@ func TestRunModulesUninstallNoMetaRequiresForce(t *testing.T) {
 	os.MkdirAll(moduleDir, 0o755)
 	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte("name: hand\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
 
-	src := discovery.NewGlobalSource(global)
-	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), src, newTestCache(), []string{"hand", "--yes"})
+	err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "hand", Yes: true})
 	if err == nil || !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("expected no-meta error, got %v", err)
 	}
 
-	if err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), src, newTestCache(), []string{"hand", "--yes", "--force"}); err != nil {
+	if err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "hand", Yes: true, Force: true}); err != nil {
 		t.Fatalf("force uninstall: %v", err)
 	}
 	if _, err := os.Stat(moduleDir); !os.IsNotExist(err) {
@@ -71,7 +70,7 @@ func TestRunModulesUninstallConfirmDeclined(t *testing.T) {
 	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
 
 	var b bytes.Buffer
-	if err := runModulesUninstall(&b, strings.NewReader("n\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr"}); err != nil {
+	if err := newTestManager(t, &b, strings.NewReader("n\n")).Uninstall(context.Background(), UninstallOptions{Name: "qr"}); err != nil {
 		t.Fatalf("runModulesUninstall: %v", err)
 	}
 	if !strings.Contains(b.String(), "Aborted") {
@@ -93,7 +92,7 @@ func TestRunModulesUninstallStrictDetachAborts(t *testing.T) {
 	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644)
 	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
 
-	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "--yes", "--strict-detach"})
+	err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "qr", Yes: true, StrictDetach: true})
 	if err == nil || !strings.Contains(err.Error(), "strict") {
 		t.Fatalf("expected strict-detach error, got %v", err)
 	}
@@ -113,7 +112,7 @@ func TestRunModulesUninstallDetachFailureWarns(t *testing.T) {
 	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644)
 	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
 
-	if err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "--yes"}); err != nil {
+	if err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "qr", Yes: true}); err != nil {
 		t.Fatalf("detach failure must be warning, not error: %v", err)
 	}
 	if _, err := os.Stat(moduleDir); !os.IsNotExist(err) {
@@ -130,8 +129,7 @@ func TestRunModulesUninstallSingleYamlFile(t *testing.T) {
 	os.WriteFile(filepath.Join(global, "one.yaml"), []byte("name: one\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
 	os.WriteFile(filepath.Join(global, "two.yaml"), []byte("name: two\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
 
-	src := discovery.NewGlobalSource(global)
-	if err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), src, newTestCache(), []string{"one", "--yes", "--force"}); err != nil {
+	if err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "one", Yes: true, Force: true}); err != nil {
 		t.Fatalf("runModulesUninstall: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(global, "one.yaml")); !os.IsNotExist(err) {
@@ -143,34 +141,25 @@ func TestRunModulesUninstallSingleYamlFile(t *testing.T) {
 }
 
 func TestRunModulesUninstallRefusesOutsideRoot(t *testing.T) {
-	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
 	t.Chdir(t.TempDir())
 
-	// Source указывает на каталог ВНЕ allowed roots.
+	// Модуль лежит ВНЕ allowed roots; в каталоге модулей на него указывает симлинк.
 	outside := t.TempDir()
 	moduleDir := filepath.Join(outside, "qr")
 	os.MkdirAll(moduleDir, 0o755)
 	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte("name: qr\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
+	if err := os.Symlink(moduleDir, filepath.Join(global, "qr")); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
 
-	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(outside), newTestCache(), []string{"qr", "--yes", "--force"})
+	err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "qr", Yes: true, Force: true})
 	if err == nil || !strings.Contains(err.Error(), "outside known futi modules") {
 		t.Fatalf("expected outside-root refusal, got %v", err)
 	}
 	if _, statErr := os.Stat(moduleDir); statErr != nil {
 		t.Fatal("module outside roots must survive")
-	}
-}
-
-func TestParseUninstallArgs_InvalidName(t *testing.T) {
-	for _, name := range []string{"", ".", "..", "a/../b", "/abs", "a//b"} {
-		_, err := parseUninstallArgs([]string{name, "--force", "--yes"})
-		if err == nil {
-			t.Errorf("parseUninstallArgs(%q) должен вернуть ошибку", name)
-			continue
-		}
-		if !strings.Contains(err.Error(), "invalid module name") {
-			t.Errorf("parseUninstallArgs(%q) err = %v, want invalid module name", name, err)
-		}
 	}
 }
 
@@ -187,7 +176,7 @@ func TestUninstall_EmptyNameKeepsRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(root), newTestCache(), []string{"", "--force", "--yes"})
+	err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "", Force: true, Yes: true})
 	if err == nil || !strings.Contains(err.Error(), "invalid module name") {
 		t.Fatalf("err = %v, want invalid module name", err)
 	}
@@ -210,7 +199,7 @@ func TestUninstall_SingleModuleKeepsRootWithSlash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(root+"/"), newTestCache(), []string{"n.m", "--force", "--yes"})
+	err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "n.m", Force: true, Yes: true})
 	if err != nil {
 		t.Fatalf("runModulesUninstall: %v", err)
 	}
@@ -236,7 +225,7 @@ func TestUninstall_SlashNameRejectedKeepsPackage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(root), newTestCache(), []string{"dev/config", "--force", "--yes"})
+	err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "dev/config", Force: true, Yes: true})
 	if err == nil || !strings.Contains(err.Error(), "invalid module name") {
 		t.Fatalf("err = %v, want invalid module name", err)
 	}
@@ -258,8 +247,7 @@ func TestRunModulesUninstallInterruptedDetachKeepsModule(t *testing.T) {
 	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644)
 	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
 
-	src := discovery.NewGlobalSource(global)
-	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), src, newTestCache(), []string{"qr", "--yes"})
+	err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "qr", Yes: true})
 	if err == nil {
 		t.Fatal("ожидалась ошибка прерывания detach")
 	}
@@ -292,7 +280,7 @@ func TestRunModulesUninstallInvalidSchemaStillDetaches(t *testing.T) {
 	// Неизвестный ключ делает модуль невалидным для LoadModule.
 	moduleDir := installRawModule(t, global, "name: qr\nbogus_key: 1\ndetach: \"touch "+marker+"\"\ncommands:\n  run:\n    cmd: echo\n")
 
-	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "--yes", "--strict-detach"})
+	err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "qr", Yes: true, StrictDetach: true})
 	if err != nil {
 		t.Fatalf("runModulesUninstall: %v", err)
 	}
@@ -313,7 +301,7 @@ func TestRunModulesUninstallBrokenYAMLWarnsAndRemoves(t *testing.T) {
 
 	var runErr error
 	stderr := captureStderr(t, func() {
-		runErr = runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "--yes"})
+		runErr = newTestManager(t, &bytes.Buffer{}, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "qr", Yes: true})
 	})
 	if runErr != nil {
 		t.Fatalf("runModulesUninstall: %v", runErr)
@@ -333,7 +321,7 @@ func TestRunModulesUninstallBrokenYAMLStrictDetachRefuses(t *testing.T) {
 
 	moduleDir := installRawModule(t, global, "name: [unclosed\n")
 
-	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader("\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "--yes", "--strict-detach"})
+	err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "qr", Yes: true, StrictDetach: true})
 	if err == nil || !strings.Contains(err.Error(), "strict") {
 		t.Fatalf("expected strict-detach error, got %v", err)
 	}
@@ -361,10 +349,32 @@ func TestModulesUninstallHookOutputToWriter(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := runModulesUninstall(&buf, strings.NewReader("\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "--yes"}); err != nil {
+	if err := newTestManager(t, &buf, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "qr", Yes: true}); err != nil {
 		t.Fatalf("runModulesUninstall: %v", err)
 	}
 	if !strings.Contains(buf.String(), "detach-hook-says-hi") {
 		t.Fatalf("writer output = %q, want hook stdout", buf.String())
+	}
+}
+
+func TestUninstallRejectsSlashName(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "m")
+	t.Setenv("FUTI_MODULES_DIR", root)
+	t.Chdir(t.TempDir())
+
+	pkgDir := filepath.Join(root, "dev", "config")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "config.yaml"), []byte("name: dev\ncommands:\n  run:\n    cmd: echo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := newTestManager(t, io.Discard, nil).Uninstall(context.Background(), UninstallOptions{Name: "dev/config", Yes: true})
+	if err == nil || !strings.Contains(err.Error(), "write the namespace with a dot") {
+		t.Fatalf("err = %v, want hint to write the namespace with a dot", err)
+	}
+	if _, statErr := os.Stat(pkgDir); statErr != nil {
+		t.Fatalf("module directory must survive: %v", statErr)
 	}
 }

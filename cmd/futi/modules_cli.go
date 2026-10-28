@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -307,4 +308,52 @@ func runModulesRemoveCommand(w io.Writer, rt *core.Runtime, args []string) error
 		return err
 	}
 	return newCLIManager(w, nil, rt).RemoveCommand(RemoveCommandOptions{Module: args[0], Command: args[1]})
+}
+
+// parseUninstallArgs разбирает аргументы uninstall.
+func parseUninstallArgs(args []string) (*UninstallOptions, error) {
+	cfg := &UninstallOptions{}
+	var positional []string
+
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		switch {
+		case arg == "--force":
+			cfg.Force = true
+		case arg == "--yes" || arg == "-y":
+			cfg.Yes = true
+		case arg == "--skip-detach":
+			cfg.SkipDetach = true
+		case arg == "--strict-detach":
+			cfg.StrictDetach = true
+		case strings.HasPrefix(arg, "--"):
+			return nil, fmt.Errorf("unknown flag: %s", arg)
+		default:
+			positional = append(positional, arg)
+		}
+		i++
+	}
+
+	if len(positional) == 0 {
+		return nil, fmt.Errorf("usage: futi modules uninstall <name> [flags]")
+	}
+	if len(positional) > 1 {
+		return nil, fmt.Errorf("expected one module name, got %d", len(positional))
+	}
+	cfg.Name = positional[0]
+	if err := validateResolveName(cfg.Name); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// runModulesUninstall — `futi modules uninstall`: parses args and removes the
+// module. stdin supplies the confirmation answer.
+func runModulesUninstall(w io.Writer, stdin io.Reader, rt *core.Runtime, args []string) error {
+	opts, err := parseUninstallArgs(args)
+	if err != nil {
+		return err
+	}
+	return newCLIManager(w, stdin, rt).Uninstall(context.Background(), *opts)
 }

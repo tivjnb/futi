@@ -3,83 +3,41 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
-	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/metayaml"
-	"github.com/tivjnb/futi/internal/modulecache"
 	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
-// uninstallArgs — аргументы `futi modules uninstall`.
-type uninstallArgs struct {
-	name         string
-	force        bool
-	yes          bool
-	skipDetach   bool
-	strictDetach bool
+// UninstallOptions are the inputs of Manager.Uninstall.
+type UninstallOptions struct {
+	Name         string
+	Force        bool
+	Yes          bool
+	SkipDetach   bool
+	StrictDetach bool
 }
 
-// parseUninstallArgs разбирает аргументы uninstall.
-func parseUninstallArgs(args []string) (*uninstallArgs, error) {
-	cfg := &uninstallArgs{}
-	var positional []string
-
-	i := 0
-	for i < len(args) {
-		arg := args[i]
-		switch {
-		case arg == "--force":
-			cfg.force = true
-		case arg == "--yes" || arg == "-y":
-			cfg.yes = true
-		case arg == "--skip-detach":
-			cfg.skipDetach = true
-		case arg == "--strict-detach":
-			cfg.strictDetach = true
-		case strings.HasPrefix(arg, "--"):
-			return nil, fmt.Errorf("unknown flag: %s", arg)
-		default:
-			positional = append(positional, arg)
-		}
-		i++
-	}
-
-	if len(positional) == 0 {
-		return nil, fmt.Errorf("usage: futi modules uninstall <name> [flags]")
-	}
-	if len(positional) > 1 {
-		return nil, fmt.Errorf("expected one module name, got %d", len(positional))
-	}
-	cfg.name = positional[0]
+// Uninstall removes an installed module (spec §5.2). Confirmation goes through
+// the manager's Prompter; the detach hook runs before the delete.
+func (m *Manager) Uninstall(ctx context.Context, opts UninstallOptions) error {
 	// Имя проверяем до Resolve: "" / "." иначе резолвятся в корень каталога модулей,
 	// а "a/b" обходит проверки пакета в Resolve.
-	if err := validateResolveName(cfg.name); err != nil {
-		return nil, err
+	if err := validateResolveName(opts.Name); err != nil {
+		return err
 	}
-	return cfg, nil
-}
-
-// runModulesUninstall удаляет установленный модуль (спека §5.2).
-// stdin — для интерактивного подтверждения (os.Stdin из main).
-func runModulesUninstall(w io.Writer, stdin io.Reader, source discovery.Source, cache *modulecache.Cache, args []string) error {
-	s := cliStreams(w, stdin)
-	cfg, err := parseUninstallArgs(args)
+	source, err := m.rt.Source()
 	if err != nil {
 		return err
 	}
-
-	manifestPath, moduleRoot, err := source.Resolve(cfg.name)
+	manifestPath, moduleRoot, err := source.Resolve(opts.Name)
 	if err != nil {
 		return fmt.Errorf("modules uninstall: %w", err)
 	}
 
-	readRoots, err := readModuleRoots()
+	readRoots, err := m.moduleRoots()
 	if err != nil {
 		return fmt.Errorf("modules uninstall: %w", err)
 	}
@@ -100,45 +58,46 @@ func runModulesUninstall(w io.Writer, stdin io.Reader, source discovery.Source, 
 	metaPath := filepath.Join(filepath.Dir(manifestPath), metayaml.FileName)
 	_, metaErr := os.Stat(metaPath)
 	if metaErr != nil {
-		if !cfg.force {
-			return fmt.Errorf("module %q has no %s — was it hand-authored or created via `futi modules init`? Use --force to remove anyway", cfg.name, metayaml.FileName)
+		if !opts.Force {
+			return fmt.Errorf("module %q has no %s — was it hand-authored or created via `futi modules init`? Use --force to remove anyway", opts.Name, metayaml.FileName)
 		}
-		fmt.Fprintf(w, "Warning: no %s — skipping detach\n", metayaml.FileName)
+		fmt.Fprintf(m.s.Out, "Warning: no %s — skipping detach\n", metayaml.FileName)
 	}
 
-	if !cfg.yes {
+	if !opts.Yes {
 		files, size := countTree(target)
-		ok, err := confirmDelete(s.Prompt, w, target, files, size)
+		ok, err := confirmDelete(m.s.Prompt, m.s.Out, target, files, size)
 		if err != nil {
 			return fmt.Errorf("modules uninstall: %w", err)
 		}
 		if !ok {
-			fmt.Fprintln(w, "Aborted.")
+			fmt.Fprintln(m.s.Out, "Aborted.")
 			return nil
 		}
 	}
 
 	// detach перед удалением (§5.2 шаг 4). cwd = moduleRoot и для одиночного
 	// yaml — это каталог с ним (корректно).
-	if metaErr == nil && !cfg.skipDetach {
+	if metaErr == nil && !opts.SkipDetach {
 		// ParseModule без Validate: модуль с ошибкой схемы (опечатка ключа,
 		// required+default) всё равно должен отработать detach; синтаксис
 		// шаблона проверит рендер хука.
 		mod, err := execmodule.ParseModule(manifestPath, moduleRoot)
 		if err != nil {
-			if cfg.strictDetach {
+			if opts.StrictDetach {
 				return fmt.Errorf("cannot load manifest (strict), nothing deleted: %w", err)
 			}
-			fmt.Fprintf(s.Err, "Warning: cannot load manifest, detach skipped: %v\n", err)
+			fmt.Fprintf(m.s.Err, "Warning: cannot load manifest, detach skipped: %v\n", err)
 		} else if mod.Detach != "" {
-			if err := modulerunner.RunHook(context.Background(), mod.Detach, moduleRoot, execmodule.EffectiveName(mod.Name, manifestPath), s.Stdin, w, s.Err, executor.GroupIsolateWithoutTTY, true); err != nil {
+			policy := m.rt.Exec()
+			if err := modulerunner.RunHook(ctx, mod.Detach, moduleRoot, execmodule.EffectiveName(mod.Name, manifestPath), m.s.Stdin, m.s.Out, m.s.Err, policy.HookGroup, policy.ForwardSignals); err != nil {
 				if _, interrupted := interruptSignal(err); interrupted {
 					return fmt.Errorf("detach interrupted, nothing deleted: %w", err)
 				}
-				if cfg.strictDetach {
+				if opts.StrictDetach {
 					return fmt.Errorf("detach failed (strict), nothing deleted: %w", err)
 				}
-				fmt.Fprintf(s.Err, "Warning: detach failed, proceeding with delete: %v\n", err)
+				fmt.Fprintf(m.s.Err, "Warning: detach failed, proceeding with delete: %v\n", err)
 			}
 		}
 	}
@@ -148,11 +107,11 @@ func runModulesUninstall(w io.Writer, stdin io.Reader, source discovery.Source, 
 	}
 	cleanupEmptyParents(filepath.Dir(target), roots)
 
-	if err := cache.Invalidate(); err != nil {
-		fmt.Fprintf(s.Err, "cache: %v (continuing)\n", err)
+	if err := m.rt.Cache().Invalidate(); err != nil {
+		fmt.Fprintf(m.s.Err, "cache: %v (continuing)\n", err)
 	}
 
-	fmt.Fprintf(w, "Removed: %s\n", target)
+	fmt.Fprintf(m.s.Out, "Removed: %s\n", target)
 	return nil
 }
 

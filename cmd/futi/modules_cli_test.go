@@ -245,3 +245,16 @@ func TestParseInitArgsCommandDoesNotCaptureFlag(t *testing.T) {
 		t.Fatal("expected error when --command is followed by --global")
 	}
 }
+
+func TestParseUninstallArgs_InvalidName(t *testing.T) {
+	for _, name := range []string{"", ".", "..", "a/../b", "/abs", "a//b"} {
+		_, err := parseUninstallArgs([]string{name, "--force", "--yes"})
+		if err == nil {
+			t.Errorf("parseUninstallArgs(%q) должен вернуть ошибку", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "invalid module name") {
+			t.Errorf("parseUninstallArgs(%q) err = %v, want invalid module name", name, err)
+		}
+	}
+}

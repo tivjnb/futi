@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -73,7 +74,7 @@ func TestModulesUninstallFromConfigSource(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var b bytes.Buffer
-	if err := runModulesUninstall(&b, strings.NewReader(""), discovery.NewGlobalSource(src), newTestCache(), []string{"qr", "--yes"}); err != nil {
+	if err := newTestManager(t, &b, strings.NewReader("")).Uninstall(context.Background(), UninstallOptions{Name: "qr", Yes: true}); err != nil {
 		t.Fatalf("runModulesUninstall: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(src, "qr")); !os.IsNotExist(err) {
@@ -443,7 +444,7 @@ func TestModulesUninstallRefusesNestedRoot(t *testing.T) {
 	t.Setenv("FUTI_MODULES_DIR", global)
 	t.Chdir(t.TempDir())
 
-	err := runModulesUninstall(&bytes.Buffer{}, strings.NewReader(""), discovery.NewGlobalSource(src), newTestCache(), []string{"y", "--yes"})
+	err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("")).Uninstall(context.Background(), UninstallOptions{Name: "y", Yes: true})
 	if err == nil {
 		t.Fatal("uninstall of a modules root must be refused")
 	}
