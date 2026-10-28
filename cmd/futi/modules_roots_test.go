@@ -212,10 +212,10 @@ func TestModulesInstallWarnsRootNotInSources(t *testing.T) {
 
 	var err error
 	stderr := captureStderr(t, func() {
-		err = runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src})
+		err = newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src})
 	})
 	if err != nil {
-		t.Fatalf("runModulesInstall: %v", err)
+		t.Fatalf("Install: %v", err)
 	}
 	if !strings.Contains(stderr, global+" is not listed in config.yaml sources; add it there to use, update or uninstall the module by name") {
 		t.Fatalf("stderr lacks sources warning:\n%s", stderr)
@@ -230,8 +230,8 @@ func TestModulesInstallReportsPrefixedName(t *testing.T) {
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 
 	var b bytes.Buffer
-	if err := runModulesInstall(&b, nil, newTestCache(), []string{src, "--namespace", "images"}); err != nil {
-		t.Fatalf("runModulesInstall: %v", err)
+	if err := newTestManager(t, &b, nil).Install(context.Background(), InstallOptions{Source: src, Namespace: "images"}); err != nil {
+		t.Fatalf("Install: %v", err)
 	}
 	if !strings.Contains(b.String(), "Module is available as dev.images.qr") {
 		t.Fatalf("output lacks prefixed name:\n%s", b.String())
@@ -404,10 +404,10 @@ func TestModulesInstallReportsNameWhenRootInsideSource(t *testing.T) {
 	var b bytes.Buffer
 	var err error
 	stderr := captureStderr(t, func() {
-		err = runModulesInstall(&b, nil, newTestCache(), []string{pkg})
+		err = newTestManager(t, &b, nil).Install(context.Background(), InstallOptions{Source: pkg})
 	})
 	if err != nil {
-		t.Fatalf("runModulesInstall: %v", err)
+		t.Fatalf("Install: %v", err)
 	}
 	if strings.Contains(stderr, "is not listed") {
 		t.Fatalf("unexpected sources warning:\n%s", stderr)
@@ -426,8 +426,8 @@ func TestModulesInstallReportsNameWhenRootInsideUnprefixedSource(t *testing.T) {
 	pkg := makeSourceModule(t, t.TempDir(), "qr", "")
 
 	var b bytes.Buffer
-	if err := runModulesInstall(&b, nil, newTestCache(), []string{pkg}); err != nil {
-		t.Fatalf("runModulesInstall: %v", err)
+	if err := newTestManager(t, &b, nil).Install(context.Background(), InstallOptions{Source: pkg}); err != nil {
+		t.Fatalf("Install: %v", err)
 	}
 	if !strings.Contains(b.String(), "Module is available as modules.qr\n") {
 		t.Fatalf("output lacks modules.qr:\n%s", b.String())

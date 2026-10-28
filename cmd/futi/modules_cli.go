@@ -357,3 +357,84 @@ func runModulesUninstall(w io.Writer, stdin io.Reader, rt *core.Runtime, args []
 	}
 	return newCLIManager(w, stdin, rt).Uninstall(context.Background(), *opts)
 }
+
+// parseInstallArgs разбирает аргументы install (паттерн requireValue).
+func parseInstallArgs(args []string) (*InstallOptions, error) {
+	cfg := &InstallOptions{}
+	var positional []string
+
+	requireValue := func(flagName string, i int) (string, error) {
+		if i+1 >= len(args) {
+			return "", fmt.Errorf("%s requires a value", flagName)
+		}
+		val := args[i+1]
+		if strings.HasPrefix(val, "--") {
+			return "", fmt.Errorf("%s requires a value, got flag %s", flagName, val)
+		}
+		return val, nil
+	}
+
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		switch {
+		case arg == "--local":
+			cfg.Local = true
+		case arg == "--skip-attach":
+			cfg.SkipAttach = true
+		case arg == "--yes" || arg == "-y":
+			cfg.Yes = true
+		case arg == "--from-local":
+			cfg.FromLocal = true
+		case arg == "--from-git":
+			cfg.FromGit = true
+		case arg == "--from-archive":
+			cfg.FromArchive = true
+		case arg == "--namespace":
+			val, err := requireValue("--namespace", i)
+			if err != nil {
+				return nil, err
+			}
+			cfg.Namespace = val
+			i++
+		case strings.HasPrefix(arg, "--namespace="):
+			cfg.Namespace = strings.TrimPrefix(arg, "--namespace=")
+		case arg == "--ref":
+			val, err := requireValue("--ref", i)
+			if err != nil {
+				return nil, err
+			}
+			cfg.Ref = val
+			i++
+		case strings.HasPrefix(arg, "--ref="):
+			cfg.Ref = strings.TrimPrefix(arg, "--ref=")
+		case strings.HasPrefix(arg, "--"):
+			return nil, fmt.Errorf("unknown flag: %s", arg)
+		default:
+			positional = append(positional, arg)
+		}
+		i++
+	}
+
+	if len(positional) == 0 {
+		return nil, fmt.Errorf("usage: futi modules install <source> [flags]")
+	}
+	if len(positional) > 1 {
+		return nil, fmt.Errorf("expected one source argument, got %d", len(positional))
+	}
+	cfg.Source = positional[0]
+	if err := validateInstallOptions(*cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// runModulesInstall — `futi modules install`: parses args and installs the
+// module. stdin supplies the attach confirmation answer.
+func runModulesInstall(w io.Writer, stdin io.Reader, rt *core.Runtime, args []string) error {
+	opts, err := parseInstallArgs(args)
+	if err != nil {
+		return err
+	}
+	return newCLIManager(w, stdin, rt).Install(context.Background(), *opts)
+}

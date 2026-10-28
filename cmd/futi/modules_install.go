@@ -4,168 +4,101 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/tivjnb/futi/internal/config"
-	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/execmodule"
-	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/metayaml"
-	"github.com/tivjnb/futi/internal/modulecache"
 	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
-// installArgs — аргументы `futi modules install`.
-type installArgs struct {
-	source      string
-	local       bool
-	namespace   string
-	ref         string
-	skipAttach  bool
-	yes         bool
-	fromLocal   bool
-	fromGit     bool
-	fromArchive bool
+// InstallOptions are the inputs of Manager.Install.
+type InstallOptions struct {
+	Source      string
+	Namespace   string
+	Ref         string
+	Local       bool
+	SkipAttach  bool
+	Yes         bool
+	FromLocal   bool
+	FromGit     bool
+	FromArchive bool
 }
 
-// parseInstallArgs разбирает аргументы install (паттерн requireValue).
-func parseInstallArgs(args []string) (*installArgs, error) {
-	cfg := &installArgs{}
-	var positional []string
-
-	requireValue := func(flagName string, i int) (string, error) {
-		if i+1 >= len(args) {
-			return "", fmt.Errorf("%s requires a value", flagName)
-		}
-		val := args[i+1]
-		if strings.HasPrefix(val, "--") {
-			return "", fmt.Errorf("%s requires a value, got flag %s", flagName, val)
-		}
-		return val, nil
+// validateInstallOptions rejects a ref that could be taken for a git flag and
+// a namespace that is not a valid module name or uses reserved segments.
+func validateInstallOptions(opts InstallOptions) error {
+	if strings.HasPrefix(opts.Ref, "-") {
+		return fmt.Errorf("ref %q must not start with \"-\"", opts.Ref)
 	}
 
-	i := 0
-	for i < len(args) {
-		arg := args[i]
-		switch {
-		case arg == "--local":
-			cfg.local = true
-		case arg == "--skip-attach":
-			cfg.skipAttach = true
-		case arg == "--yes" || arg == "-y":
-			cfg.yes = true
-		case arg == "--from-local":
-			cfg.fromLocal = true
-		case arg == "--from-git":
-			cfg.fromGit = true
-		case arg == "--from-archive":
-			cfg.fromArchive = true
-		case arg == "--namespace":
-			val, err := requireValue("--namespace", i)
-			if err != nil {
-				return nil, err
-			}
-			cfg.namespace = val
-			i++
-		case strings.HasPrefix(arg, "--namespace="):
-			cfg.namespace = strings.TrimPrefix(arg, "--namespace=")
-		case arg == "--ref":
-			val, err := requireValue("--ref", i)
-			if err != nil {
-				return nil, err
-			}
-			cfg.ref = val
-			i++
-		case strings.HasPrefix(arg, "--ref="):
-			cfg.ref = strings.TrimPrefix(arg, "--ref=")
-		case strings.HasPrefix(arg, "--"):
-			return nil, fmt.Errorf("unknown flag: %s", arg)
-		default:
-			positional = append(positional, arg)
-		}
-		i++
-	}
-
-	if len(positional) == 0 {
-		return nil, fmt.Errorf("usage: futi modules install <source> [flags]")
-	}
-	if len(positional) > 1 {
-		return nil, fmt.Errorf("expected one source argument, got %d", len(positional))
-	}
-	cfg.source = positional[0]
-	if strings.HasPrefix(cfg.ref, "-") {
-		return nil, fmt.Errorf("ref %q must not start with \"-\"", cfg.ref)
-	}
-
-	if cfg.namespace != "" {
-		if err := validateModuleName(cfg.namespace); err != nil {
-			return nil, fmt.Errorf("--namespace: %w", err)
+	if opts.Namespace != "" {
+		if err := validateModuleName(opts.Namespace); err != nil {
+			return fmt.Errorf("--namespace: %w", err)
 		}
 		// validateModuleName допускает и "/", и "." как разделители — режем по обоим.
-		if err := checkReservedSegments(strings.ReplaceAll(cfg.namespace, "/", "."), "."); err != nil {
-			return nil, fmt.Errorf("--namespace: %w", err)
+		if err := checkReservedSegments(strings.ReplaceAll(opts.Namespace, "/", "."), "."); err != nil {
+			return fmt.Errorf("--namespace: %w", err)
 		}
 	}
-	return cfg, nil
+	return nil
 }
 
-// installRoot возвращает корень установки: ./.futi при --local, иначе
-// глобальный каталог (FUTI_MODULES_DIR или default).
-func installRoot(local bool) (string, error) {
+// installRootFrom returns the install root: <localDir>/.futi for a local
+// install, otherwise globalDir.
+func installRootFrom(local bool, localDir, globalDir string) (string, error) {
 	if local {
+		if localDir == "" {
+			return "", errors.New("local modules are not available: no local directory")
+		}
 		// Абсолютный путь: dest попадает в cwd и module_root хука.
-		return filepath.Abs(".futi")
+		return filepath.Abs(filepath.Join(localDir, ".futi"))
 	}
-	return core.DefaultModulesDir()
+	return globalDir, nil
 }
 
 // computeTreeHash считает хеш дерева модуля при install; шов для тестов.
 var computeTreeHash = metayaml.ComputeTreeHash
 
-// runModulesInstall устанавливает модуль из источника (спека §5.1).
-// stdin — для подтверждения attach-хука (os.Stdin из main).
-func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, args []string) (retErr error) {
-	s := cliStreams(w, stdin)
-	cfg, err := parseInstallArgs(args)
-	if err != nil {
+// Install installs a module from a source (spec §5.1). Confirmation of the
+// attach hook goes through the manager's Prompter.
+func (m *Manager) Install(ctx context.Context, opts InstallOptions) (retErr error) {
+	if err := validateInstallOptions(opts); err != nil {
 		return err
 	}
 
-	kind, err := detectSourceType(cfg.source, cfg.fromLocal, cfg.fromGit, cfg.fromArchive)
+	kind, err := detectSourceType(opts.Source, opts.FromLocal, opts.FromGit, opts.FromArchive)
 	if err != nil {
 		return err
 	}
 
 	// F62: --ref осмыслен только для git; отказ до временных каталогов и сети.
-	if cfg.ref != "" && kind != kindGit {
+	if opts.Ref != "" && kind != kindGit {
 		return fmt.Errorf("modules install: --ref is only supported for git sources")
 	}
 
 	// Относительный local-источник привязываем к cwd установки: update
 	// может запускаться из другого каталога. Считаем до переноса, чтобы ошибка
 	// не оставила модуль без meta.
-	lockSource := cfg.source
+	lockSource := opts.Source
 	if kind == kindLocal {
-		if lockSource, err = filepath.Abs(cfg.source); err != nil {
+		if lockSource, err = filepath.Abs(opts.Source); err != nil {
 			return fmt.Errorf("modules install: %w", err)
 		}
 	}
 
-	root, err := installRoot(cfg.local)
+	root, err := installRootFrom(opts.Local, m.rt.LocalDir(), m.rt.ModulesDir())
 	if err != nil {
 		return fmt.Errorf("modules install: %w", err)
 	}
 	// Конфиг нужен только для сообщения о видимости глобальной установки,
 	// но невалидный — ошибка до любых изменений на диске.
 	var futiCfg *config.Config
-	if !cfg.local {
-		if futiCfg, err = core.LoadDefaultConfig(); err != nil {
-			return fmt.Errorf("modules install: %w", err)
-		}
+	if !opts.Local {
+		futiCfg = m.rt.Config()
 	}
 
 	// Fetch в temp-каталог; очистка при любом исходе.
@@ -175,7 +108,7 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 	}
 	defer os.RemoveAll(tempBase)
 
-	moduleDir, commit, err := fetchSource(context.Background(), executor.Config{Stdin: s.Stdin, Stdout: s.Out, Stderr: s.Err, ForwardSignals: true}, cfg.source, kind, cfg.ref, tempBase)
+	moduleDir, commit, err := fetchSource(ctx, m.commandConfig(), opts.Source, kind, opts.Ref, tempBase)
 	if err != nil {
 		return fmt.Errorf("modules install: %w", err)
 	}
@@ -188,7 +121,7 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 
 	name := mod.Name
 	if name == "" {
-		name = fallbackName(cfg.source)
+		name = fallbackName(opts.Source)
 	}
 	if err := validateModuleName(name); err != nil {
 		return fmt.Errorf("modules install: %w", err)
@@ -205,7 +138,7 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 
 	// Namespace в dot-форме ("images.lib") переводим в path-форму —
 	// discovery резолвит "images.lib.qr" в images/lib/qr/.
-	nsPath := filepath.FromSlash(strings.ReplaceAll(cfg.namespace, ".", "/"))
+	nsPath := filepath.FromSlash(strings.ReplaceAll(opts.Namespace, ".", "/"))
 	dest := filepath.Join(root, nsPath, name)
 	if _, err := os.Stat(dest); err == nil {
 		return fmt.Errorf("module already exists at %s; use `futi modules update`", dest)
@@ -221,7 +154,7 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 	}
 	// Подтверждение attach — до любых изменений в каталоге модулей:
 	// отказ ничего не оставляет на диске.
-	gate := attachGate{p: s.Prompt, errW: s.Err, skip: cfg.skipAttach, yes: cfg.yes}
+	gate := attachGate{p: m.s.Prompt, errW: m.s.Err, skip: opts.SkipAttach, yes: opts.Yes}
 	runAttach, err := gate.allow(mod.Attach, name, dest)
 	if errors.Is(err, errAttachNotConfirmed) {
 		return fmt.Errorf("%w; module not installed", err)
@@ -262,7 +195,7 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 		Lockfile: metayaml.Lockfile{
 			Source:      lockSource,
 			Type:        kind.String(),
-			Ref:         cfg.ref,
+			Ref:         opts.Ref,
 			Commit:      commit,
 			Hash:        hash,
 			InstalledAt: now,
@@ -275,20 +208,20 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 
 	// attach: провал → rollback (rm dest) + error (§3.1, §8 #6).
 	if runAttach {
-		if err := modulerunner.RunHook(context.Background(), mod.Attach, dest, execmodule.EffectiveName(mod.Name, filepath.Join(dest, "config.yaml")), s.Stdin, w, s.Err, executor.GroupIsolateWithoutTTY, true); err != nil {
+		if err := modulerunner.RunHook(ctx, mod.Attach, dest, execmodule.EffectiveName(mod.Name, filepath.Join(dest, "config.yaml")), m.s.Stdin, m.s.Out, m.s.Err, m.rt.Exec().HookGroup, m.rt.Exec().ForwardSignals); err != nil {
 			return fmt.Errorf("attach failed, module removed: %w", err)
 		}
 	}
 
 	committed = true
 
-	if err := cache.Invalidate(); err != nil {
-		fmt.Fprintf(s.Err, "cache: %v (continuing)\n", err)
+	if err := m.rt.Cache().Invalidate(); err != nil {
+		fmt.Fprintf(m.s.Err, "cache: %v (continuing)\n", err)
 	}
 
-	fmt.Fprintf(w, "Installed: %s → %s\n", cfg.source, dest)
-	if !cfg.local {
-		reportSourcesVisibility(w, s.Err, futiCfg, root, dotName(filepath.Join(nsPath, name)))
+	fmt.Fprintf(m.s.Out, "Installed: %s → %s\n", opts.Source, dest)
+	if !opts.Local {
+		reportSourcesVisibility(m.s.Out, m.s.Err, futiCfg, root, dotName(filepath.Join(nsPath, name)))
 	}
 	return nil
 }

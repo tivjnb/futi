@@ -203,7 +203,7 @@ func TestRunModulesUpdateRejectsHTTPSource(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src}); err != nil {
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	metaPath := filepath.Join(global, "qr", metayaml.FileName)

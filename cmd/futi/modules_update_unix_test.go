@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"os/exec"
@@ -34,7 +35,7 @@ func TestRunModulesUpdateStopsWhenHookCatchesSIGTERM(t *testing.T) {
 	srcB := makeSourceModule(t, parent, "b", "")
 	cache := newTestCache()
 	for _, src := range []string{srcA, srcB} {
-		if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src, "--skip-attach"}); err != nil {
+		if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, SkipAttach: true}); err != nil {
 			t.Fatalf("install: %v", err)
 		}
 	}
@@ -129,7 +130,7 @@ func TestRunModulesUpdateCopyFailureRestoresOld(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src}); err != nil {
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	dest := filepath.Join(global, "qr")
@@ -202,7 +203,7 @@ func TestRunModulesUpdateRollbackFailureNamesBackup(t *testing.T) {
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	cache := newTestCache()
-	if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{src}); err != nil {
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	dest := filepath.Join(global, "qr")
@@ -279,7 +280,7 @@ func TestUpdateCrossDeviceSymlinkUpToDate(t *testing.T) {
 	gitRunTest(t, repo, "add", ".")
 	gitRunTest(t, repo, "commit", "-q", "-m", "init")
 	crossDeviceRename(t)
-	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{"--from-git", repo}); err != nil {
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: repo, FromGit: true}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
@@ -309,7 +310,7 @@ func TestUpdateSymlinkTargetOnlyChangeShownAsModified(t *testing.T) {
 	gitRunTest(t, repo, "init", "-q")
 	gitRunTest(t, repo, "add", ".")
 	gitRunTest(t, repo, "commit", "-q", "-m", "init")
-	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{"--from-git", repo}); err != nil {
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: repo, FromGit: true}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	if err := os.Remove(link); err != nil {

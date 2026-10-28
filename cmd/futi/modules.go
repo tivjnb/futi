@@ -32,7 +32,7 @@ func runModules(w io.Writer, stdin io.Reader, rt *core.Runtime, args []string) e
 	case "init":
 		return runModulesInit(w, rest)
 	case "install":
-		return runModulesInstall(w, stdin, rt.Cache(), rest)
+		return runModulesInstall(w, stdin, rt, rest)
 	case "uninstall":
 		return runModulesUninstall(w, stdin, rt, rest)
 	case "update":

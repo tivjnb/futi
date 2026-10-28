@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/tivjnb/futi/internal/core"
+	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/modules"
 )
 
@@ -20,4 +21,16 @@ func New(rt *core.Runtime, s modules.Streams) *Manager {
 // moduleRoots returns the roots scanned by list, update and uninstall.
 func (m *Manager) moduleRoots() ([]moduleRoot, error) {
 	return moduleRootsFrom(m.rt.Config(), m.rt.ModulesDir(), m.rt.LocalDir()), nil
+}
+
+// commandConfig returns the base executor config for child processes started
+// by the manager (git, curl), following the runtime exec policy.
+func (m *Manager) commandConfig() executor.Config {
+	return executor.Config{
+		Stdin:          m.s.Stdin,
+		Stdout:         m.s.Out,
+		Stderr:         m.s.Err,
+		ForwardSignals: m.rt.Exec().ForwardSignals,
+		Group:          m.rt.Exec().CommandGroup,
+	}
 }

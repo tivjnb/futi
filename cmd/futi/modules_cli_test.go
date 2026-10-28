@@ -258,3 +258,36 @@ func TestParseUninstallArgs_InvalidName(t *testing.T) {
 		}
 	}
 }
+
+func TestParseInstallArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		want    InstallOptions
+		wantErr string
+	}{
+		{"short yes", []string{"src", "-y"}, InstallOptions{Source: "src", Yes: true}, ""},
+		{"all flags", []string{"--local", "--skip-attach", "--yes", "--from-git", "--ref=v1", "--namespace", "a.b", "src"},
+			InstallOptions{Source: "src", Local: true, SkipAttach: true, Yes: true, FromGit: true, Ref: "v1", Namespace: "a.b"}, ""},
+		{"namespace equals form", []string{"src", "--namespace=ns"}, InstallOptions{Source: "src", Namespace: "ns"}, ""},
+		{"reserved namespace", []string{"src", "--namespace", "a.list"}, InstallOptions{}, "--namespace: "},
+		{"ref with leading dash", []string{"src", "--ref", "-x"}, InstallOptions{}, `must not start with "-"`},
+		{"missing source", []string{"--yes"}, InstallOptions{}, "usage: futi modules install <source> [flags]"},
+		{"two sources", []string{"a", "b"}, InstallOptions{}, "expected one source argument, got 2"},
+		{"unknown flag", []string{"src", "--bogus"}, InstallOptions{}, "unknown flag: --bogus"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseInstallArgs(tc.args)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("parseInstallArgs(%q) err = %v, want containing %q", tc.args, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil || *got != tc.want {
+				t.Fatalf("parseInstallArgs(%q) = (%+v, %v), want %+v", tc.args, got, err, tc.want)
+			}
+		})
+	}
+}

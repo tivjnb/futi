@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -53,7 +54,7 @@ func TestInstallAttachConfirmed(t *testing.T) {
 
 			var err error
 			prompt := captureStderr(t, func() {
-				err = runModulesInstall(&bytes.Buffer{}, strings.NewReader(answer), newTestCache(), []string{src})
+				err = newTestManager(t, &bytes.Buffer{}, strings.NewReader(answer)).Install(context.Background(), InstallOptions{Source: src})
 			})
 			if err != nil {
 				t.Fatalf("install: %v", err)
@@ -81,7 +82,7 @@ func TestAttachNoAnswerHintsYes(t *testing.T) {
 
 		var err error
 		captureStderr(t, func() {
-			err = runModulesInstall(&bytes.Buffer{}, strings.NewReader(""), newTestCache(), []string{src})
+			err = newTestManager(t, &bytes.Buffer{}, strings.NewReader("")).Install(context.Background(), InstallOptions{Source: src})
 		})
 		if err == nil || !strings.Contains(err.Error(), "--yes") || !strings.Contains(err.Error(), "module not installed") {
 			t.Fatalf("err = %v, want hint about --yes and module not installed", err)
@@ -117,7 +118,7 @@ func TestAttachPromptSkipsBlankLines(t *testing.T) {
 	src := makeSourceModule(t, t.TempDir(), "qr", "attach: \"echo a\\n   \\n\\techo b\\n\"\n")
 
 	prompt := captureStderr(t, func() {
-		_ = runModulesInstall(&bytes.Buffer{}, strings.NewReader("n\n"), newTestCache(), []string{src})
+		_ = newTestManager(t, &bytes.Buffer{}, strings.NewReader("n\n")).Install(context.Background(), InstallOptions{Source: src})
 	})
 	want := "):\n  echo a\n  \techo b\nRun it?"
 	if !strings.Contains(prompt, want) {
@@ -134,7 +135,7 @@ func TestInstallAttachDeclinedLeavesNothing(t *testing.T) {
 
 			var err error
 			captureStderr(t, func() {
-				err = runModulesInstall(&bytes.Buffer{}, strings.NewReader(answer), newTestCache(), []string{src, "--namespace", "ns"})
+				err = newTestManager(t, &bytes.Buffer{}, strings.NewReader(answer)).Install(context.Background(), InstallOptions{Source: src, Namespace: "ns"})
 			})
 			if err == nil || !strings.Contains(err.Error(), "not confirmed") {
 				t.Fatalf("err = %v, want attach hook not confirmed", err)
@@ -151,7 +152,7 @@ func TestInstallAttachWithoutTerminalRefusesWithoutReading(t *testing.T) {
 	setStdinTerminal(t, false)
 	src := makeSourceModule(t, t.TempDir(), "qr", attachTouch)
 
-	err := runModulesInstall(&bytes.Buffer{}, unreadableStdin{t}, newTestCache(), []string{src})
+	err := newTestManager(t, &bytes.Buffer{}, unreadableStdin{t}).Install(context.Background(), InstallOptions{Source: src})
 	if err == nil || !strings.Contains(err.Error(), "--yes") {
 		t.Fatalf("err = %v, want hint about --yes", err)
 	}
@@ -169,7 +170,7 @@ func TestInstallAttachYesRunsWithoutPrompt(t *testing.T) {
 
 			var err error
 			prompt := captureStderr(t, func() {
-				err = runModulesInstall(&bytes.Buffer{}, unreadableStdin{t}, newTestCache(), []string{src, flag})
+				err = newTestManager(t, &bytes.Buffer{}, unreadableStdin{t}).Install(context.Background(), InstallOptions{Source: src, Yes: true})
 			})
 			if err != nil {
 				t.Fatalf("install: %v", err)
@@ -193,7 +194,7 @@ func TestInstallSkipAttachWinsWithoutPrompt(t *testing.T) {
 
 			var err error
 			prompt := captureStderr(t, func() {
-				err = runModulesInstall(&bytes.Buffer{}, unreadableStdin{t}, newTestCache(), append([]string{src}, args...))
+				err = newTestManager(t, &bytes.Buffer{}, unreadableStdin{t}).Install(context.Background(), InstallOptions{Source: src, SkipAttach: true, Yes: slices.Contains(args, "--yes")})
 			})
 			if err != nil {
 				t.Fatalf("install: %v", err)
@@ -216,7 +217,7 @@ func TestInstallWithoutAttachDoesNotAsk(t *testing.T) {
 	setStdinTerminal(t, false)
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 
-	if err := runModulesInstall(&bytes.Buffer{}, unreadableStdin{t}, newTestCache(), []string{src}); err != nil {
+	if err := newTestManager(t, &bytes.Buffer{}, unreadableStdin{t}).Install(context.Background(), InstallOptions{Source: src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	if !exists(filepath.Join(global, "qr", "config.yaml")) {
@@ -230,7 +231,7 @@ func TestAttachPromptStripsControlCharacters(t *testing.T) {
 	src := makeSourceModule(t, t.TempDir(), "qr", "attach: \"echo \\e[2J cleared\"\n")
 
 	prompt := captureStderr(t, func() {
-		_ = runModulesInstall(&bytes.Buffer{}, strings.NewReader("n\n"), newTestCache(), []string{src})
+		_ = newTestManager(t, &bytes.Buffer{}, strings.NewReader("n\n")).Install(context.Background(), InstallOptions{Source: src})
 	})
 	if strings.Contains(prompt, "\x1b") {
 		t.Fatalf("prompt must not contain ESC: %q", prompt)
@@ -245,7 +246,7 @@ func TestAttachPromptStripsControlCharacters(t *testing.T) {
 func installThenChange(t *testing.T, global, name string) string {
 	t.Helper()
 	src := makeSourceModule(t, t.TempDir(), name, "")
-	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src}); err != nil {
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src}); err != nil {
 		t.Fatalf("install %s: %v", name, err)
 	}
 	writeFile(t, filepath.Join(src, "config.yaml"),
@@ -306,7 +307,7 @@ func TestUpdateUpToDateDoesNotAsk(t *testing.T) {
 	global := attachEnv(t)
 	setStdinTerminal(t, true)
 	src := makeSourceModule(t, t.TempDir(), "qr", attachTouch)
-	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src, "--yes"}); err != nil {
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Yes: true}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
@@ -363,7 +364,7 @@ func TestModulesInstallHookOutputToWriter(t *testing.T) {
 	src := makeSourceModule(t, t.TempDir(), "qr", "attach: \"echo hook-says-hi\"\n")
 
 	var buf bytes.Buffer
-	if err := runModulesInstall(&buf, unreadableStdin{t}, newTestCache(), []string{src, "--yes"}); err != nil {
+	if err := newTestManager(t, &buf, unreadableStdin{t}).Install(context.Background(), InstallOptions{Source: src, Yes: true}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	if !strings.Contains(buf.String(), "hook-says-hi") {
@@ -376,7 +377,7 @@ func TestModulesUpdateHookOutputToWriter(t *testing.T) {
 	global := attachEnv(t)
 	setStdinTerminal(t, false)
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
-	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{src}); err != nil {
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	writeFile(t, filepath.Join(src, "config.yaml"),
@@ -437,7 +438,7 @@ func TestHooksGetSameModuleName(t *testing.T) {
 			writeFile(t, cfgPath, hookNameModule(tt.nameLine, out))
 			cache := newTestCache()
 
-			if err := runModulesInstall(&bytes.Buffer{}, nil, cache, []string{srcDir, "--yes", "--namespace=" + tt.ns}); err != nil {
+			if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: srcDir, Yes: true, Namespace: tt.ns}); err != nil {
 				t.Fatalf("install: %v", err)
 			}
 			if got := readTrim(t, filepath.Join(out, "attach")); got != want {
@@ -491,7 +492,7 @@ func TestInstallWithoutNameUsesFallbackName(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(srcDir, "config.yaml"), hookNameModule("", out))
 
-	if err := runModulesInstall(&bytes.Buffer{}, nil, newTestCache(), []string{srcDir, "--yes"}); err != nil {
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: srcDir, Yes: true}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	if !exists(filepath.Join(global, "mymod", "config.yaml")) {

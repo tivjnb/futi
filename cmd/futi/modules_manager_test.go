@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"io"
 	"strings"
 	"testing"
 
+	"github.com/tivjnb/futi/internal/core"
+	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/modules"
 )
 
 func TestManagerInfoRejectsSlashName(t *testing.T) {
@@ -36,5 +40,36 @@ func TestManagerListSorted(t *testing.T) {
 	}
 	if got := strings.Join(names, ","); got != "alpha,zeta" {
 		t.Fatalf("List names = %q, want alpha,zeta", got)
+	}
+}
+
+func TestCommandConfigFollowsPolicy(t *testing.T) {
+	tests := []struct {
+		name        string
+		policy      core.ExecPolicy
+		wantGroup   executor.GroupMode
+		wantForward bool
+	}{
+		{"server", core.ServerExecPolicy, executor.GroupAlways, false},
+		{"cli", core.CLIExecPolicy, executor.GroupInherit, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rt, err := core.NewRuntime(core.Options{ModulesDir: t.TempDir(), Exec: tc.policy})
+			if err != nil {
+				t.Fatalf("NewRuntime: %v", err)
+			}
+			in := strings.NewReader("")
+			var out, errOut bytes.Buffer
+			m := New(rt, modules.Streams{Out: &out, Err: &errOut, Stdin: in})
+
+			cfg := m.commandConfig()
+			if cfg.Group != tc.wantGroup || cfg.ForwardSignals != tc.wantForward {
+				t.Errorf("Group = %v, ForwardSignals = %v; want %v, %v", cfg.Group, cfg.ForwardSignals, tc.wantGroup, tc.wantForward)
+			}
+			if cfg.Stdin != io.Reader(in) || cfg.Stdout != io.Writer(&out) || cfg.Stderr != io.Writer(&errOut) {
+				t.Errorf("commandConfig streams do not match Streams")
+			}
+		})
 	}
 }
