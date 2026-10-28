@@ -555,9 +555,50 @@ func TestInstallLocalWithoutLocalDir(t *testing.T) {
 func TestInstallRejectsDashRef(t *testing.T) {
 	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
 	t.Chdir(t.TempDir())
+	// A git that records its invocation: the ref must be rejected before any
+	// git process starts.
+	marker := filepath.Join(t.TempDir(), "git-was-run")
+	fakeBin(t, map[string]string{"git": "touch '" + marker + "'"})
 
 	err := newTestManager(t, io.Discard, nil).Install(context.Background(), InstallOptions{Source: "https://example.com/r.git", Ref: "-x"})
 	if err == nil || !strings.Contains(err.Error(), `must not start with "-"`) {
 		t.Fatalf("Install err = %v, want ref must not start with \"-\"", err)
+	}
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Fatalf("git was invoked for a dash ref (stat marker: %v)", statErr)
+	}
+}
+
+// A server-style Runtime has config sources but no global modules dir. A
+// global install must fail instead of writing modules into the cwd.
+func TestInstallGlobalWithoutModulesDir(t *testing.T) {
+	src := t.TempDir()
+	writeFutiConfig(t, sourceConfig(src, "", ""))
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	opts, err := core.DefaultOptions()
+	if err != nil {
+		t.Fatalf("DefaultOptions: %v", err)
+	}
+	opts.ModulesDir = ""
+	opts.CachePath = ""
+	opts.CachePathErr = nil
+	rt, err := core.NewRuntime(opts)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	module := installFixtureModule(t, t.TempDir(), "qr", nil)
+
+	err = newManagerWithRuntime(io.Discard, nil, rt).Install(context.Background(), InstallOptions{Source: filepath.Join(module, "qr"), Yes: true, SkipAttach: true})
+	if err == nil || !strings.Contains(err.Error(), "global modules directory is not set") {
+		t.Fatalf("Install err = %v, want global modules directory is not set", err)
+	}
+	entries, readErr := os.ReadDir(cwd)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("cwd must stay empty, got %v", entries)
 	}
 }

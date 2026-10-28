@@ -126,10 +126,10 @@ func quoteYAMLValue(s string) string {
 	return fmt.Sprintf("%q", s)
 }
 
-// Init создаёт новый модуль с шаблоном YAML (подкоманда `futi modules init`).
-// Генерирует шаблон и пишет файл; сообщения идут в out, предупреждения — в errOut.
-// Возвращает ошибку при существующем файле (без перезаписи).
-// #44: использует O_EXCL вместо Stat+WriteFile для атомарной проверки.
+// Init creates a new module from a YAML template (`futi modules init`).
+// It renders the template and writes the file; messages go to out and
+// warnings to errOut. An existing file is an error (never overwritten).
+// The file is created with O_EXCL so the existence check is atomic (#44).
 func Init(out, errOut io.Writer, opts InitOptions) error {
 	if err := ValidateInitPath(opts.Path); err != nil {
 		return err

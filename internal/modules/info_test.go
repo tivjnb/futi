@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tivjnb/futi/internal/metayaml"
@@ -40,5 +41,35 @@ func TestRunModulesPath(t *testing.T) {
 	}
 	if want := filepath.Join(root, "qr"); got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestManagerInfoUnknownName(t *testing.T) {
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	t.Chdir(t.TempDir())
+
+	info, err := newTestManager(t, io.Discard, nil).Info("nope")
+	if err == nil || !strings.HasPrefix(err.Error(), "modules info: ") {
+		t.Fatalf("Info err = %v, want modules info: prefix", err)
+	}
+	if info.Root != "" || info.Meta != nil {
+		t.Fatalf("Info = %+v, want empty on resolve error", info)
+	}
+}
+
+func TestManagerInfoBrokenSidecar(t *testing.T) {
+	root := installFixtureModule(t, t.TempDir(), "qr", nil)
+	if err := os.WriteFile(filepath.Join(root, "qr", metayaml.FileName), []byte("lockfile: [broken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FUTI_MODULES_DIR", root)
+	t.Chdir(t.TempDir())
+
+	info, err := newTestManager(t, io.Discard, nil).Info("qr")
+	if err == nil || !strings.HasPrefix(err.Error(), "modules info: ") {
+		t.Fatalf("Info err = %v, want modules info: prefix", err)
+	}
+	if want := filepath.Join(root, "qr"); info.Root != want || info.Meta != nil {
+		t.Fatalf("Info = %+v, want Root %q and nil Meta", info, want)
 	}
 }

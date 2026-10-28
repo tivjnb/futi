@@ -141,6 +141,7 @@ func TestRunModulesUninstallSingleYamlFile(t *testing.T) {
 }
 
 func TestRunModulesUninstallRefusesOutsideRoot(t *testing.T) {
+	skipSymlinksOnWindows(t)
 	global := t.TempDir()
 	t.Setenv("FUTI_MODULES_DIR", global)
 	t.Chdir(t.TempDir())
@@ -151,7 +152,7 @@ func TestRunModulesUninstallRefusesOutsideRoot(t *testing.T) {
 	os.MkdirAll(moduleDir, 0o755)
 	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte("name: qr\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
 	if err := os.Symlink(moduleDir, filepath.Join(global, "qr")); err != nil {
-		t.Skipf("symlink: %v", err)
+		t.Fatalf("symlink: %v", err)
 	}
 
 	err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("\n")).Uninstall(context.Background(), UninstallOptions{Name: "qr", Yes: true, Force: true})

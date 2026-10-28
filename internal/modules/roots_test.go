@@ -466,3 +466,19 @@ func TestModuleRootsFromSkipsLocalWithoutLocalDir(t *testing.T) {
 		t.Fatalf("moduleRootsFrom(nil, global, project) = %+v, want %s then %s", roots, global, want)
 	}
 }
+
+func TestModuleRootsFromSkipsEmptyGlobalDir(t *testing.T) {
+	project := t.TempDir()
+	if err := os.Mkdir(filepath.Join(project, ".futi"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	roots := moduleRootsFrom(nil, "", project)
+	want := filepath.Join(project, ".futi")
+	if len(roots) != 1 || roots[0].Dir != want {
+		t.Fatalf("moduleRootsFrom(nil, \"\", project) = %+v, want only %s", roots, want)
+	}
+	if roots := moduleRootsFrom(nil, "", ""); len(roots) != 0 {
+		t.Fatalf("moduleRootsFrom(nil, \"\", \"\") = %+v, want none", roots)
+	}
+}

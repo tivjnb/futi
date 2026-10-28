@@ -399,6 +399,14 @@ func TestAddCommandOversizedResultRejected(t *testing.T) {
 	}
 }
 
+func TestAddCommandRejectsSlashModule(t *testing.T) {
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	err := newTestManager(t, &bytes.Buffer{}, nil).AddCommand(AddCommandOptions{Module: "a/b", Command: "x"})
+	if err == nil || !strings.Contains(err.Error(), "write the namespace with a dot") {
+		t.Fatalf("AddCommand err = %v, want namespace-with-a-dot error", err)
+	}
+}
+
 func TestRemoveCommandRejectsSlashModule(t *testing.T) {
 	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
 	err := newTestManager(t, &bytes.Buffer{}, nil).RemoveCommand(RemoveCommandOptions{Module: "a/b", Command: "x"})

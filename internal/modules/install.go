@@ -57,6 +57,9 @@ func installRootFrom(local bool, localDir, globalDir string) (string, error) {
 		// Абсолютный путь: dest попадает в cwd и module_root хука.
 		return filepath.Abs(filepath.Join(localDir, ".futi"))
 	}
+	if globalDir == "" {
+		return "", errors.New("global modules directory is not set")
+	}
 	return globalDir, nil
 }
 

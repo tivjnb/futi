@@ -81,8 +81,26 @@ func TestRunModulesPathUsageError(t *testing.T) {
 	}
 }
 
-// TestRunModulesInfoStripsControlChars: ESC в lockfile/about не доходит до терминала (audit F18).
+// A broken sidecar still prints Path: and then reports the error.
+func TestRunModulesInfoBrokenSidecar(t *testing.T) {
+	root := installFixtureModule(t, t.TempDir(), "qr", nil)
+	if err := os.WriteFile(filepath.Join(root, "qr", metayaml.FileName), []byte("lockfile: [broken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FUTI_MODULES_DIR", root)
+	t.Chdir(t.TempDir())
 
+	var b bytes.Buffer
+	err := runModulesInfo(&b, newTestRuntime(t), []string{"qr"})
+	if err == nil || !strings.HasPrefix(err.Error(), "modules info: ") {
+		t.Fatalf("runModulesInfo err = %v, want modules info: error", err)
+	}
+	if want := "Path: " + filepath.Join(root, "qr") + "\n"; b.String() != want {
+		t.Fatalf("output = %q, want %q", b.String(), want)
+	}
+}
+
+// TestRunModulesInfoStripsControlChars: ESC в lockfile/about не доходит до терминала (audit F18).
 func TestRunModulesInfoStripsControlChars(t *testing.T) {
 	root := t.TempDir()
 	meta := &metayaml.Meta{
@@ -138,7 +156,6 @@ func TestRunModulesListEmpty(t *testing.T) {
 }
 
 // TestRunModulesListStripsControlChars: ESC в lockfile не доходит до терминала (audit F18).
-
 func TestRunModulesListStripsControlChars(t *testing.T) {
 	root := t.TempDir()
 	installFixtureModule(t, root, "qr", &metayaml.Meta{Lockfile: metayaml.Lockfile{
@@ -161,7 +178,6 @@ func TestRunModulesListStripsControlChars(t *testing.T) {
 }
 
 // F62: ref из lockfile не-git источника не показывается как версия.
-
 func TestModulesListRefOnlyForGit(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("FUTI_MODULES_DIR", root)

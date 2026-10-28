@@ -30,7 +30,9 @@ func moduleRootsFrom(cfg *config.Config, globalDir, localDir string) []moduleRoo
 			roots = append(roots, moduleRoot{Dir: sc.Path, Prefix: sc.FullPrefix()})
 		}
 	}
-	roots = append(roots, moduleRoot{Dir: globalDir})
+	if globalDir != "" {
+		roots = append(roots, moduleRoot{Dir: globalDir})
+	}
 	if localDir != "" {
 		local := filepath.Join(localDir, ".futi")
 		if info, err := os.Stat(local); err == nil && info.IsDir() {
