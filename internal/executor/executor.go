@@ -103,41 +103,6 @@ type Config struct {
 	Group GroupMode
 }
 
-// NewConfig returns an empty execution config.
-func NewConfig() *Config {
-	return &Config{}
-}
-
-// WithDir adds Dir to cfg.
-func (cfg *Config) WithDir(dir string) *Config {
-	cfg.Dir = dir
-	return cfg
-}
-
-// WithEnv adds Env to cfg.
-func (cfg *Config) WithEnv(env []string) *Config {
-	cfg.Env = env
-	return cfg
-}
-
-// WithStdout adds Stdout to cfg.
-func (cfg *Config) WithStdout(stdout io.Writer) *Config {
-	cfg.Stdout = stdout
-	return cfg
-}
-
-// WithStdin adds Stdin to cfg.
-func (cfg *Config) WithStdin(stdin io.Reader) *Config {
-	cfg.Stdin = stdin
-	return cfg
-}
-
-// WithStderr adds Stderr to cfg.
-func (cfg *Config) WithStderr(stderr io.Writer) *Config {
-	cfg.Stderr = stderr
-	return cfg
-}
-
 // RunWithConfig executes a script at scriptPath with the provided arguments and execution settings.
 //
 // A nil cfg is an empty Config; nil Stdin/Stdout/Stderr mean /dev/null

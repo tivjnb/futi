@@ -7,14 +7,12 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/tivjnb/futi/internal/completion"
@@ -728,42 +726,12 @@ ENVIRONMENT
 `)
 }
 
-// interruptSignal возвращает прерывающий сигнал (SIGINT, SIGTERM или SIGHUP)
-// из err: полученный futi и пересланный команде (*executor.InterruptedError —
-// даже если команда его перехватила и вышла обычным кодом) или тот, которым
-// убит дочерний процесс (*exec.ExitError). Для остальных сигналов (SIGQUIT,
-// SIGSEGV и т.п.) и прочих ошибок — false.
-func interruptSignal(err error) (syscall.Signal, bool) {
-	var intErr *executor.InterruptedError
-	if errors.As(err, &intErr) && isInterruptSignal(intErr.Signal) {
-		return intErr.Signal, true
-	}
-	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) {
-		return 0, false
-	}
-	ws, ok := exitErr.Sys().(syscall.WaitStatus)
-	if !ok || !ws.Signaled() || !isInterruptSignal(ws.Signal()) {
-		return 0, false
-	}
-	return ws.Signal(), true
-}
-
-// isInterruptSignal — сигнал, прерывающий futi и циклы шелла.
-func isInterruptSignal(sig syscall.Signal) bool {
-	switch sig {
-	case syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP:
-		return true
-	}
-	return false
-}
-
 // exitAfterRunError завершает процесс после ошибки запуска команды. Если
 // ребёнок убит прерывающим сигналом, futi поднимает тот же сигнал на себя и
 // гибнет от него: шелл (bash) иначе решит, что команда сама обработала
 // Ctrl+C, и не прервёт цикл. Код выхода шелла остаётся 128+N.
 func exitAfterRunError(err error) {
-	if sig, ok := interruptSignal(err); ok {
+	if sig, ok := executor.InterruptSignal(err); ok {
 		signal.Reset(sig)
 		// На Windows Signal вернёт ошибку: тогда сразу выходим с кодом.
 		if p, findErr := os.FindProcess(os.Getpid()); findErr == nil {
@@ -1006,17 +974,18 @@ func main() {
 	// гонять Refresh по политике: мутирующие подкоманды сами инвалидируют
 	// кэш, read-only обходятся загрузкой по требованию.
 	if os.Args[1] == "modules" {
-		cache := rt.Cache()
-		source, err := rt.Source()
-		if err != nil {
+		// Cache() prints cache warnings (Warn) before any subcommand output,
+		// read-only subcommands included.
+		_ = rt.Cache()
+		if _, err := rt.Source(); err != nil {
 			fmt.Fprintf(os.Stderr, "source: %v\n", err)
 			os.Exit(1)
 		}
-		if err := runModules(os.Stdout, os.Stdin, source, cache, os.Args[2:]); err != nil {
+		if err := runModules(os.Stdout, os.Stdin, rt, os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "modules: %v\n", err)
 			// Прерванный хук — futi гибнет тем же сигналом; код хука, git
 			// или curl наружу не пробрасывается: прочие ошибки дают 1.
-			if _, ok := interruptSignal(err); ok {
+			if _, ok := executor.InterruptSignal(err); ok {
 				exitAfterRunError(err)
 			}
 			os.Exit(1)

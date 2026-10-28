@@ -1,0 +1,604 @@
+package modules
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/tivjnb/futi/internal/core"
+	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/metayaml"
+	"github.com/tivjnb/futi/internal/modulecache"
+)
+
+// makeSourceModule создаёт каталог модуля-источника в temp-каталоге.
+func makeSourceModule(t *testing.T, parent, name, extra string) string {
+	t.Helper()
+	dir := filepath.Join(parent, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "name: " + name + "\ncommands:\n  run:\n    cmd: echo run\n" + extra
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func newTestCache() *modulecache.Cache {
+	return modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
+}
+
+func TestRunModulesInstallLocalDir(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+
+	var b bytes.Buffer
+	if err := newTestManager(t, &b, nil).Install(context.Background(), InstallOptions{Source: src}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	dest := filepath.Join(global, "qr")
+	if _, err := os.Stat(filepath.Join(dest, "config.yaml")); err != nil {
+		t.Fatalf("module not installed: %v", err)
+	}
+	meta, err := metayaml.Read(filepath.Join(dest, metayaml.FileName))
+	if err != nil {
+		t.Fatalf("meta not written: %v", err)
+	}
+	if meta.Lockfile.Source != src || meta.Lockfile.Type != "local" {
+		t.Fatalf("unexpected lockfile: %+v", meta.Lockfile)
+	}
+	if meta.Lockfile.Hash == "" {
+		t.Fatal("expected tree hash in lockfile")
+	}
+}
+
+func TestRunModulesInstallSingleYaml(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	srcDir := t.TempDir()
+	yamlPath := filepath.Join(srcDir, "qr.yaml")
+	os.WriteFile(yamlPath, []byte("name: qr\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
+
+	var b bytes.Buffer
+	if err := newTestManager(t, &b, nil).Install(context.Background(), InstallOptions{Source: yamlPath}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(global, "qr", "config.yaml")); err != nil {
+		t.Fatalf("single yaml must be wrapped into package: %v", err)
+	}
+}
+
+func TestRunModulesInstallExistingError(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src}); err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+	err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected already-exists error, got %v", err)
+	}
+}
+
+func TestRunModulesInstallAttachRuns(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "attach: \"touch attach_marker\"\n")
+
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Yes: true}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(global, "qr", "attach_marker")); err != nil {
+		t.Fatalf("attach hook did not run: %v", err)
+	}
+}
+
+func TestRunModulesInstallAttachFailureRollsBack(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "attach: \"exit 3\"\n")
+
+	err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Yes: true})
+	if err == nil {
+		t.Fatal("expected attach failure error")
+	}
+	if _, statErr := os.Stat(filepath.Join(global, "qr")); !os.IsNotExist(statErr) {
+		t.Fatal("destination must be removed after attach failure (rollback)")
+	}
+}
+
+func TestRunModulesInstallSkipAttach(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "attach: \"touch attach_marker\"\n")
+
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, SkipAttach: true}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(global, "qr", "attach_marker")); !os.IsNotExist(err) {
+		t.Fatal("attach must be skipped")
+	}
+}
+
+func TestRunModulesInstallNamespace(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Namespace: "images"}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(global, "images", "qr", "config.yaml")); err != nil {
+		t.Fatalf("namespaced install failed: %v", err)
+	}
+}
+
+func TestRunModulesInstallLocalFlag(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Local: true}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, ".futi", "qr", "config.yaml")); err != nil {
+		t.Fatalf("local install failed: %v", err)
+	}
+}
+
+func TestRunModulesInstallNotAModule(t *testing.T) {
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	t.Chdir(t.TempDir())
+
+	empty := t.TempDir() // каталог без config.yaml
+	err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: empty})
+	if err == nil || !strings.Contains(err.Error(), "not a futi module") {
+		t.Fatalf("expected not-a-module error, got %v", err)
+	}
+}
+
+func TestRunModulesInstallInvalidatesCache(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	rt := newTestRuntime(t)
+	cache := rt.Cache()
+	// Кладём в кэш постороннюю запись — install должен её сбросить.
+	stranger := makeSourceModule(t, t.TempDir(), "stranger", "")
+	if _, err := cache.LoadModule(filepath.Join(stranger, "config.yaml"), stranger); err != nil {
+		t.Fatal(err)
+	}
+
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	if err := newManagerWithRuntime(&bytes.Buffer{}, nil, rt).Install(context.Background(), InstallOptions{Source: src}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if got := cache.ModuleCount(); got != 0 {
+		t.Fatalf("cache must be invalidated after install, got %d entries", got)
+	}
+}
+
+func TestRunModulesInstallLocalSourceAbsInLockfile(t *testing.T) {
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	cwd := t.TempDir()
+	makeSourceModule(t, cwd, "mod", "")
+	t.Chdir(cwd)
+
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: "./mod"}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	meta, err := metayaml.Read(filepath.Join(os.Getenv("FUTI_MODULES_DIR"), "mod", metayaml.FileName))
+	if err != nil {
+		t.Fatalf("meta not written: %v", err)
+	}
+	want := filepath.Join(cwd, "mod")
+	if meta.Lockfile.Source != want {
+		t.Fatalf("lockfile source: got %q, want %q", meta.Lockfile.Source, want)
+	}
+}
+
+func TestRunModulesInstallLocalFlagHookAbsRoot(t *testing.T) {
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	attach := "attach: \"test -d {{.module_root}} && echo {{.module_root}} $FUTI_MODULE_ROOT > $FUTI_MODULE_ROOT/roots\"\n"
+	src := makeSourceModule(t, t.TempDir(), "qr", attach)
+
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Local: true, Yes: true}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	dest := filepath.Join(cwd, ".futi", "qr")
+	data, err := os.ReadFile(filepath.Join(dest, "roots"))
+	if err != nil {
+		t.Fatalf("hook did not write roots: %v", err)
+	}
+	want := dest + " " + dest
+	if got := strings.TrimSpace(string(data)); got != want {
+		t.Fatalf("hook roots: got %q, want %q", got, want)
+	}
+}
+
+// F56: одиночный q.yaml без name: получает имя q (а не q.yaml).
+func TestRunModulesInstallYamlSourceName(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	yamlPath := filepath.Join(t.TempDir(), "q.yaml")
+	if err := os.WriteFile(yamlPath, []byte("commands:\n  hi:\n    cmd: echo hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: yamlPath}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(global, "q", "config.yaml")); err != nil {
+		t.Fatalf("expected root/q/config.yaml: %v", err)
+	}
+	if _, _, err := discovery.NewGlobalSource(global).Resolve("q"); err != nil {
+		t.Fatalf("Resolve(q): %v", err)
+	}
+}
+
+// F56: точка в имени модуля — разделитель namespace, такой модуль не резолвится.
+func TestRunModulesInstallDottedNameRejected(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	src := makeSourceModule(t, t.TempDir(), "my.tool", "")
+	err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src})
+	if err == nil || !strings.Contains(err.Error(), "invalid module name") {
+		t.Fatalf("expected invalid module name error, got %v", err)
+	}
+	entries, _ := os.ReadDir(global)
+	if len(entries) != 0 {
+		t.Fatalf("root must stay empty, got %v", entries)
+	}
+}
+
+// F59: установка рядом с одноимённым x.yaml создала бы конфликт discovery.
+func TestRunModulesInstallConflictsWithYaml(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	if err := os.WriteFile(filepath.Join(global, "x.yaml"), []byte("commands:\n  a:\n    cmd: echo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := makeSourceModule(t, t.TempDir(), "x", "")
+	err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected already-exists error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(global, "x")); err == nil {
+		t.Fatal("root/x must not be created")
+	}
+}
+
+// F56: имя из fallbackName с точкой (foo-1.2) отвергается с подсказкой про name:.
+func TestRunModulesInstallDottedFallbackNameHint(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	dir := filepath.Join(t.TempDir(), "foo-1.2")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("commands:\n  run:\n    cmd: echo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: dir})
+	if err == nil || !strings.Contains(err.Error(), "name:") {
+		t.Fatalf("expected error with name: hint, got %v", err)
+	}
+}
+
+// F57: зарезервированное слово в namespace или в имени модуля отвергается
+// до создания чего-либо в каталоге модулей.
+func TestRunModulesInstallReservedSegments(t *testing.T) {
+	cases := []struct {
+		name string
+		opts func(src string) InstallOptions
+		mod  string
+	}{
+		{"namespace cache", func(src string) InstallOptions { return InstallOptions{Source: src, Namespace: "cache"} }, "qr"},
+		{"namespace a.list", func(src string) InstallOptions { return InstallOptions{Source: src, Namespace: "a.list"} }, "qr"},
+		{"namespace a/list", func(src string) InstallOptions { return InstallOptions{Source: src, Namespace: "a/list"} }, "qr"},
+		{"manifest name completion", func(src string) InstallOptions { return InstallOptions{Source: src} }, "completion"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			global := t.TempDir()
+			t.Setenv("FUTI_MODULES_DIR", global)
+			t.Chdir(t.TempDir())
+			src := makeSourceModule(t, t.TempDir(), tc.mod, "")
+			err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), tc.opts(src))
+			if err == nil || !strings.Contains(err.Error(), "is a reserved name") {
+				t.Fatalf("expected reserved name error, got %v", err)
+			}
+			entries, _ := os.ReadDir(global)
+			if len(entries) != 0 {
+				t.Fatalf("modules dir must stay empty, got %v", entries)
+			}
+		})
+	}
+}
+
+// F57: имя модуля берётся из имени каталога источника (name: нет в манифесте).
+func TestRunModulesInstallReservedFallbackName(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+	src := filepath.Join(t.TempDir(), "list")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "config.yaml"), []byte("commands:\n  run:\n    cmd: echo run\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src})
+	if err == nil || !strings.Contains(err.Error(), "is a reserved name") {
+		t.Fatalf("expected reserved name error, got %v", err)
+	}
+	if entries, _ := os.ReadDir(global); len(entries) != 0 {
+		t.Fatalf("modules dir must stay empty, got %v", entries)
+	}
+}
+
+// F57: --local с зарезервированным сегментом namespace не создаёт .futi.
+func TestRunModulesInstallLocalReservedNamespace(t *testing.T) {
+	t.Chdir(t.TempDir())
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Local: true, Namespace: "x.modules"})
+	if err == nil || !strings.Contains(err.Error(), "is a reserved name") {
+		t.Fatalf("expected reserved name error, got %v", err)
+	}
+	if _, statErr := os.Stat(".futi"); statErr == nil {
+		t.Fatal(".futi must not be created")
+	}
+}
+
+func TestRunModulesInstallNonReservedNamespaceOK(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Namespace: "validate.help"}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(global, "validate", "help", "qr", "config.yaml")); err != nil {
+		t.Fatalf("module not installed: %v", err)
+	}
+}
+
+// stubSeam подменяет шов на время теста и возвращает его через t.Cleanup.
+func stubSeam[T any](t *testing.T, seam *T, v T) {
+	t.Helper()
+	orig := *seam
+	*seam = v
+	t.Cleanup(func() { *seam = orig })
+}
+
+// Сбой после переноса дерева не должен оставлять модуль без meta:
+// dest убирается, повторный install проходит.
+func TestInstallRollbackOnMetaWriteFailure(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+
+	orig := writeMeta
+	stubSeam(t, &writeMeta, func(string, *metayaml.Meta) error { return errors.New("disk full") })
+	err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Yes: true})
+	if err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("err = %v, want disk full", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(global, "qr")); !os.IsNotExist(statErr) {
+		t.Fatalf("dest must be removed after meta write failure, stat err = %v", statErr)
+	}
+	writeMeta = orig
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Yes: true}); err != nil {
+		t.Fatalf("repeated install: %v", err)
+	}
+}
+
+func TestInstallRollbackOnHashFailure(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+
+	orig := computeTreeHash
+	stubSeam(t, &computeTreeHash, func(string) (string, error) { return "", errors.New("hash broke") })
+	err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Yes: true})
+	if err == nil || !strings.Contains(err.Error(), "hash broke") {
+		t.Fatalf("err = %v, want hash broke", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(global, "qr")); !os.IsNotExist(statErr) {
+		t.Fatalf("dest must be removed after hash failure, stat err = %v", statErr)
+	}
+	computeTreeHash = orig
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Yes: true}); err != nil {
+		t.Fatalf("repeated install: %v", err)
+	}
+}
+
+// Копирование прошло, а удалить временный src не вышло (Windows: файл занят):
+// это не ошибка переноса, dst полный, install доходит до meta.
+func TestMoveTreeSrcRemoveFailureIsNotError(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "dst")
+	stubSeam(t, &renameDir, func(string, string) error { return errors.New("exdev") })
+	stubSeam(t, &removeSrc, func(string) error { return errors.New("file in use") })
+
+	if err := moveTree(src, dst); err != nil {
+		t.Fatalf("moveTree: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "a.txt")); err != nil || string(b) != "x" {
+		t.Fatalf("dst incomplete: %q, %v", b, err)
+	}
+}
+
+func TestInstallSucceedsWhenSrcRemoveFails(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+	stubSeam(t, &renameDir, func(string, string) error { return errors.New("exdev") })
+	stubSeam(t, &removeSrc, func(string) error { return errors.New("file in use") })
+
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Yes: true}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if _, err := metayaml.Read(filepath.Join(global, "qr", metayaml.FileName)); err != nil {
+		t.Fatalf("meta missing: %v", err)
+	}
+}
+
+// F62: --ref имеет смысл только для git; ошибка до временных каталогов и сети.
+func TestModulesInstallRefRequiresGit(t *testing.T) {
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	t.Chdir(t.TempDir())
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+
+	for _, opts := range []InstallOptions{
+		{Source: src, Ref: "v1"},
+		{Source: src, FromLocal: true, Ref: "v1"},
+		{Source: "https://h/x.zip", Ref: "v1"},
+		{Source: "https://h/x", FromArchive: true, Ref: "v1"},
+	} {
+		t.Run(fmt.Sprintf("%+v", opts), func(t *testing.T) {
+			err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("")).Install(context.Background(), opts)
+			if err == nil || !strings.Contains(err.Error(), "--ref is only supported for git sources") {
+				t.Fatalf("err = %v, want --ref is only supported for git sources", err)
+			}
+		})
+	}
+}
+
+// https-URL без расширения: формат определяется по содержимому (zip от curl).
+func TestRunModulesInstallFromArchiveURLWithoutExtension(t *testing.T) {
+	zipPath := buildZip(t, []zipEntry{
+		{"qr/config.yaml", 0o644, "name: qr\ncommands:\n  run:\n    cmd: echo run\n"},
+	})
+	fakeBin(t, map[string]string{"curl": "cat '" + zipPath + "'"})
+	global := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", global)
+	t.Chdir(t.TempDir())
+
+	var b bytes.Buffer
+	if err := newTestManager(t, &b, strings.NewReader("")).Install(context.Background(), InstallOptions{Source: "https://example.com/download", FromArchive: true}); err != nil {
+		t.Fatalf("Install: %v\n%s", err, b.String())
+	}
+	if _, err := os.Stat(filepath.Join(global, "qr", "config.yaml")); err != nil {
+		t.Fatalf("module not installed: %v\n%s", err, b.String())
+	}
+}
+
+func TestInstallLocalWithoutLocalDir(t *testing.T) {
+	global := t.TempDir()
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	src := makeSourceModule(t, t.TempDir(), "qr", "")
+
+	rt, err := core.NewRuntime(core.Options{ModulesDir: global})
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	m := New(rt, Streams{Out: io.Discard, Err: io.Discard})
+
+	err = m.Install(context.Background(), InstallOptions{Source: src, Local: true, Yes: true})
+	if err == nil || !strings.Contains(err.Error(), "local modules are not available") {
+		t.Fatalf("Install err = %v, want local modules are not available", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(cwd, ".futi")); !os.IsNotExist(statErr) {
+		t.Errorf(".futi must not be created in cwd, stat err = %v", statErr)
+	}
+}
+
+func TestInstallRejectsDashRef(t *testing.T) {
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	t.Chdir(t.TempDir())
+	// A git that records its invocation: the ref must be rejected before any
+	// git process starts.
+	marker := filepath.Join(t.TempDir(), "git-was-run")
+	fakeBin(t, map[string]string{"git": "touch '" + marker + "'"})
+
+	err := newTestManager(t, io.Discard, nil).Install(context.Background(), InstallOptions{Source: "https://example.com/r.git", Ref: "-x"})
+	if err == nil || !strings.Contains(err.Error(), `must not start with "-"`) {
+		t.Fatalf("Install err = %v, want ref must not start with \"-\"", err)
+	}
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Fatalf("git was invoked for a dash ref (stat marker: %v)", statErr)
+	}
+}
+
+// A server-style Runtime has config sources but no global modules dir. A
+// global install must fail instead of writing modules into the cwd.
+func TestInstallGlobalWithoutModulesDir(t *testing.T) {
+	src := t.TempDir()
+	writeFutiConfig(t, sourceConfig(src, "", ""))
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	opts, err := core.DefaultOptions()
+	if err != nil {
+		t.Fatalf("DefaultOptions: %v", err)
+	}
+	opts.ModulesDir = ""
+	opts.CachePath = ""
+	opts.CachePathErr = nil
+	rt, err := core.NewRuntime(opts)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	module := installFixtureModule(t, t.TempDir(), "qr", nil)
+
+	err = newManagerWithRuntime(io.Discard, nil, rt).Install(context.Background(), InstallOptions{Source: filepath.Join(module, "qr"), Yes: true, SkipAttach: true})
+	if err == nil || !strings.Contains(err.Error(), "global modules directory is not set") {
+		t.Fatalf("Install err = %v, want global modules directory is not set", err)
+	}
+	entries, readErr := os.ReadDir(cwd)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("cwd must stay empty, got %v", entries)
+	}
+}

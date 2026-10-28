@@ -36,30 +36,6 @@ func TestRunWithConfigExecutesScriptWithArgs(t *testing.T) {
 	}
 }
 
-func TestConfigBuilders(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	cfg := NewConfig().
-		WithDir("/tmp").
-		WithEnv([]string{"A=B"}).
-		WithStdout(&stdout).
-		WithStderr(&stderr)
-
-	if cfg.Dir != "/tmp" {
-		t.Fatalf("unexpected dir: %q", cfg.Dir)
-	}
-	if len(cfg.Env) != 1 || cfg.Env[0] != "A=B" {
-		t.Fatalf("unexpected env: %#v", cfg.Env)
-	}
-	if cfg.Stdout != &stdout {
-		t.Fatal("unexpected stdout writer")
-	}
-	if cfg.Stderr != &stderr {
-		t.Fatal("unexpected stderr writer")
-	}
-}
-
 func TestRunWithConfigRejectsNilContext(t *testing.T) {
 	// Именно nil, а не context.TODO(): проверяется отказ на nil-контексте.
 	//nolint:staticcheck // SA1012

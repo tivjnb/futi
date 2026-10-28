@@ -73,6 +73,9 @@ func (r *Runtime) ModulesDir() string { return r.opts.ModulesDir }
 // LocalDir возвращает каталог локальных модулей из Options.
 func (r *Runtime) LocalDir() string { return r.opts.LocalDir }
 
+// Exec returns the child process execution policy from Options.
+func (r *Runtime) Exec() ExecPolicy { return r.opts.Exec }
+
 func (r *Runtime) warn(msg string) {
 	if r.opts.Warn != nil {
 		r.opts.Warn(msg)

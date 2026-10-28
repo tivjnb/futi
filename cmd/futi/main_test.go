@@ -20,7 +20,6 @@ import (
 	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
-	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/modulecache"
 )
 
@@ -795,10 +794,13 @@ func TestModulesValidate(t *testing.T) {
 	dir := t.TempDir()
 	writeMainTestFile(t, filepath.Join(dir, "good.yaml"), "name: good\ncommands:\n  ps:\n    cmd: \"echo ps\"\n")
 	writeMainTestFile(t, filepath.Join(dir, "bad.yaml"), "name: bad\ncommands:\n  empty: {}\n")
-	source := discovery.NewGlobalSource(dir)
+	rt, err := core.NewRuntime(core.Options{ModulesDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var buf bytes.Buffer
-	if err := runModules(&buf, nil, source, nil, []string{"validate", "good"}); err != nil {
+	if err := runModules(&buf, nil, rt, []string{"validate", "good"}); err != nil {
 		t.Fatalf("good: %v", err)
 	}
 	if !strings.Contains(buf.String(), "OK") {
@@ -806,7 +808,7 @@ func TestModulesValidate(t *testing.T) {
 	}
 
 	buf.Reset()
-	err := runModules(&buf, nil, source, nil, []string{"validate", "bad"})
+	err = runModules(&buf, nil, rt, []string{"validate", "bad"})
 	if err == nil || !strings.Contains(buf.String(), "ERROR") {
 		t.Errorf("bad: err=%v out=%q, want ERROR report and error", err, buf.String())
 	}
@@ -815,13 +817,13 @@ func TestModulesValidate(t *testing.T) {
 	for _, args := range [][]string{
 		{"validate"}, {"validate", "a", "b"}, {"validate", "-h"}, {"validate", "--help"}, {"validate", "good", "--x"},
 	} {
-		err := runModules(io.Discard, nil, source, nil, args)
+		err := runModules(io.Discard, nil, rt, args)
 		if err == nil || err.Error() != usage {
 			t.Errorf("%v: err = %v, want %q", args, err, usage)
 		}
 	}
 
-	if err := runModules(io.Discard, nil, source, nil, []string{"validate", "a/b"}); err == nil || !strings.Contains(err.Error(), "invalid module name") {
+	if err := runModules(io.Discard, nil, rt, []string{"validate", "a/b"}); err == nil || !strings.Contains(err.Error(), "invalid module name") {
 		t.Errorf("a/b: err = %v, want invalid module name", err)
 	}
 }
@@ -1497,40 +1499,6 @@ func TestRunListEmptyNamespaceOnProdSourceChain(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "a") {
 		t.Fatalf("в выводе нет модуля a:\n%s", buf.String())
-	}
-}
-
-func TestInterruptSignal(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("сигналы POSIX")
-	}
-	killed := func(sig string) error {
-		return exec.Command("sh", "-c", "kill -"+sig+" $$").Run()
-	}
-	cases := []struct {
-		name    string
-		err     error
-		want    syscall.Signal
-		wantHit bool
-	}{
-		{"INT", killed("INT"), syscall.SIGINT, true},
-		{"TERM wrapped", fmt.Errorf("x: %w", killed("TERM")), syscall.SIGTERM, true},
-		{"HUP", killed("HUP"), syscall.SIGHUP, true},
-		{"QUIT не прерывающий", killed("QUIT"), 0, false},
-		{"обычный код", exec.Command("sh", "-c", "exit 3").Run(), 0, false},
-		{"не ExitError", errors.New("boom"), 0, false},
-		{"nil", nil, 0, false},
-		{"InterruptedError TERM", &executor.InterruptedError{Signal: syscall.SIGTERM}, syscall.SIGTERM, true},
-		{"InterruptedError QUIT не прерывающий", &executor.InterruptedError{Signal: syscall.SIGQUIT}, 0, false},
-		{"InterruptedError HUP wrapped", fmt.Errorf("x: %w", &executor.InterruptedError{Signal: syscall.SIGHUP}), syscall.SIGHUP, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := interruptSignal(tc.err)
-			if ok != tc.wantHit || got != tc.want {
-				t.Fatalf("interruptSignal(%v) = (%v, %v), want (%v, %v)", tc.err, got, ok, tc.want, tc.wantHit)
-			}
-		})
 	}
 }
 
