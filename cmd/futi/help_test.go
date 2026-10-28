@@ -420,7 +420,7 @@ commands:
     params:
       - name: x
         type: string
-    cmd: "echo leafhelp x={{.x}}"
+    cmd: "echo leafhelp x={{.x}} args={{quote .args}}"
 `)
 	writeFile(t, filepath.Join(dir, "branch.yaml"), `
 name: branch
@@ -443,6 +443,20 @@ name: xhelp
 cmd: "echo xhelp"
 `)
 	writeFile(t, filepath.Join(dir, "bad.yaml"), "commands: [")
+	writeFile(t, filepath.Join(dir, "ex.yaml"), `
+name: ex
+commands:
+  help:
+    cmd: "sh -c 'exit 3'"
+`)
+	writeFile(t, filepath.Join(dir, "c", "help.yaml"), `
+name: chelp
+cmd: "echo a"
+`)
+	writeFile(t, filepath.Join(dir, "c", "help", "config.yaml"), `
+name: chelp2
+cmd: "echo b"
+`)
 	rt := testRuntime(t, core.Options{ModulesDir: dir})
 
 	tests := []struct {
@@ -452,13 +466,17 @@ cmd: "echo xhelp"
 		wantStdout string
 		wantStderr string
 	}{
-		{"executable leaf binds flag", &helpRequest{positional: []string{"leaf"}, flags: []string{"--x", "1"}}, 0, "leafhelp x=1\n", ""},
+		{"executable leaf binds flag", &helpRequest{positional: []string{"leaf"}, flags: []string{"--x", "1"}}, 0, "leafhelp x=1 args=\n", ""},
 		{"branch without cmd gives system help", helpArgs("branch"), 0, "branch — Branch module\ncommands:\n  help\n", ""},
 		{"module without help gives system help", helpArgs("plain"), 0, "plain — Plain module\ncommands:\n  run\n", ""},
 		{"positional x resolves to module x.help", helpArgs("x"), 0, "xhelp\n", ""},
 		{"broken yaml", helpArgs("bad"), 1, "", "help: execmodule: parse manifest \"" + filepath.Join(dir, "bad.yaml") + "\": yaml: line 1: did not find expected node content\n"},
 		{"unknown path with dry-run is plain not-found", &helpRequest{positional: []string{"nope"}, dryRun: true}, 1, "", "help: module not found for \"nope\"\n"},
 		{"known module without help with dry-run is rejected", &helpRequest{positional: []string{"plain"}, dryRun: true}, 1, "", "futi: --dry-run applies only to module commands\n"},
+		{"executable help gets args", &helpRequest{positional: []string{"leaf"}, argsList: []string{"a", "b"}}, 0, "leafhelp x= args=a b\n", ""},
+		{"executable help with dry-run prints argv", &helpRequest{positional: []string{"leaf"}, flags: []string{"--x", "1"}, dryRun: true}, 0, "echo leafhelp x=1 args=\n", ""},
+		{"executable help exit code", helpArgs("ex"), 3, "", "run: executor: run \"sh\": exit status 3\n"},
+		{"yaml vs config.yaml conflict on help", helpArgs("c"), 0, "┌────────┬──────┬──────────────────────────────────────────┐\n│  TYPE  │ NAME │               DESCRIPTION                │\n├────────┼──────┼──────────────────────────────────────────┤\n│ module │ help │ conflict: help.yaml and help/config.yaml │\n└────────┴──────┴──────────────────────────────────────────┘\n", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
