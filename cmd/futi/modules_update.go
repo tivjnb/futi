@@ -4,20 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
-	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/metayaml"
-	"github.com/tivjnb/futi/internal/modulecache"
 	"github.com/tivjnb/futi/internal/modulerunner"
-	"github.com/tivjnb/futi/internal/modules"
 	"github.com/tivjnb/futi/internal/termtext"
 )
 
@@ -27,62 +22,31 @@ var writeMeta = metayaml.Write
 // removeBackup удаляет backup после успешного update; шов для тестов.
 var removeBackup = os.RemoveAll
 
-// updateArgs — аргументы `futi modules update`.
-type updateArgs struct {
-	name       string
-	skipAttach bool
-	yes        bool
+// UpdateOptions are the inputs of Manager.Update.
+type UpdateOptions struct {
+	Name       string // empty = all installed modules
+	SkipAttach bool
+	Yes        bool
 }
 
-// parseUpdateArgs разбирает аргументы update.
-func parseUpdateArgs(args []string) (*updateArgs, error) {
-	cfg := &updateArgs{}
-	var positional []string
-
-	i := 0
-	for i < len(args) {
-		arg := args[i]
-		switch {
-		case arg == "--skip-attach":
-			cfg.skipAttach = true
-		case arg == "--yes" || arg == "-y":
-			cfg.yes = true
-		case strings.HasPrefix(arg, "--"):
-			return nil, fmt.Errorf("unknown flag: %s", arg)
-		default:
-			positional = append(positional, arg)
-		}
-		i++
-	}
-
-	if len(positional) > 1 {
-		return nil, fmt.Errorf("expected at most one module name, got %d", len(positional))
-	}
-	if len(positional) == 1 {
-		cfg.name = positional[0]
-		if err := validateResolveName(cfg.name); err != nil {
-			return nil, err
+// Update reinstalls one module (or all installed modules when opts.Name is
+// empty) from its recorded source (spec §5.3). Modules are updated serially.
+// Confirmation of file replacement and attach hooks goes through the
+// manager's Prompter.
+func (m *Manager) Update(ctx context.Context, opts UpdateOptions) error {
+	if opts.Name != "" {
+		if err := validateResolveName(opts.Name); err != nil {
+			return err
 		}
 	}
-	return cfg, nil
-}
+	s := m.s
 
-// runModulesUpdate переустанавливает модуль(ы) из источника (спека §5.3).
-// Без имени — обновляет все установленные модули (serial, MVP).
-// stdin — для подтверждения замены файлов и attach-хуков (os.Stdin из main).
-func runModulesUpdate(w io.Writer, stdin io.Reader, source discovery.Source, cache *modulecache.Cache, args []string) error {
-	s := cliStreams(w, stdin)
-	cfg, err := parseUpdateArgs(args)
-	if err != nil {
-		return err
+	gate := attachGate{p: s.Prompt, errW: s.Err, skip: opts.SkipAttach, yes: opts.Yes}
+	if opts.Name != "" {
+		return m.updateOne(ctx, gate, opts.Name)
 	}
 
-	gate := attachGate{p: s.Prompt, errW: s.Err, skip: cfg.skipAttach, yes: cfg.yes}
-	if cfg.name != "" {
-		return updateOne(s, gate, source, cache, cfg.name)
-	}
-
-	roots, err := readModuleRoots()
+	roots, err := m.moduleRoots()
 	if err != nil {
 		return fmt.Errorf("modules update: %w", err)
 	}
@@ -120,7 +84,7 @@ func runModulesUpdate(w io.Writer, stdin io.Reader, source discovery.Source, cac
 		}
 		// Обновляем именно найденный каталог, а не то, что отдаст Resolve по имени.
 		manifestPath := filepath.Join(e.Dir, "config.yaml")
-		if err := updateAt(s, gate, cache, e.Name, label, e.Dir, manifestPath); err != nil {
+		if err := m.updateAt(ctx, gate, e.Name, label, e.Dir, manifestPath); err != nil {
 			// Прерывание печатает main возвращённой ошибкой — здесь не дублируем.
 			if _, interrupted := interruptSignal(err); interrupted {
 				return fmt.Errorf("update %s interrupted: %w", label, err)
@@ -136,19 +100,23 @@ func runModulesUpdate(w io.Writer, stdin io.Reader, source discovery.Source, cac
 }
 
 // updateOne обновляет один модуль (спека §5.3).
-func updateOne(s modules.Streams, gate attachGate, source discovery.Source, cache *modulecache.Cache, name string) error {
+func (m *Manager) updateOne(ctx context.Context, gate attachGate, name string) error {
+	source, err := m.rt.Source()
+	if err != nil {
+		return err
+	}
 	manifestPath, moduleRoot, err := source.Resolve(name)
 	if err != nil {
-		return fmt.Errorf("resolve: %w%s", err, backupHint(name))
+		return fmt.Errorf("resolve: %w%s", err, m.backupHint(name))
 	}
-	return updateAt(s, gate, cache, name, name, moduleRoot, manifestPath)
+	return m.updateAt(ctx, gate, name, name, moduleRoot, manifestPath)
 }
 
 // backupHint возвращает подсказку про оставшийся backup модуля name в одном из
 // корней или пустую строку. Путь строится в корне, чей префикс совпадает с
 // началом имени (префикс снимается).
-func backupHint(name string) string {
-	roots, err := readModuleRoots()
+func (m *Manager) backupHint(name string) string {
+	roots, err := m.moduleRoots()
 	if err != nil {
 		return ""
 	}
@@ -169,7 +137,8 @@ func backupHint(name string) string {
 // updateAt обновляет модуль в конкретном каталоге moduleRoot. name — имя для
 // хука attach, label — подпись в сообщениях (имя или имя с путём); gate
 // решает, запускать ли хук.
-func updateAt(s modules.Streams, gate attachGate, cache *modulecache.Cache, name, label, moduleRoot, manifestPath string) error {
+func (m *Manager) updateAt(ctx context.Context, gate attachGate, name, label, moduleRoot, manifestPath string) error {
+	s := m.s
 	if filepath.Base(manifestPath) != "config.yaml" {
 		return fmt.Errorf("not a package module (updates require config.yaml packages)")
 	}
@@ -209,7 +178,7 @@ func updateAt(s modules.Streams, gate attachGate, cache *modulecache.Cache, name
 	}
 	defer os.RemoveAll(tempBase)
 
-	moduleDir, commit, err := fetchSource(context.Background(), executor.Config{Stdin: s.Stdin, Stdout: s.Out, Stderr: s.Err, ForwardSignals: true}, lf.Source, kind, lf.Ref, tempBase)
+	moduleDir, commit, err := fetchSource(ctx, m.commandConfig(), lf.Source, kind, lf.Ref, tempBase)
 	if err != nil {
 		return fmt.Errorf("fetch: %w", err)
 	}
@@ -310,7 +279,7 @@ func updateAt(s modules.Streams, gate attachGate, cache *modulecache.Cache, name
 	// Прерывание сигналом возвращаем после Invalidate: дерево уже заменено.
 	var interruptErr error
 	if runAttach {
-		if err := modulerunner.RunHook(context.Background(), mod.Attach, moduleRoot, execmodule.EffectiveName(mod.Name, filepath.Join(moduleRoot, "config.yaml")), s.Stdin, s.Out, s.Err, executor.GroupIsolateWithoutTTY, true); err != nil {
+		if err := modulerunner.RunHook(ctx, mod.Attach, moduleRoot, execmodule.EffectiveName(mod.Name, filepath.Join(moduleRoot, "config.yaml")), s.Stdin, s.Out, s.Err, m.rt.Exec().HookGroup, m.rt.Exec().ForwardSignals); err != nil {
 			if _, interrupted := interruptSignal(err); interrupted {
 				interruptErr = fmt.Errorf("attach interrupted: %w", err)
 			} else {
@@ -319,7 +288,7 @@ func updateAt(s modules.Streams, gate attachGate, cache *modulecache.Cache, name
 		}
 	}
 
-	if err := cache.Invalidate(); err != nil {
+	if err := m.rt.Cache().Invalidate(); err != nil {
 		fmt.Fprintf(s.Err, "cache: %v (continuing)\n", err)
 	}
 	if interruptErr != nil {

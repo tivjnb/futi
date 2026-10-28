@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tivjnb/futi/internal/core"
-	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/metayaml"
 )
 
@@ -115,7 +113,7 @@ func TestModulesUpdateAllIncludesConfigSources(t *testing.T) {
 
 	var err error
 	stderr := captureStderr(t, func() {
-		err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader(""), discovery.NewGlobalSource(src), newTestCache(), nil)
+		err = newTestManager(t, &bytes.Buffer{}, strings.NewReader("")).Update(context.Background(), UpdateOptions{})
 	})
 	// Неизвестный тип источника — ошибка именно этого модуля: значит, update до него дошёл.
 	if err == nil || !strings.Contains(err.Error(), "dev.tools.qr") {
@@ -136,10 +134,11 @@ func TestBackupHintStripsRootPrefix(t *testing.T) {
 	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
 	t.Chdir(t.TempDir())
 
-	if got := backupHint("dev.tools.qr"); !strings.Contains(got, filepath.Join(src, "qr"+backupSuffix)) {
+	m := newTestManager(t, &bytes.Buffer{}, nil)
+	if got := m.backupHint("dev.tools.qr"); !strings.Contains(got, filepath.Join(src, "qr"+backupSuffix)) {
 		t.Fatalf("backupHint(dev.tools.qr) = %q, want path of %s", got, filepath.Join(src, "qr"+backupSuffix))
 	}
-	if got := backupHint("qr"); got != "" {
+	if got := m.backupHint("qr"); got != "" {
 		t.Fatalf("backupHint(qr) = %q, want empty (no root without prefix holds it)", got)
 	}
 }
@@ -309,7 +308,7 @@ func TestModulesSymlinkAliasPrefersRealPath(t *testing.T) {
 	}
 
 	stderr := captureStderr(t, func() {
-		err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader(""), discovery.NewGlobalSource(global), newTestCache(), nil)
+		err = newTestManager(t, &bytes.Buffer{}, strings.NewReader("")).Update(context.Background(), UpdateOptions{})
 	})
 	if err == nil || err.Error() != "failed to update: qr" {
 		t.Fatalf("err = %v, want failure of qr only; stderr:\n%s", err, stderr)
@@ -337,7 +336,7 @@ func TestModulesUpdateAllSkipsSymlinkedModules(t *testing.T) {
 	var out bytes.Buffer
 	var err error
 	stderr := captureStderr(t, func() {
-		err = runModulesUpdate(&out, strings.NewReader(""), discovery.NewGlobalSource(global), newTestCache(), nil)
+		err = newTestManager(t, &out, strings.NewReader("")).Update(context.Background(), UpdateOptions{})
 	})
 	if err != nil {
 		t.Fatalf("update must skip alias, err = %v; stderr:\n%s", err, stderr)
@@ -366,7 +365,7 @@ func TestModulesUpdateAllUpdatesModuleInsideSymlinkedNamespace(t *testing.T) {
 
 	var err error
 	stderr := captureStderr(t, func() {
-		err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader(""), discovery.NewGlobalSource(global), newTestCache(), nil)
+		err = newTestManager(t, &bytes.Buffer{}, strings.NewReader("")).Update(context.Background(), UpdateOptions{})
 	})
 	// Неизвестный тип источника — update дошёл до updateAt, а не пропустил модуль.
 	if err == nil || err.Error() != "failed to update: images.qr" {
@@ -381,11 +380,7 @@ func TestModulesUpdateByNameThroughCompositeSource(t *testing.T) {
 	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
 	t.Chdir(t.TempDir())
 
-	cfg, err := core.LoadDefaultConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader(""), discovery.NewCompositeSource(cfg), newTestCache(), []string{"dev.tools.qr"})
+	err := newTestManager(t, &bytes.Buffer{}, strings.NewReader("")).Update(context.Background(), UpdateOptions{Name: "dev.tools.qr"})
 	// Неизвестный тип источника — значит, Resolve нашёл модуль и update дошёл до lockfile.
 	if err == nil || !strings.Contains(err.Error(), `unknown source type "bogus"`) {
 		t.Fatalf("err = %v, want unknown source type from updateAt", err)

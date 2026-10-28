@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/metayaml"
 )
@@ -202,7 +201,6 @@ func TestRunModulesUpdateRejectsHTTPSource(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
-	cache := newTestCache()
 	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -217,7 +215,7 @@ func TestRunModulesUpdateRejectsHTTPSource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"qr"})
+	err = newTestManager(t, &bytes.Buffer{}, nil).Update(context.Background(), UpdateOptions{Name: "qr"})
 	if err == nil || !strings.Contains(err.Error(), "only https:// is supported") {
 		t.Fatalf("err = %v, want https error", err)
 	}

@@ -8,8 +8,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/tivjnb/futi/internal/discovery"
 )
 
 // attachTouch — attach-хук, оставляющий маркер в каталоге модуля.
@@ -98,7 +96,7 @@ func TestAttachNoAnswerHintsYes(t *testing.T) {
 
 		var err error
 		captureStderr(t, func() {
-			err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader(""), discovery.NewGlobalSource(global), newTestCache(), []string{"qr"})
+			err = newTestManager(t, &bytes.Buffer{}, strings.NewReader("")).Update(context.Background(), UpdateOptions{Name: "qr"})
 		})
 		if err == nil || !strings.Contains(err.Error(), "--yes") || !strings.Contains(err.Error(), "module not updated") {
 			t.Fatalf("err = %v, want hint about --yes and module not updated", err)
@@ -262,7 +260,7 @@ func TestUpdateAttachDeclinedKeepsOldTree(t *testing.T) {
 	var err error
 	prompt := captureStderr(t, func() {
 		// Сначала подтверждаем замену файлов, затем отказываемся от хука.
-		err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader("y\nn\n"), discovery.NewGlobalSource(global), newTestCache(), []string{"qr"})
+		err = newTestManager(t, &bytes.Buffer{}, strings.NewReader("y\nn\n")).Update(context.Background(), UpdateOptions{Name: "qr"})
 	})
 	if err == nil || !strings.Contains(err.Error(), "not confirmed") {
 		t.Fatalf("err = %v, want attach hook not confirmed", err)
@@ -290,7 +288,7 @@ func TestUpdateAttachYesRuns(t *testing.T) {
 	// -y подтверждает и замену файлов, и хук: без TTY ни о чём не спрашиваем.
 	var err error
 	prompt := captureStderr(t, func() {
-		err = runModulesUpdate(&bytes.Buffer{}, unreadableStdin{t}, discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "-y"})
+		err = newTestManager(t, &bytes.Buffer{}, unreadableStdin{t}).Update(context.Background(), UpdateOptions{Name: "qr", Yes: true})
 	})
 	if err != nil {
 		t.Fatalf("update: %v", err)
@@ -304,7 +302,7 @@ func TestUpdateAttachYesRuns(t *testing.T) {
 }
 
 func TestUpdateUpToDateDoesNotAsk(t *testing.T) {
-	global := attachEnv(t)
+	attachEnv(t)
 	setStdinTerminal(t, true)
 	src := makeSourceModule(t, t.TempDir(), "qr", attachTouch)
 	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Yes: true}); err != nil {
@@ -312,7 +310,7 @@ func TestUpdateUpToDateDoesNotAsk(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := runModulesUpdate(&out, unreadableStdin{t}, discovery.NewGlobalSource(global), newTestCache(), []string{"qr"}); err != nil {
+	if err := newTestManager(t, &out, unreadableStdin{t}).Update(context.Background(), UpdateOptions{Name: "qr"}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if !strings.Contains(out.String(), "up to date") {
@@ -341,7 +339,7 @@ func TestUpdateAllAsksPerModule(t *testing.T) {
 
 			var err error
 			captureStderr(t, func() {
-				err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader(tc.answers), discovery.NewGlobalSource(global), newTestCache(), nil)
+				err = newTestManager(t, &bytes.Buffer{}, strings.NewReader(tc.answers)).Update(context.Background(), UpdateOptions{})
 			})
 			if err == nil || err.Error() != "failed to update: "+tc.failed {
 				t.Fatalf("err = %v, want failed to update: %s", err, tc.failed)
@@ -374,7 +372,7 @@ func TestModulesInstallHookOutputToWriter(t *testing.T) {
 
 // F62: stdout хука attach при update идёт в writer вызывающей функции.
 func TestModulesUpdateHookOutputToWriter(t *testing.T) {
-	global := attachEnv(t)
+	attachEnv(t)
 	setStdinTerminal(t, false)
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
 	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src}); err != nil {
@@ -384,7 +382,7 @@ func TestModulesUpdateHookOutputToWriter(t *testing.T) {
 		"name: qr\nattach: \"echo update-hook-says-hi\"\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	var buf bytes.Buffer
-	if err := runModulesUpdate(&buf, unreadableStdin{t}, discovery.NewGlobalSource(global), newTestCache(), []string{"qr", "-y"}); err != nil {
+	if err := newTestManager(t, &buf, unreadableStdin{t}).Update(context.Background(), UpdateOptions{Name: "qr", Yes: true}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if !strings.Contains(buf.String(), "update-hook-says-hi") {
@@ -428,7 +426,7 @@ func TestHooksGetSameModuleName(t *testing.T) {
 	} {
 		const want = "qr qr"
 		t.Run(tt.name, func(t *testing.T) {
-			global := attachEnv(t)
+			attachEnv(t)
 			out := t.TempDir()
 			srcDir := filepath.Join(t.TempDir(), "qr")
 			if err := os.MkdirAll(srcDir, 0o755); err != nil {
@@ -436,8 +434,6 @@ func TestHooksGetSameModuleName(t *testing.T) {
 			}
 			cfgPath := filepath.Join(srcDir, "config.yaml")
 			writeFile(t, cfgPath, hookNameModule(tt.nameLine, out))
-			cache := newTestCache()
-
 			if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: srcDir, Yes: true, Namespace: tt.ns}); err != nil {
 				t.Fatalf("install: %v", err)
 			}
@@ -449,7 +445,7 @@ func TestHooksGetSameModuleName(t *testing.T) {
 				t.Fatal(err)
 			}
 			writeFile(t, cfgPath, hookNameModule(tt.nameLine, out)+"description: v2\n")
-			if err := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{tt.dotName, "--yes"}); err != nil {
+			if err := newTestManager(t, &bytes.Buffer{}, nil).Update(context.Background(), UpdateOptions{Name: tt.dotName, Yes: true}); err != nil {
 				t.Fatalf("update: %v", err)
 			}
 			if got := readTrim(t, filepath.Join(out, "attach")); got != want {

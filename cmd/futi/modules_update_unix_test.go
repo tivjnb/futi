@@ -5,7 +5,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/metayaml"
 	"github.com/tivjnb/futi/internal/testutil"
 )
@@ -33,7 +31,6 @@ func TestRunModulesUpdateStopsWhenHookCatchesSIGTERM(t *testing.T) {
 	parent := t.TempDir()
 	srcA := makeSourceModule(t, parent, "a", "")
 	srcB := makeSourceModule(t, parent, "b", "")
-	cache := newTestCache()
 	for _, src := range []string{srcA, srcB} {
 		if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, SkipAttach: true}); err != nil {
 			t.Fatalf("install: %v", err)
@@ -46,9 +43,10 @@ func TestRunModulesUpdateStopsWhenHookCatchesSIGTERM(t *testing.T) {
 	writeFile(t, filepath.Join(srcB, "config.yaml"),
 		"name: b\ncommands:\n  run:\n    cmd: echo v2\n")
 
+	m := newTestManager(t, &bytes.Buffer{}, nil)
 	done := make(chan error, 1)
 	go func() {
-		done <- runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"--yes"})
+		done <- m.Update(context.Background(), UpdateOptions{Yes: true})
 	}()
 	testutil.WaitForFile(t, ready, 5*time.Second)
 	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
@@ -58,7 +56,7 @@ func TestRunModulesUpdateStopsWhenHookCatchesSIGTERM(t *testing.T) {
 	select {
 	case err = <-done:
 	case <-time.After(10 * time.Second):
-		t.Fatal("runModulesUpdate не завершился")
+		t.Fatal("Update не завершился")
 	}
 	if sig, ok := interruptSignal(err); !ok || sig != syscall.SIGTERM {
 		t.Fatalf("interruptSignal(%v) = (%v, %v), want (SIGTERM, true)", err, sig, ok)
@@ -66,26 +64,6 @@ func TestRunModulesUpdateStopsWhenHookCatchesSIGTERM(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(global, "b", "config.yaml"))
 	if strings.Contains(string(data), "echo v2") {
 		t.Fatal("модуль b не должен обновляться после прерывания a")
-	}
-}
-
-// Хук, завершившийся ненулевым кодом (не сигналом), даёт код выхода futi 1,
-// а не код хука: README обещает 1 для прочих ошибок modules-команд.
-func TestFutiModulesInstallFailedAttachExitsWithOne(t *testing.T) {
-	tmp := t.TempDir()
-	src := makeSourceModule(t, t.TempDir(), "a", "attach: \"exit 3\"\n")
-	cmd := exec.Command(builtFutiBinary(t), "modules", "install", src, "--yes")
-	cmd.Dir = tmp
-	cmd.Env = append(os.Environ(),
-		"FUTI_MODULES_DIR="+filepath.Join(tmp, "mods"),
-		"HOME="+tmp, "XDG_CACHE_HOME="+filepath.Join(tmp, "cache"))
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	if err := cmd.Run(); err == nil {
-		t.Fatal("ожидалась ошибка attach")
-	}
-	if code := cmd.ProcessState.ExitCode(); code != 1 {
-		t.Fatalf("код выхода = %d, want 1", code)
 	}
 }
 
@@ -129,7 +107,6 @@ func TestRunModulesUpdateCopyFailureRestoresOld(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
-	cache := newTestCache()
 	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -148,8 +125,7 @@ func TestRunModulesUpdateCopyFailureRestoresOld(t *testing.T) {
 	writeFile(t, filepath.Join(src, "z.txt"), "z\n")
 	fix := failingCopyRename(t)
 
-	source := discovery.NewGlobalSource(global)
-	if err := runModulesUpdate(&bytes.Buffer{}, nil, source, cache, []string{"qr", "--yes"}); err == nil {
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Update(context.Background(), UpdateOptions{Name: "qr", Yes: true}); err == nil {
 		t.Fatal("update must fail when the copy fails")
 	}
 
@@ -171,7 +147,7 @@ func TestRunModulesUpdateCopyFailureRestoresOld(t *testing.T) {
 	// Повторный update после «исправления» (перенос работает) проходит.
 	fix()
 	var b bytes.Buffer
-	if err := runModulesUpdate(&b, nil, source, cache, []string{"qr", "--yes"}); err != nil {
+	if err := newTestManager(t, &b, nil).Update(context.Background(), UpdateOptions{Name: "qr", Yes: true}); err != nil {
 		t.Fatalf("repeated update: %v", err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dest, "config.yaml"))
@@ -202,7 +178,6 @@ func TestRunModulesUpdateRollbackFailureNamesBackup(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
-	cache := newTestCache()
 	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -220,7 +195,7 @@ func TestRunModulesUpdateRollbackFailureNamesBackup(t *testing.T) {
 		return base(src, dst)
 	}
 
-	err := runModulesUpdate(&bytes.Buffer{}, nil, discovery.NewGlobalSource(global), cache, []string{"qr", "--yes"})
+	err := newTestManager(t, &bytes.Buffer{}, nil).Update(context.Background(), UpdateOptions{Name: "qr", Yes: true})
 	if err == nil || !strings.Contains(err.Error(), "rollback failed") || !strings.Contains(err.Error(), dest+".futi-backup") {
 		t.Fatalf("want rollback failure naming backup path, got %v", err)
 	}

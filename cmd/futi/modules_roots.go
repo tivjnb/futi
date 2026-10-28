@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/tivjnb/futi/internal/config"
-	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/termtext"
 )
 
@@ -17,22 +16,6 @@ import (
 type moduleRoot struct {
 	Dir    string
 	Prefix string
-}
-
-// readModuleRoots — корни для чтения (list, update, uninstall) из глобальных
-// конфига и каталога модулей, с ./.futi относительно cwd. Невалидный
-// config.yaml — ошибка: иначе модули его sources молча пропали бы из list, а
-// uninstall отказал бы «вне корней».
-func readModuleRoots() ([]moduleRoot, error) {
-	cfg, err := core.LoadDefaultConfig()
-	if err != nil {
-		return nil, err
-	}
-	globalDir, err := core.DefaultModulesDir()
-	if err != nil {
-		return nil, err
-	}
-	return moduleRootsFrom(cfg, globalDir, "."), nil
 }
 
 // moduleRootsFrom — корни для чтения (list, update, uninstall): каждый source

@@ -438,3 +438,46 @@ func runModulesInstall(w io.Writer, stdin io.Reader, rt *core.Runtime, args []st
 	}
 	return newCLIManager(w, stdin, rt).Install(context.Background(), *opts)
 }
+
+// parseUpdateArgs разбирает аргументы update.
+func parseUpdateArgs(args []string) (*UpdateOptions, error) {
+	cfg := &UpdateOptions{}
+	var positional []string
+
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		switch {
+		case arg == "--skip-attach":
+			cfg.SkipAttach = true
+		case arg == "--yes" || arg == "-y":
+			cfg.Yes = true
+		case strings.HasPrefix(arg, "--"):
+			return nil, fmt.Errorf("unknown flag: %s", arg)
+		default:
+			positional = append(positional, arg)
+		}
+		i++
+	}
+
+	if len(positional) > 1 {
+		return nil, fmt.Errorf("expected at most one module name, got %d", len(positional))
+	}
+	if len(positional) == 1 {
+		cfg.Name = positional[0]
+		if err := validateResolveName(cfg.Name); err != nil {
+			return nil, err
+		}
+	}
+	return cfg, nil
+}
+
+// runModulesUpdate — `futi modules update`: parses args and updates the named
+// module or all installed ones. stdin answers replacement and attach prompts.
+func runModulesUpdate(w io.Writer, stdin io.Reader, rt *core.Runtime, args []string) error {
+	opts, err := parseUpdateArgs(args)
+	if err != nil {
+		return err
+	}
+	return newCLIManager(w, stdin, rt).Update(context.Background(), *opts)
+}
