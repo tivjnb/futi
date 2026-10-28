@@ -68,6 +68,7 @@ func parseUninstallArgs(args []string) (*uninstallArgs, error) {
 // runModulesUninstall удаляет установленный модуль (спека §5.2).
 // stdin — для интерактивного подтверждения (os.Stdin из main).
 func runModulesUninstall(w io.Writer, stdin io.Reader, source discovery.Source, cache *modulecache.Cache, args []string) error {
+	s := cliStreams(w, stdin)
 	cfg, err := parseUninstallArgs(args)
 	if err != nil {
 		return err
@@ -107,7 +108,7 @@ func runModulesUninstall(w io.Writer, stdin io.Reader, source discovery.Source, 
 
 	if !cfg.yes {
 		files, size := countTree(target)
-		ok, err := confirmDelete(stdin, w, target, files, size)
+		ok, err := confirmDelete(s.Prompt, w, target, files, size)
 		if err != nil {
 			return fmt.Errorf("modules uninstall: %w", err)
 		}
@@ -128,16 +129,16 @@ func runModulesUninstall(w io.Writer, stdin io.Reader, source discovery.Source, 
 			if cfg.strictDetach {
 				return fmt.Errorf("cannot load manifest (strict), nothing deleted: %w", err)
 			}
-			fmt.Fprintf(os.Stderr, "Warning: cannot load manifest, detach skipped: %v\n", err)
+			fmt.Fprintf(s.Err, "Warning: cannot load manifest, detach skipped: %v\n", err)
 		} else if mod.Detach != "" {
-			if err := modulerunner.RunHook(context.Background(), mod.Detach, moduleRoot, execmodule.EffectiveName(mod.Name, manifestPath), os.Stdin, w, os.Stderr, executor.GroupIsolateWithoutTTY, true); err != nil {
+			if err := modulerunner.RunHook(context.Background(), mod.Detach, moduleRoot, execmodule.EffectiveName(mod.Name, manifestPath), s.Stdin, w, s.Err, executor.GroupIsolateWithoutTTY, true); err != nil {
 				if _, interrupted := interruptSignal(err); interrupted {
 					return fmt.Errorf("detach interrupted, nothing deleted: %w", err)
 				}
 				if cfg.strictDetach {
 					return fmt.Errorf("detach failed (strict), nothing deleted: %w", err)
 				}
-				fmt.Fprintf(os.Stderr, "Warning: detach failed, proceeding with delete: %v\n", err)
+				fmt.Fprintf(s.Err, "Warning: detach failed, proceeding with delete: %v\n", err)
 			}
 		}
 	}
@@ -148,7 +149,7 @@ func runModulesUninstall(w io.Writer, stdin io.Reader, source discovery.Source, 
 	cleanupEmptyParents(filepath.Dir(target), roots)
 
 	if err := cache.Invalidate(); err != nil {
-		fmt.Fprintf(os.Stderr, "cache: %v (continuing)\n", err)
+		fmt.Fprintf(s.Err, "cache: %v (continuing)\n", err)
 	}
 
 	fmt.Fprintf(w, "Removed: %s\n", target)

@@ -76,7 +76,7 @@ func checkTransportSource(src string, kind sourceKind, ref string) error {
 
 // fetchGit клонирует репозиторий (--depth=1) в tempBase/repo, удаляет .git
 // и возвращает каталог модуля. commit — full SHA HEAD (до удаления .git).
-func fetchGit(ctx context.Context, url, ref, tempBase string) (string, string, error) {
+func fetchGit(ctx context.Context, base executor.Config, url, ref, tempBase string) (string, string, error) {
 	dest := filepath.Join(tempBase, "repo")
 
 	// protocol.http.allow=never: редирект https→http (в том числе от сервера)
@@ -87,14 +87,16 @@ func fetchGit(ctx context.Context, url, ref, tempBase string) (string, string, e
 		args = append(args, "--branch", ref)
 	}
 	args = append(args, "--", url, dest)
-	if err := executor.RunWithConfig(ctx, &executor.Config{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, ForwardSignals: true}, "git", args...); err != nil {
+	if err := executor.RunWithConfig(ctx, &base, "git", args...); err != nil {
 		return "", "", fmt.Errorf("git clone: %w", err)
 	}
 
 	// full SHA до удаления .git.
 	var buf bytes.Buffer
-	cfg := &executor.Config{Dir: dest, Stdin: os.Stdin, Stdout: &buf, Stderr: os.Stderr, ForwardSignals: true}
-	if err := executor.RunWithConfig(ctx, cfg, "git", "rev-parse", "HEAD"); err != nil {
+	cfg := base
+	cfg.Dir = dest
+	cfg.Stdout = &buf
+	if err := executor.RunWithConfig(ctx, &cfg, "git", "rev-parse", "HEAD"); err != nil {
 		return "", "", fmt.Errorf("git rev-parse: %w", err)
 	}
 	commit := buf.String()
@@ -114,7 +116,7 @@ func fetchGit(ctx context.Context, url, ref, tempBase string) (string, string, e
 
 // fetchArchive скачивает архив (curl -fsSL) и распаковывает в
 // tempBase/extracted. Возвращает каталог модуля.
-func fetchArchive(ctx context.Context, url, tempBase string) (string, error) {
+func fetchArchive(ctx context.Context, base executor.Config, url, tempBase string) (string, error) {
 	if _, err := exec.LookPath("curl"); err != nil {
 		return "", fmt.Errorf("curl not found; install curl to install from web archives")
 	}
@@ -126,8 +128,9 @@ func fetchArchive(ctx context.Context, url, tempBase string) (string, error) {
 		return "", err
 	}
 	lw := &limitWriter{w: f, left: downloadLimit}
-	cfg := &executor.Config{Stdin: os.Stdin, Stdout: lw, Stderr: os.Stderr, ForwardSignals: true}
-	err = executor.RunWithConfig(ctx, cfg, "curl",
+	cfg := base
+	cfg.Stdout = lw
+	err = executor.RunWithConfig(ctx, &cfg, "curl",
 		"-fsSL", "--proto", "=https", "--proto-redir", "=https",
 		"--max-filesize", strconv.FormatInt(maxDownloadBytes, 10),
 		"--max-time", strconv.Itoa(int(downloadTimeout/time.Second)),

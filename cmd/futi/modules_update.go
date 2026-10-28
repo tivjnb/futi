@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -18,6 +17,7 @@ import (
 	"github.com/tivjnb/futi/internal/metayaml"
 	"github.com/tivjnb/futi/internal/modulecache"
 	"github.com/tivjnb/futi/internal/modulerunner"
+	"github.com/tivjnb/futi/internal/modules"
 	"github.com/tivjnb/futi/internal/termtext"
 )
 
@@ -71,14 +71,15 @@ func parseUpdateArgs(args []string) (*updateArgs, error) {
 // Без имени — обновляет все установленные модули (serial, MVP).
 // stdin — для подтверждения замены файлов и attach-хуков (os.Stdin из main).
 func runModulesUpdate(w io.Writer, stdin io.Reader, source discovery.Source, cache *modulecache.Cache, args []string) error {
+	s := cliStreams(w, stdin)
 	cfg, err := parseUpdateArgs(args)
 	if err != nil {
 		return err
 	}
 
-	gate := attachGate{in: bufio.NewReader(stdin), skip: cfg.skipAttach, yes: cfg.yes}
+	gate := attachGate{p: s.Prompt, errW: s.Err, skip: cfg.skipAttach, yes: cfg.yes}
 	if cfg.name != "" {
-		return updateOne(w, gate, source, cache, cfg.name)
+		return updateOne(s, gate, source, cache, cfg.name)
 	}
 
 	roots, err := readModuleRoots()
@@ -92,16 +93,16 @@ func runModulesUpdate(w io.Writer, stdin io.Reader, source discovery.Source, cac
 	var entries []installedEntry
 	for _, e := range scanned {
 		if e.SelfLink {
-			fmt.Fprintf(os.Stderr, "Warning: skipped %s: module directory is a symlink\n", termtext.Line(e.Name))
+			fmt.Fprintf(s.Err, "Warning: skipped %s: module directory is a symlink\n", termtext.Line(e.Name))
 			continue
 		}
 		entries = append(entries, e)
 	}
 	for _, b := range backups {
-		fmt.Fprintf(os.Stderr, "Warning: found %s left by an interrupted update; inspect it and remove or restore it manually\n", b)
+		fmt.Fprintf(s.Err, "Warning: found %s left by an interrupted update; inspect it and remove or restore it manually\n", b)
 	}
 	if len(entries) == 0 {
-		fmt.Fprintln(w, "No installed modules found.")
+		fmt.Fprintln(s.Out, "No installed modules found.")
 		return nil
 	}
 
@@ -119,12 +120,12 @@ func runModulesUpdate(w io.Writer, stdin io.Reader, source discovery.Source, cac
 		}
 		// Обновляем именно найденный каталог, а не то, что отдаст Resolve по имени.
 		manifestPath := filepath.Join(e.Dir, "config.yaml")
-		if err := updateAt(w, gate, cache, e.Name, label, e.Dir, manifestPath); err != nil {
+		if err := updateAt(s, gate, cache, e.Name, label, e.Dir, manifestPath); err != nil {
 			// Прерывание печатает main возвращённой ошибкой — здесь не дублируем.
 			if _, interrupted := interruptSignal(err); interrupted {
 				return fmt.Errorf("update %s interrupted: %w", label, err)
 			}
-			fmt.Fprintf(os.Stderr, "update %s: %v\n", label, err)
+			fmt.Fprintf(s.Err, "update %s: %v\n", label, err)
 			failed = append(failed, label)
 		}
 	}
@@ -135,12 +136,12 @@ func runModulesUpdate(w io.Writer, stdin io.Reader, source discovery.Source, cac
 }
 
 // updateOne обновляет один модуль (спека §5.3).
-func updateOne(w io.Writer, gate attachGate, source discovery.Source, cache *modulecache.Cache, name string) error {
+func updateOne(s modules.Streams, gate attachGate, source discovery.Source, cache *modulecache.Cache, name string) error {
 	manifestPath, moduleRoot, err := source.Resolve(name)
 	if err != nil {
 		return fmt.Errorf("resolve: %w%s", err, backupHint(name))
 	}
-	return updateAt(w, gate, cache, name, name, moduleRoot, manifestPath)
+	return updateAt(s, gate, cache, name, name, moduleRoot, manifestPath)
 }
 
 // backupHint возвращает подсказку про оставшийся backup модуля name в одном из
@@ -168,7 +169,7 @@ func backupHint(name string) string {
 // updateAt обновляет модуль в конкретном каталоге moduleRoot. name — имя для
 // хука attach, label — подпись в сообщениях (имя или имя с путём); gate
 // решает, запускать ли хук.
-func updateAt(w io.Writer, gate attachGate, cache *modulecache.Cache, name, label, moduleRoot, manifestPath string) error {
+func updateAt(s modules.Streams, gate attachGate, cache *modulecache.Cache, name, label, moduleRoot, manifestPath string) error {
 	if filepath.Base(manifestPath) != "config.yaml" {
 		return fmt.Errorf("not a package module (updates require config.yaml packages)")
 	}
@@ -208,7 +209,7 @@ func updateAt(w io.Writer, gate attachGate, cache *modulecache.Cache, name, labe
 	}
 	defer os.RemoveAll(tempBase)
 
-	moduleDir, commit, err := fetchSource(context.Background(), lf.Source, kind, lf.Ref, tempBase)
+	moduleDir, commit, err := fetchSource(context.Background(), executor.Config{Stdin: s.Stdin, Stdout: s.Out, Stderr: s.Err, ForwardSignals: true}, lf.Source, kind, lf.Ref, tempBase)
 	if err != nil {
 		return fmt.Errorf("fetch: %w", err)
 	}
@@ -231,7 +232,7 @@ func updateAt(w io.Writer, gate attachGate, cache *modulecache.Cache, name, labe
 		if err := writeMeta(metaPath, meta); err != nil {
 			return fmt.Errorf("write %s: %w", metayaml.FileName, err)
 		}
-		fmt.Fprintf(w, "%s: up to date\n", label)
+		fmt.Fprintf(s.Out, "%s: up to date\n", label)
 		return nil
 	}
 
@@ -249,7 +250,7 @@ func updateAt(w io.Writer, gate attachGate, cache *modulecache.Cache, name, labe
 		if err := writeMeta(metaPath, meta); err != nil {
 			return fmt.Errorf("write %s: %w", metayaml.FileName, err)
 		}
-		fmt.Fprintf(w, "%s: up to date\n", label)
+		fmt.Fprintf(s.Out, "%s: up to date\n", label)
 		return nil
 	}
 	// Подтверждение замены — до attach и до замены дерева: отказ оставляет
@@ -302,30 +303,30 @@ func updateAt(w io.Writer, gate attachGate, cache *modulecache.Cache, name, labe
 	// Lockfile записан — backup больше не нужен. Ошибка удаления не фатальна, но
 	// оставшийся backup заблокирует следующий update — предупреждаем.
 	if err := removeBackup(backup); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: remove backup %s: %v\n", backup, err)
+		fmt.Fprintf(s.Err, "Warning: remove backup %s: %v\n", backup, err)
 	}
 
 	// attach: провал → warn, НЕ rollback (§3.1, §5.3 шаг 7).
 	// Прерывание сигналом возвращаем после Invalidate: дерево уже заменено.
 	var interruptErr error
 	if runAttach {
-		if err := modulerunner.RunHook(context.Background(), mod.Attach, moduleRoot, execmodule.EffectiveName(mod.Name, filepath.Join(moduleRoot, "config.yaml")), os.Stdin, w, os.Stderr, executor.GroupIsolateWithoutTTY, true); err != nil {
+		if err := modulerunner.RunHook(context.Background(), mod.Attach, moduleRoot, execmodule.EffectiveName(mod.Name, filepath.Join(moduleRoot, "config.yaml")), s.Stdin, s.Out, s.Err, executor.GroupIsolateWithoutTTY, true); err != nil {
 			if _, interrupted := interruptSignal(err); interrupted {
 				interruptErr = fmt.Errorf("attach interrupted: %w", err)
 			} else {
-				fmt.Fprintf(os.Stderr, "Warning: attach failed; module may be partially initialized: %v\n", err)
+				fmt.Fprintf(s.Err, "Warning: attach failed; module may be partially initialized: %v\n", err)
 			}
 		}
 	}
 
 	if err := cache.Invalidate(); err != nil {
-		fmt.Fprintf(os.Stderr, "cache: %v (continuing)\n", err)
+		fmt.Fprintf(s.Err, "cache: %v (continuing)\n", err)
 	}
 	if interruptErr != nil {
 		return interruptErr
 	}
 
-	fmt.Fprintf(w, "%s: updated\n", label)
+	fmt.Fprintf(s.Out, "%s: updated\n", label)
 	return nil
 }
 

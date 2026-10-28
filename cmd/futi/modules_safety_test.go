@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tivjnb/futi/internal/modules"
 )
 
 func TestValidateModuleName(t *testing.T) {
@@ -80,7 +82,7 @@ func TestConfirmDelete(t *testing.T) {
 	}
 	for _, tt := range tests {
 		var b strings.Builder
-		got, err := confirmDelete(strings.NewReader(tt.input), &b, "/some/path", 3, 4096)
+		got, err := confirmDelete(modules.NewPrompter(strings.NewReader(tt.input), nil), &b, "/some/path", 3, 4096)
 		if err != nil {
 			t.Fatalf("%s: unexpected error: %v", tt.name, err)
 		}

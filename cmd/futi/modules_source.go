@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/metayaml"
 )
 
@@ -309,7 +310,7 @@ func fetchLocalSource(src, tempBase string) (string, error) {
 // fetchSource получает модуль из источника в tempBase (каталог вызывающего,
 // удаляется им же через defer). Возвращает каталог модуля (возможно, сам
 // tempBase-подкаталог — install делает os.Rename от него) и commit (git).
-func fetchSource(ctx context.Context, src string, kind sourceKind, ref, tempBase string) (moduleDir, commit string, err error) {
+func fetchSource(ctx context.Context, base executor.Config, src string, kind sourceKind, ref, tempBase string) (moduleDir, commit string, err error) {
 	if err := checkTransportSource(src, kind, ref); err != nil {
 		return "", "", err
 	}
@@ -318,9 +319,9 @@ func fetchSource(ctx context.Context, src string, kind sourceKind, ref, tempBase
 		dir, err := fetchLocalSource(src, tempBase)
 		return dir, "", err
 	case kindGit:
-		return fetchGit(ctx, src, ref, tempBase)
+		return fetchGit(ctx, base, src, ref, tempBase)
 	case kindArchive:
-		dir, err := fetchArchive(ctx, src, tempBase)
+		dir, err := fetchArchive(ctx, base, src, tempBase)
 		return dir, "", err
 	}
 	return "", "", fmt.Errorf("unknown source kind: %d", kind)

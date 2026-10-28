@@ -820,7 +820,7 @@ func TestUpdateChangeListDeletionsFirst(t *testing.T) {
 
 	var err error
 	stderr := captureStderr(t, func() {
-		err = attachGate{yes: true}.allowReplace("qr", "/m/qr", "", diff)
+		err = attachGate{errW: os.Stderr, yes: true}.allowReplace("qr", "/m/qr", "", diff)
 	})
 	if err != nil {
 		t.Fatalf("allowReplace: %v", err)

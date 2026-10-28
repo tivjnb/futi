@@ -283,6 +283,7 @@ func parseAddCommandArgs(args []string) (*addCommandArgs, error) {
 
 // runModulesAddCommand добавляет команду в config.yaml модуля.
 func runModulesAddCommand(w io.Writer, source discovery.Source, cache *modulecache.Cache, args []string) error {
+	s := cliStreams(w, nil)
 	cfg, err := parseAddCommandArgs(args)
 	if err != nil {
 		return err
@@ -300,7 +301,7 @@ func runModulesAddCommand(w io.Writer, source discovery.Source, cache *modulecac
 		return fmt.Errorf("modules add_command: %w", err)
 	}
 	if err := cache.Invalidate(); err != nil {
-		fmt.Fprintf(os.Stderr, "cache: %v (continuing)\n", err)
+		fmt.Fprintf(s.Err, "cache: %v (continuing)\n", err)
 	}
 	fmt.Fprintf(w, "Added command %q to %s\n", cfg.command, manifestPath)
 	return nil
@@ -308,6 +309,7 @@ func runModulesAddCommand(w io.Writer, source discovery.Source, cache *modulecac
 
 // runModulesRemoveCommand удаляет команду из config.yaml модуля.
 func runModulesRemoveCommand(w io.Writer, source discovery.Source, cache *modulecache.Cache, args []string) error {
+	s := cliStreams(w, nil)
 	if len(args) != 2 {
 		return fmt.Errorf("usage: futi modules remove_command <module> <command>")
 	}
@@ -324,7 +326,7 @@ func runModulesRemoveCommand(w io.Writer, source discovery.Source, cache *module
 		return fmt.Errorf("modules remove_command: %w", err)
 	}
 	if err := cache.Invalidate(); err != nil {
-		fmt.Fprintf(os.Stderr, "cache: %v (continuing)\n", err)
+		fmt.Fprintf(s.Err, "cache: %v (continuing)\n", err)
 	}
 	fmt.Fprintf(w, "Removed command %q from %s\n", command, manifestPath)
 	return nil

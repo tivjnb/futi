@@ -83,13 +83,13 @@ func prefixedName(prefix, rel string) string {
 // при них глобальный каталог сам по себе не читается. Каталог совпадает с
 // source или лежит внутри него — полное имя в w (если оно отличается от
 // name); не входит ни в один source — предупреждение в stderr.
-func reportSourcesVisibility(w io.Writer, cfg *config.Config, globalDir, name string) {
+func reportSourcesVisibility(w, errW io.Writer, cfg *config.Config, globalDir, name string) {
 	if cfg == nil || len(cfg.Sources) == 0 {
 		return
 	}
 	fullName, ok := visibleName(cfg.Sources, normalizePath(globalDir), name)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "Warning: %s is not listed in config.yaml sources; add it there to use, update or uninstall the module by name\n", termtext.Line(globalDir))
+		fmt.Fprintf(errW, "Warning: %s is not listed in config.yaml sources; add it there to use, update or uninstall the module by name\n", termtext.Line(globalDir))
 		return
 	}
 	if fullName != name {

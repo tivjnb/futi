@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -130,6 +129,7 @@ var computeTreeHash = metayaml.ComputeTreeHash
 // runModulesInstall устанавливает модуль из источника (спека §5.1).
 // stdin — для подтверждения attach-хука (os.Stdin из main).
 func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, args []string) (retErr error) {
+	s := cliStreams(w, stdin)
 	cfg, err := parseInstallArgs(args)
 	if err != nil {
 		return err
@@ -175,7 +175,7 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 	}
 	defer os.RemoveAll(tempBase)
 
-	moduleDir, commit, err := fetchSource(context.Background(), cfg.source, kind, cfg.ref, tempBase)
+	moduleDir, commit, err := fetchSource(context.Background(), executor.Config{Stdin: s.Stdin, Stdout: s.Out, Stderr: s.Err, ForwardSignals: true}, cfg.source, kind, cfg.ref, tempBase)
 	if err != nil {
 		return fmt.Errorf("modules install: %w", err)
 	}
@@ -221,7 +221,7 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 	}
 	// Подтверждение attach — до любых изменений в каталоге модулей:
 	// отказ ничего не оставляет на диске.
-	gate := attachGate{in: bufio.NewReader(stdin), skip: cfg.skipAttach, yes: cfg.yes}
+	gate := attachGate{p: s.Prompt, errW: s.Err, skip: cfg.skipAttach, yes: cfg.yes}
 	runAttach, err := gate.allow(mod.Attach, name, dest)
 	if errors.Is(err, errAttachNotConfirmed) {
 		return fmt.Errorf("%w; module not installed", err)
@@ -275,7 +275,7 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 
 	// attach: провал → rollback (rm dest) + error (§3.1, §8 #6).
 	if runAttach {
-		if err := modulerunner.RunHook(context.Background(), mod.Attach, dest, execmodule.EffectiveName(mod.Name, filepath.Join(dest, "config.yaml")), os.Stdin, w, os.Stderr, executor.GroupIsolateWithoutTTY, true); err != nil {
+		if err := modulerunner.RunHook(context.Background(), mod.Attach, dest, execmodule.EffectiveName(mod.Name, filepath.Join(dest, "config.yaml")), s.Stdin, w, s.Err, executor.GroupIsolateWithoutTTY, true); err != nil {
 			return fmt.Errorf("attach failed, module removed: %w", err)
 		}
 	}
@@ -283,12 +283,12 @@ func runModulesInstall(w io.Writer, stdin io.Reader, cache *modulecache.Cache, a
 	committed = true
 
 	if err := cache.Invalidate(); err != nil {
-		fmt.Fprintf(os.Stderr, "cache: %v (continuing)\n", err)
+		fmt.Fprintf(s.Err, "cache: %v (continuing)\n", err)
 	}
 
 	fmt.Fprintf(w, "Installed: %s → %s\n", cfg.source, dest)
 	if !cfg.local {
-		reportSourcesVisibility(w, futiCfg, root, dotName(filepath.Join(nsPath, name)))
+		reportSourcesVisibility(w, s.Err, futiCfg, root, dotName(filepath.Join(nsPath, name)))
 	}
 	return nil
 }

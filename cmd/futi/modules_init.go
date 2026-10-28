@@ -277,7 +277,7 @@ func runModulesInit(w io.Writer, args []string) error {
 	}
 	fmt.Fprintf(w, "Created: %s\n", displayPath)
 	if cfg.global {
-		reportSourcesVisibility(w, futiCfg, globalDir, initModuleName(cfg.path))
+		reportSourcesVisibility(w, os.Stderr, futiCfg, globalDir, initModuleName(cfg.path))
 	}
 	return nil
 }

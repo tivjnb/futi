@@ -3,10 +3,17 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/modulecache"
 )
+
+// stdinIsTerminal сообщает, подключён ли stdin к терминалу; шов для тестов.
+var stdinIsTerminal = func() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
 
 // runModules — диспетчер `futi modules <subcommand> [...]`.
 // source — источник модулей (resolve для path/info/add_command/remove_command/

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/metayaml"
 )
 
@@ -56,7 +57,7 @@ func indexOf(s []string, v string) int {
 
 func TestFetchGitPassesDoubleDashBeforeURL(t *testing.T) {
 	bin := fakeBin(t, map[string]string{"git": "exit 1"})
-	_, _, _ = fetchGit(context.Background(), "https://example.com/r.git", "v1", t.TempDir())
+	_, _, _ = fetchGit(context.Background(), executor.Config{}, "https://example.com/r.git", "v1", t.TempDir())
 	argv := readArgv(t, bin, "git")
 	dd := indexOf(argv, "--")
 	url := indexOf(argv, "https://example.com/r.git")
@@ -71,7 +72,7 @@ func TestFetchGitPassesDoubleDashBeforeURL(t *testing.T) {
 // TestFetchGitForbidsHTTPProtocol: git не должен идти по редиректу на http:// (audit F50).
 func TestFetchGitForbidsHTTPProtocol(t *testing.T) {
 	bin := fakeBin(t, map[string]string{"git": "exit 1"})
-	_, _, _ = fetchGit(context.Background(), "https://example.com/r.git", "", t.TempDir())
+	_, _, _ = fetchGit(context.Background(), executor.Config{}, "https://example.com/r.git", "", t.TempDir())
 	argv := readArgv(t, bin, "git")
 	c := indexOf(argv, "-c")
 	clone := indexOf(argv, "clone")
@@ -82,7 +83,7 @@ func TestFetchGitForbidsHTTPProtocol(t *testing.T) {
 
 func TestFetchArchiveCurlHardeningArgs(t *testing.T) {
 	bin := fakeBin(t, map[string]string{"curl": "exit 1"})
-	_, _ = fetchArchive(context.Background(), "https://example.com/m.tar.gz", t.TempDir())
+	_, _ = fetchArchive(context.Background(), executor.Config{}, "https://example.com/m.tar.gz", t.TempDir())
 	argv := readArgv(t, bin, "curl")
 	want := []string{"-fsSL", "--proto", "=https", "--proto-redir", "=https",
 		"--max-filesize", "104857600", "--max-time", "300", "--", "https://example.com/m.tar.gz"}
@@ -94,12 +95,12 @@ func TestFetchArchiveCurlHardeningArgs(t *testing.T) {
 func TestFetchSourceRejectsLeadingDash(t *testing.T) {
 	bin := fakeBin(t, map[string]string{"git": "exit 0", "curl": "exit 0"})
 	for _, kind := range []sourceKind{kindLocal, kindGit, kindArchive} {
-		_, _, err := fetchSource(context.Background(), "-x", kind, "", t.TempDir())
+		_, _, err := fetchSource(context.Background(), executor.Config{}, "-x", kind, "", t.TempDir())
 		if err == nil || !strings.Contains(err.Error(), `must not start with "-"`) {
 			t.Errorf("kind %v: err = %v, want leading-dash error", kind, err)
 		}
 	}
-	_, _, err := fetchSource(context.Background(), "https://example.com/r.git", kindGit, "-x", t.TempDir())
+	_, _, err := fetchSource(context.Background(), executor.Config{}, "https://example.com/r.git", kindGit, "-x", t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), `ref "-x" must not start with "-"`) {
 		t.Errorf("ref: err = %v, want leading-dash error", err)
 	}
@@ -124,7 +125,7 @@ func TestFetchSourceRejectsHTTP(t *testing.T) {
 		{"GIT://e.com/r.git", kindGit},
 	}
 	for _, tc := range cases {
-		_, _, err := fetchSource(context.Background(), tc.src, tc.kind, "", t.TempDir())
+		_, _, err := fetchSource(context.Background(), executor.Config{}, tc.src, tc.kind, "", t.TempDir())
 		if err == nil || !strings.Contains(err.Error(), "only https:// is supported") {
 			t.Errorf("%s: err = %v, want https error", tc.src, err)
 		}
@@ -188,7 +189,7 @@ func TestFetchArchiveEnforcesSizeLimit(t *testing.T) {
 	downloadLimit = 10
 	t.Cleanup(func() { downloadLimit = old })
 
-	_, err := fetchArchive(context.Background(), "https://example.com/m.tar.gz", t.TempDir())
+	_, err := fetchArchive(context.Background(), executor.Config{}, "https://example.com/m.tar.gz", t.TempDir())
 	if err == nil || err.Error() != "download archive: exceeds 100 MiB limit" {
 		t.Fatalf("err = %v, want \"download archive: exceeds 100 MiB limit\"", err)
 	}
@@ -245,7 +246,7 @@ func TestInstallRejectsBz2BeforeDownload(t *testing.T) {
 	bin := fakeBin(t, map[string]string{"git": "exit 0", "curl": "exit 0"})
 	for _, ext := range []string{".tar.bz2", ".tbz2", ".tar.xz", ".txz"} {
 		src := "https://h/m" + ext
-		_, _, err := fetchSource(context.Background(), src, kindArchive, "", t.TempDir())
+		_, _, err := fetchSource(context.Background(), executor.Config{}, src, kindArchive, "", t.TempDir())
 		if err == nil || !strings.Contains(err.Error(), "unsupported archive format "+ext) {
 			t.Errorf("%s: err = %v, want unsupported archive format %s", src, err, ext)
 		}

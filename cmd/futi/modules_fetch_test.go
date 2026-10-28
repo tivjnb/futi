@@ -191,7 +191,7 @@ func TestFetchGitLocalRepo(t *testing.T) {
 	gitRunTest(t, repo, "commit", "-m", "init")
 
 	tempBase := t.TempDir()
-	dir, commit, err := fetchGit(context.Background(), repo, "", tempBase)
+	dir, commit, err := fetchGit(context.Background(), executor.Config{}, repo, "", tempBase)
 	if err != nil {
 		t.Fatalf("fetchGit: %v", err)
 	}

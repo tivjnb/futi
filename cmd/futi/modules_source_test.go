@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/tivjnb/futi/internal/executor"
 )
 
 func TestDetectSourceType(t *testing.T) {
@@ -142,7 +144,7 @@ func TestFetchSourceLocalDispatch(t *testing.T) {
 	os.WriteFile(filepath.Join(src, "config.yaml"), []byte("name: qr\ncommands:\n  run:\n    cmd: echo\n"), 0o644)
 
 	tempBase := t.TempDir()
-	dir, commit, err := fetchSource(context.Background(), src, kindLocal, "", tempBase)
+	dir, commit, err := fetchSource(context.Background(), executor.Config{}, src, kindLocal, "", tempBase)
 	if err != nil {
 		t.Fatalf("fetchSource: %v", err)
 	}
