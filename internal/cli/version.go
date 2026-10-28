@@ -1,9 +1,6 @@
-package main
+package cli
 
 import "runtime/debug"
-
-// version задаётся при сборке релиза: -ldflags "-X main.version=<v>".
-var version string
 
 // versionString собирает строку для futi --version. Приоритет: версия из
 // ldflags, затем версия модуля из build info: тег при go install @tag,

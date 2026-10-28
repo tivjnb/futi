@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bytes"
@@ -20,8 +20,10 @@ import (
 func TestCLIStreamsWiring(t *testing.T) {
 	var out bytes.Buffer
 	setStdinTerminal(t, true)
-	s := cliStreams(&out, strings.NewReader("y\n"))
-	if s.Out != io.Writer(&out) || s.Err != io.Writer(os.Stderr) || s.Stdin != io.Reader(os.Stdin) {
+	var errb bytes.Buffer
+	in := strings.NewReader("y\n")
+	s := cliStreams(&out, &errb, in)
+	if s.Out != io.Writer(&out) || s.Err != io.Writer(&errb) || s.Stdin != io.Reader(in) {
 		t.Fatalf("cliStreams wiring: Out=%v Err=%v Stdin=%v", s.Out, s.Err, s.Stdin)
 	}
 	if !s.Prompt.Interactive() {
@@ -47,7 +49,7 @@ func TestRunModulesInfoWithMeta(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var b bytes.Buffer
-	if err := runModulesInfo(&b, newTestRuntime(t), []string{"qr"}); err != nil {
+	if err := runModulesInfo(&b, io.Discard, newTestRuntime(t), []string{"qr"}); err != nil {
 		t.Fatalf("runModulesInfo: %v", err)
 	}
 	out := b.String()
@@ -65,7 +67,7 @@ func TestRunModulesInfoWithoutMeta(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var b bytes.Buffer
-	if err := runModulesInfo(&b, newTestRuntime(t), []string{"qr"}); err != nil {
+	if err := runModulesInfo(&b, io.Discard, newTestRuntime(t), []string{"qr"}); err != nil {
 		t.Fatalf("runModulesInfo: %v", err)
 	}
 	if !strings.Contains(b.String(), "Installed: no") {
@@ -76,7 +78,7 @@ func TestRunModulesInfoWithoutMeta(t *testing.T) {
 func TestRunModulesPathUsageError(t *testing.T) {
 	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
 	t.Chdir(t.TempDir())
-	if err := runModulesPath(nil, newTestRuntime(t), nil); err == nil {
+	if err := runModulesPath(nil, io.Discard, newTestRuntime(t), nil); err == nil {
 		t.Fatal("expected usage error")
 	}
 }
@@ -91,7 +93,7 @@ func TestRunModulesInfoBrokenSidecar(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var b bytes.Buffer
-	err := runModulesInfo(&b, newTestRuntime(t), []string{"qr"})
+	err := runModulesInfo(&b, io.Discard, newTestRuntime(t), []string{"qr"})
 	if err == nil || !strings.HasPrefix(err.Error(), "modules info: ") {
 		t.Fatalf("runModulesInfo err = %v, want modules info: error", err)
 	}
@@ -113,7 +115,7 @@ func TestRunModulesInfoStripsControlChars(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var b bytes.Buffer
-	if err := runModulesInfo(&b, newTestRuntime(t), []string{"qr"}); err != nil {
+	if err := runModulesInfo(&b, io.Discard, newTestRuntime(t), []string{"qr"}); err != nil {
 		t.Fatalf("runModulesInfo: %v", err)
 	}
 	out := b.String()
@@ -134,7 +136,7 @@ func TestRunModulesListOutput(t *testing.T) {
 	t.Chdir(t.TempDir()) // без ./.futi
 
 	var b bytes.Buffer
-	if err := runModulesList(&b, newTestRuntime(t), nil); err != nil {
+	if err := runModulesList(&b, io.Discard, newTestRuntime(t), nil); err != nil {
 		t.Fatalf("runModulesList: %v", err)
 	}
 	out := b.String()
@@ -147,7 +149,7 @@ func TestRunModulesListEmpty(t *testing.T) {
 	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
 	t.Chdir(t.TempDir())
 	var b bytes.Buffer
-	if err := runModulesList(&b, newTestRuntime(t), nil); err != nil {
+	if err := runModulesList(&b, io.Discard, newTestRuntime(t), nil); err != nil {
 		t.Fatalf("runModulesList: %v", err)
 	}
 	if !strings.Contains(b.String(), "No installed modules found") {
@@ -165,7 +167,7 @@ func TestRunModulesListStripsControlChars(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var b bytes.Buffer
-	if err := runModulesList(&b, newTestRuntime(t), nil); err != nil {
+	if err := runModulesList(&b, io.Discard, newTestRuntime(t), nil); err != nil {
 		t.Fatalf("runModulesList: %v", err)
 	}
 	out := b.String()
@@ -186,7 +188,7 @@ func TestModulesListRefOnlyForGit(t *testing.T) {
 	installFixtureModule(t, root, "gitm", &metayaml.Meta{Lockfile: metayaml.Lockfile{Source: "https://h/r.git", Type: "git", Ref: "v7"}})
 
 	var b bytes.Buffer
-	if err := runModulesList(&b, newTestRuntime(t), nil); err != nil {
+	if err := runModulesList(&b, io.Discard, newTestRuntime(t), nil); err != nil {
 		t.Fatalf("runModulesList: %v", err)
 	}
 	if strings.Contains(b.String(), "v9") {
@@ -203,7 +205,7 @@ func TestModulesInfoRefOnlyForGit(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var b bytes.Buffer
-	if err := runModulesInfo(&b, newTestRuntime(t), []string{"old"}); err != nil {
+	if err := runModulesInfo(&b, io.Discard, newTestRuntime(t), []string{"old"}); err != nil {
 		t.Fatalf("runModulesInfo: %v", err)
 	}
 	if strings.Contains(b.String(), "v9") {
@@ -231,7 +233,7 @@ func TestRunInitNoArgsError(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var buf bytes.Buffer
-	err := runModulesInit(&buf, []string{})
+	err := runModulesInit(&buf, io.Discard, []string{})
 	if err == nil {
 		t.Fatal("expected error for missing path")
 	}
