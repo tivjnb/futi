@@ -1006,13 +1006,14 @@ func main() {
 	// гонять Refresh по политике: мутирующие подкоманды сами инвалидируют
 	// кэш, read-only обходятся загрузкой по требованию.
 	if os.Args[1] == "modules" {
-		cache := rt.Cache()
-		source, err := rt.Source()
-		if err != nil {
+		// Cache() prints cache warnings (Warn) before any subcommand output,
+		// read-only subcommands included.
+		_ = rt.Cache()
+		if _, err := rt.Source(); err != nil {
 			fmt.Fprintf(os.Stderr, "source: %v\n", err)
 			os.Exit(1)
 		}
-		if err := runModules(os.Stdout, os.Stdin, source, cache, os.Args[2:]); err != nil {
+		if err := runModules(os.Stdout, os.Stdin, rt, os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "modules: %v\n", err)
 			// Прерванный хук — futi гибнет тем же сигналом; код хука, git
 			// или curl наружу не пробрасывается: прочие ошибки дают 1.

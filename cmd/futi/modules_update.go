@@ -90,7 +90,7 @@ func runModulesUpdate(w io.Writer, stdin io.Reader, source discovery.Source, cac
 	// Модуль, чей каталог сам симлинк, не обновляем: замена дерева превратила
 	// бы симлинк в копию, а оригинал остался бы старым. Симлинк-каталог
 	// namespace выше модуля не мешает (dotfiles-схема).
-	var entries []installedEntry
+	var entries []Entry
 	for _, e := range scanned {
 		if e.SelfLink {
 			fmt.Fprintf(s.Err, "Warning: skipped %s: module directory is a symlink\n", termtext.Line(e.Name))

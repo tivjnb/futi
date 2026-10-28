@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -55,12 +56,12 @@ func TestModulesListShowsConfigSources(t *testing.T) {
 	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
 	t.Chdir(t.TempDir())
 
-	var b bytes.Buffer
-	if err := runModulesList(&b, nil); err != nil {
-		t.Fatalf("runModulesList: %v", err)
+	entries, err := newTestManager(t, io.Discard, nil).List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
 	}
-	if !strings.Contains(b.String(), "dev.tools.qr") {
-		t.Fatalf("list output lacks dev.tools.qr:\n%s", b.String())
+	if len(entries) != 1 || entries[0].Name != "dev.tools.qr" {
+		t.Fatalf("List = %+v, want one dev.tools.qr", entries)
 	}
 }
 
@@ -91,9 +92,9 @@ func TestModulesUninstallRefusesConfigSourceRoot(t *testing.T) {
 	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
 	t.Chdir(t.TempDir())
 
-	roots, err := readModuleRoots()
+	roots, err := newTestManager(t, io.Discard, nil).moduleRoots()
 	if err != nil {
-		t.Fatalf("readModuleRoots: %v", err)
+		t.Fatalf("moduleRoots: %v", err)
 	}
 	dirs := rootDirs(roots)
 	if err := ensureWithinRoot(src, dirs); err == nil {
@@ -163,9 +164,9 @@ func TestModulesListFollowsSymlinks(t *testing.T) {
 	}
 	t.Setenv("FUTI_MODULES_DIR", linkRoot)
 
-	roots, err := readModuleRoots()
+	roots, err := newTestManager(t, io.Discard, nil).moduleRoots()
 	if err != nil {
-		t.Fatalf("readModuleRoots: %v", err)
+		t.Fatalf("moduleRoots: %v", err)
 	}
 	entries := scanInstalled(roots)
 	var names []string
@@ -191,9 +192,9 @@ func TestModulesListDedupsRootsByRealPath(t *testing.T) {
 	t.Setenv("FUTI_MODULES_DIR", linkRoot)
 	t.Chdir(t.TempDir())
 
-	roots, err := readModuleRoots()
+	roots, err := newTestManager(t, io.Discard, nil).moduleRoots()
 	if err != nil {
-		t.Fatalf("readModuleRoots: %v", err)
+		t.Fatalf("moduleRoots: %v", err)
 	}
 	entries := scanInstalled(roots)
 	if len(entries) != 1 || entries[0].Name != "dev.qr" {
@@ -269,17 +270,6 @@ func TestModulesInitGlobalReportsPrefixedName(t *testing.T) {
 	}
 }
 
-func TestModulesRootsInvalidConfig(t *testing.T) {
-	writeFutiConfig(t, "sources: [\n")
-	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
-	t.Chdir(t.TempDir())
-
-	err := runModulesList(&bytes.Buffer{}, nil)
-	if err == nil || !strings.Contains(err.Error(), "modules list: config:") {
-		t.Fatalf("err = %v, want modules list: config: error", err)
-	}
-}
-
 // Модуль, доступный из двух корней (./.futi/qr — симлинк на пакет в
 // глобальном каталоге), обходится один раз и под путём без симлинка, даже
 // если корень с симлинком обходится первым.
@@ -312,15 +302,14 @@ func TestModulesSymlinkAliasPrefersRealPath(t *testing.T) {
 	t.Setenv("FUTI_MODULES_DIR", global)
 	t.Chdir(t.TempDir())
 
-	var list bytes.Buffer
-	if err := runModulesList(&list, nil); err != nil {
-		t.Fatalf("runModulesList: %v", err)
+	listed, err := newTestManager(t, io.Discard, nil).List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
 	}
-	if !strings.Contains(list.String(), "qr") || strings.Contains(list.String(), "alias") {
-		t.Fatalf("list must show qr and not alias:\n%s", list.String())
+	if len(listed) != 1 || listed[0].Name != "qr" {
+		t.Fatalf("list must show qr and not alias, got %+v", listed)
 	}
 
-	var err error
 	stderr := captureStderr(t, func() {
 		err = runModulesUpdate(&bytes.Buffer{}, strings.NewReader(""), discovery.NewGlobalSource(global), newTestCache(), nil)
 	})
@@ -463,5 +452,24 @@ func TestModulesUninstallRefusesNestedRoot(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(global, "config.yaml")); statErr != nil {
 		t.Fatalf("root %s must survive: %v", global, statErr)
+	}
+}
+
+func TestModuleRootsFromSkipsLocalWithoutLocalDir(t *testing.T) {
+	project := t.TempDir()
+	if err := os.Mkdir(filepath.Join(project, ".futi"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	global := t.TempDir()
+
+	roots := moduleRootsFrom(nil, global, "")
+	if len(roots) != 1 || roots[0].Dir != global {
+		t.Fatalf("moduleRootsFrom(nil, global, \"\") = %+v, want only %s", roots, global)
+	}
+
+	roots = moduleRootsFrom(nil, global, project)
+	want := filepath.Join(project, ".futi")
+	if len(roots) != 2 || roots[0].Dir != global || roots[1].Dir != want {
+		t.Fatalf("moduleRootsFrom(nil, global, project) = %+v, want %s then %s", roots, global, want)
 	}
 }

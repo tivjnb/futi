@@ -5,8 +5,8 @@ import (
 	"io"
 	"os"
 
+	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
-	"github.com/tivjnb/futi/internal/modulecache"
 )
 
 // stdinIsTerminal сообщает, подключён ли stdin к терминалу; шов для тестов.
@@ -16,11 +16,13 @@ var stdinIsTerminal = func() bool {
 }
 
 // runModules — диспетчер `futi modules <subcommand> [...]`.
-// source — источник модулей (resolve для path/info/add_command/remove_command/
-// uninstall/update); cache — кэш (Invalidate после install/uninstall/update).
+// rt — Runtime: источник модулей (resolve для path/info/add_command/
+// remove_command/uninstall/update) и кэш (Invalidate после install/uninstall/
+// update) берутся из него внутри ветки подкоманды; init, usage и unknown
+// работают с rt == nil.
 // args — аргументы после "modules" (os.Args[2:]).
 // stdin — для интерактивных подтверждений install/update/uninstall (os.Stdin в main).
-func runModules(w io.Writer, stdin io.Reader, source discovery.Source, cache *modulecache.Cache, args []string) error {
+func runModules(w io.Writer, stdin io.Reader, rt *core.Runtime, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: futi modules <subcommand> (subcommands: init, install, uninstall, update, info, validate, list, add_command, remove_command, path)")
 	}
@@ -30,23 +32,43 @@ func runModules(w io.Writer, stdin io.Reader, source discovery.Source, cache *mo
 	case "init":
 		return runModulesInit(w, rest)
 	case "install":
-		return runModulesInstall(w, stdin, cache, rest)
+		return runModulesInstall(w, stdin, rt.Cache(), rest)
 	case "uninstall":
-		return runModulesUninstall(w, stdin, source, cache, rest)
+		source, err := rt.Source()
+		if err != nil {
+			return err
+		}
+		return runModulesUninstall(w, stdin, source, rt.Cache(), rest)
 	case "update":
-		return runModulesUpdate(w, stdin, source, cache, rest)
+		source, err := rt.Source()
+		if err != nil {
+			return err
+		}
+		return runModulesUpdate(w, stdin, source, rt.Cache(), rest)
 	case "info":
-		return runModulesInfo(w, source, rest)
+		return runModulesInfo(w, rt, rest)
 	case "validate":
+		source, err := rt.Source()
+		if err != nil {
+			return err
+		}
 		return runModulesValidate(w, source, rest)
 	case "list":
-		return runModulesList(w, rest)
+		return runModulesList(w, rt, rest)
 	case "add_command":
-		return runModulesAddCommand(w, source, cache, rest)
+		source, err := rt.Source()
+		if err != nil {
+			return err
+		}
+		return runModulesAddCommand(w, source, rt.Cache(), rest)
 	case "remove_command":
-		return runModulesRemoveCommand(w, source, cache, rest)
+		source, err := rt.Source()
+		if err != nil {
+			return err
+		}
+		return runModulesRemoveCommand(w, source, rt.Cache(), rest)
 	case "path":
-		return runModulesPath(w, source, rest)
+		return runModulesPath(w, rt, rest)
 	default:
 		return fmt.Errorf("unknown modules subcommand %q", sub)
 	}

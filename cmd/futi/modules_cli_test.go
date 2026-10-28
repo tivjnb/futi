@@ -6,6 +6,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/tivjnb/futi/internal/core"
+	"github.com/tivjnb/futi/internal/metayaml"
 )
 
 func TestCLIStreamsWiring(t *testing.T) {
@@ -20,5 +24,183 @@ func TestCLIStreamsWiring(t *testing.T) {
 	}
 	if line, _ := s.Prompt.ReadLine(); line != "y\n" {
 		t.Fatalf("ReadLine() = %q, want answers from stdin argument", line)
+	}
+}
+
+func TestRunModulesInfoWithMeta(t *testing.T) {
+	root := t.TempDir()
+	meta := &metayaml.Meta{
+		Lockfile: metayaml.Lockfile{
+			Source: "/src/qr", Type: "local", Hash: "sha256:ab",
+			InstalledAt: time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC),
+		},
+		About: &metayaml.About{Author: "foo@example.com", License: "MIT"},
+	}
+	installFixtureModule(t, root, "qr", meta)
+
+	t.Setenv("FUTI_MODULES_DIR", root)
+	t.Chdir(t.TempDir())
+
+	var b bytes.Buffer
+	if err := runModulesInfo(&b, newTestRuntime(t), []string{"qr"}); err != nil {
+		t.Fatalf("runModulesInfo: %v", err)
+	}
+	out := b.String()
+	for _, want := range []string{"Path:", "Source: /src/qr", "Type: local", "Hash: sha256:ab",
+		"Installed at: 2026-09-21 10:00:00", "Author: foo@example.com", "License: MIT"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunModulesInfoWithoutMeta(t *testing.T) {
+	root := installFixtureModule(t, t.TempDir(), "qr", nil)
+	t.Setenv("FUTI_MODULES_DIR", root)
+	t.Chdir(t.TempDir())
+
+	var b bytes.Buffer
+	if err := runModulesInfo(&b, newTestRuntime(t), []string{"qr"}); err != nil {
+		t.Fatalf("runModulesInfo: %v", err)
+	}
+	if !strings.Contains(b.String(), "Installed: no") {
+		t.Fatalf("expected 'Installed: no' note:\n%s", b.String())
+	}
+}
+
+func TestRunModulesPathUsageError(t *testing.T) {
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	t.Chdir(t.TempDir())
+	if err := runModulesPath(nil, newTestRuntime(t), nil); err == nil {
+		t.Fatal("expected usage error")
+	}
+}
+
+// TestRunModulesInfoStripsControlChars: ESC в lockfile/about не доходит до терминала (audit F18).
+
+func TestRunModulesInfoStripsControlChars(t *testing.T) {
+	root := t.TempDir()
+	meta := &metayaml.Meta{
+		Lockfile: metayaml.Lockfile{Source: "/src\x1b]0;pwned\x07/qr", Type: "local"},
+		About:    &metayaml.About{Author: "ev\x1b[2Jil", Tags: []string{"t\x1b[1m"}},
+	}
+	installFixtureModule(t, root, "qr", meta)
+
+	t.Setenv("FUTI_MODULES_DIR", root)
+	t.Chdir(t.TempDir())
+
+	var b bytes.Buffer
+	if err := runModulesInfo(&b, newTestRuntime(t), []string{"qr"}); err != nil {
+		t.Fatalf("runModulesInfo: %v", err)
+	}
+	out := b.String()
+	if strings.Contains(out, "\x1b") || strings.Contains(out, "\x07") {
+		t.Fatalf("output contains control chars: %q", out)
+	}
+	for _, want := range []string{"Source: /src]0;pwned/qr", "Author: ev[2Jil"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunModulesListOutput(t *testing.T) {
+	root := t.TempDir()
+	installFixtureModule(t, root, "qr", &metayaml.Meta{Lockfile: metayaml.Lockfile{Source: "/src/qr"}})
+	t.Setenv("FUTI_MODULES_DIR", root)
+	t.Chdir(t.TempDir()) // без ./.futi
+
+	var b bytes.Buffer
+	if err := runModulesList(&b, newTestRuntime(t), nil); err != nil {
+		t.Fatalf("runModulesList: %v", err)
+	}
+	out := b.String()
+	if !strings.Contains(out, "qr") || !strings.Contains(out, "/src/qr") {
+		t.Fatalf("unexpected output:\n%s", out)
+	}
+}
+
+func TestRunModulesListEmpty(t *testing.T) {
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	t.Chdir(t.TempDir())
+	var b bytes.Buffer
+	if err := runModulesList(&b, newTestRuntime(t), nil); err != nil {
+		t.Fatalf("runModulesList: %v", err)
+	}
+	if !strings.Contains(b.String(), "No installed modules found") {
+		t.Fatalf("unexpected output:\n%s", b.String())
+	}
+}
+
+// TestRunModulesListStripsControlChars: ESC в lockfile не доходит до терминала (audit F18).
+
+func TestRunModulesListStripsControlChars(t *testing.T) {
+	root := t.TempDir()
+	installFixtureModule(t, root, "qr", &metayaml.Meta{Lockfile: metayaml.Lockfile{
+		Source: "/src\x1b]0;pwned\x07/qr", Type: "git", Ref: "v1\x1b[2J",
+	}})
+	t.Setenv("FUTI_MODULES_DIR", root)
+	t.Chdir(t.TempDir())
+
+	var b bytes.Buffer
+	if err := runModulesList(&b, newTestRuntime(t), nil); err != nil {
+		t.Fatalf("runModulesList: %v", err)
+	}
+	out := b.String()
+	if strings.Contains(out, "\x1b") || strings.Contains(out, "\x07") {
+		t.Fatalf("output contains control chars: %q", out)
+	}
+	if !strings.Contains(out, "/src]0;pwned/qr") || !strings.Contains(out, "v1[2J") {
+		t.Fatalf("output lost visible text:\n%s", out)
+	}
+}
+
+// F62: ref из lockfile не-git источника не показывается как версия.
+
+func TestModulesListRefOnlyForGit(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FUTI_MODULES_DIR", root)
+	t.Chdir(t.TempDir())
+	installFixtureModule(t, root, "old", &metayaml.Meta{Lockfile: metayaml.Lockfile{Source: "/src/old", Type: "local", Ref: "v9"}})
+	installFixtureModule(t, root, "gitm", &metayaml.Meta{Lockfile: metayaml.Lockfile{Source: "https://h/r.git", Type: "git", Ref: "v7"}})
+
+	var b bytes.Buffer
+	if err := runModulesList(&b, newTestRuntime(t), nil); err != nil {
+		t.Fatalf("runModulesList: %v", err)
+	}
+	if strings.Contains(b.String(), "v9") {
+		t.Fatalf("list shows ref of local module:\n%s", b.String())
+	}
+	if !strings.Contains(b.String(), "v7") {
+		t.Fatalf("list must show ref of git module:\n%s", b.String())
+	}
+}
+
+func TestModulesInfoRefOnlyForGit(t *testing.T) {
+	root := installFixtureModule(t, t.TempDir(), "old", &metayaml.Meta{Lockfile: metayaml.Lockfile{Source: "/src/old", Type: "archive", Ref: "v9"}})
+	t.Setenv("FUTI_MODULES_DIR", root)
+	t.Chdir(t.TempDir())
+
+	var b bytes.Buffer
+	if err := runModulesInfo(&b, newTestRuntime(t), []string{"old"}); err != nil {
+		t.Fatalf("runModulesInfo: %v", err)
+	}
+	if strings.Contains(b.String(), "v9") {
+		t.Fatalf("info shows ref of archive module:\n%s", b.String())
+	}
+}
+
+func TestModulesRootsInvalidConfig(t *testing.T) {
+	writeFutiConfig(t, "sources: [\n")
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	t.Chdir(t.TempDir())
+
+	opts, err := core.DefaultOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = core.NewRuntime(opts)
+	if err == nil || !strings.Contains(err.Error(), "config:") {
+		t.Fatalf("NewRuntime err = %v, want config: error", err)
 	}
 }

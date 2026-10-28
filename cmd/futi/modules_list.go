@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -10,13 +9,10 @@ import (
 	"strings"
 
 	"github.com/tivjnb/futi/internal/metayaml"
-	"github.com/tivjnb/futi/internal/termtext"
-
-	"github.com/olekukonko/tablewriter"
 )
 
-// installedEntry — установленный модуль, найденный сканированием.
-type installedEntry struct {
+// Entry — установленный модуль, найденный сканированием.
+type Entry struct {
 	Name    string // dot-имя (namespace.name)
 	Dir     string // каталог модуля (пакет)
 	Meta    *metayaml.Meta
@@ -44,7 +40,7 @@ const backupSuffix = ".futi-backup"
 // первый по обходу; порядок — по первому появлению, он детерминирован
 // (корни по порядку, записи каталога по имени). Ошибки чтения отдельного
 // модуля или каталога не фатальны — он пропускается.
-func scanRoots(roots []moduleRoot) (entries []installedEntry, backups []string) {
+func scanRoots(roots []moduleRoot) (entries []Entry, backups []string) {
 	st := scanState{entryIdx: make(map[string]int), backupIdx: make(map[string]int)}
 	for _, root := range roots {
 		st.walk(root, root.Dir, "", false, make(map[string]bool))
@@ -58,9 +54,9 @@ func scanRoots(roots []moduleRoot) (entries []installedEntry, backups []string) 
 // scanState — накопленный результат scanRoots; *Idx — реальный путь
 // каталога → индекс записи (Name и Meta у backup-записей не заполняются).
 type scanState struct {
-	entries   []installedEntry
+	entries   []Entry
 	entryIdx  map[string]int
-	backups   []installedEntry
+	backups   []Entry
 	backupIdx map[string]int
 }
 
@@ -89,12 +85,12 @@ func (st *scanState) walk(root moduleRoot, dir, rel string, viaLink bool, ancest
 		}
 		childViaLink := viaLink || child.Type()&fs.ModeSymlink != 0
 		if strings.HasSuffix(child.Name(), backupSuffix) {
-			keepPreferred(&st.backups, st.backupIdx, installedEntry{Dir: path, ViaLink: childViaLink})
+			keepPreferred(&st.backups, st.backupIdx, Entry{Dir: path, ViaLink: childViaLink})
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(path, "config.yaml")); err == nil {
 			if meta, err := metayaml.Read(filepath.Join(path, metayaml.FileName)); err == nil {
-				keepPreferred(&st.entries, st.entryIdx, installedEntry{
+				keepPreferred(&st.entries, st.entryIdx, Entry{
 					Name: prefixedName(root.Prefix, dotName(childRel)), Dir: path, Meta: meta, ViaLink: childViaLink,
 					SelfLink: child.Type()&fs.ModeSymlink != 0,
 				})
@@ -108,7 +104,7 @@ func (st *scanState) walk(root moduleRoot, dir, rel string, viaLink bool, ancest
 // keepPreferred добавляет e в *list, если его реальный каталог ещё не
 // встречался; встречался через симлинк-каталог, а e найден без него — e
 // заменяет прежнюю запись на её месте.
-func keepPreferred(list *[]installedEntry, idx map[string]int, e installedEntry) {
+func keepPreferred(list *[]Entry, idx map[string]int, e Entry) {
 	real := normalizePath(e.Dir)
 	i, ok := idx[real]
 	if !ok {
@@ -122,53 +118,19 @@ func keepPreferred(list *[]installedEntry, idx map[string]int, e installedEntry)
 }
 
 // scanInstalled — установленные модули из корней (без backup-каталогов).
-func scanInstalled(roots []moduleRoot) []installedEntry {
+func scanInstalled(roots []moduleRoot) []Entry {
 	entries, _ := scanRoots(roots)
 	return entries
 }
 
-// runModulesList выводит установленные модули (с __futi_meta.yaml).
-func runModulesList(w io.Writer, args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("usage: futi modules list")
-	}
-
-	roots, err := readModuleRoots()
+// List returns the installed modules (those with __futi_meta.yaml) sorted by
+// Name.
+func (m *Manager) List() ([]Entry, error) {
+	roots, err := m.moduleRoots()
 	if err != nil {
-		return fmt.Errorf("modules list: %w", err)
+		return nil, fmt.Errorf("modules list: %w", err)
 	}
 	entries := scanInstalled(roots)
-	if len(entries) == 0 {
-		fmt.Fprintln(w, "No installed modules found.")
-		return nil
-	}
-
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
-
-	var rows [][]string
-	for _, e := range entries {
-		// Ref осмыслен только для git; в старых lockfile local/archive он мог остаться.
-		version := ""
-		if e.Meta.Lockfile.Type == "git" {
-			version = e.Meta.Lockfile.Ref
-		}
-		if version == "" {
-			version = e.Meta.Lockfile.Commit
-			if len(version) > 12 {
-				version = version[:12]
-			}
-		}
-		installed := ""
-		if !e.Meta.Lockfile.InstalledAt.IsZero() {
-			installed = e.Meta.Lockfile.InstalledAt.Format("2006-01-02 15:04")
-		}
-		rows = append(rows, []string{termtext.Line(e.Name), termtext.Line(e.Meta.Lockfile.Source), termtext.Line(version), installed})
-	}
-
-	tw := tablewriter.NewTable(w)
-	tw.Header("NAME", "SOURCE", "VERSION", "INSTALLED_AT")
-	if err := tw.Bulk(rows); err != nil {
-		return fmt.Errorf("modules list: render: %w", err)
-	}
-	return tw.Render()
+	return entries, nil
 }

@@ -19,31 +19,41 @@ type moduleRoot struct {
 	Prefix string
 }
 
-// readModuleRoots — корни для чтения (list, update, uninstall): каждый source
-// из config.yaml со своим префиксом, глобальный каталог установки и ./.futi
-// (если есть) без префикса. Корни с одним реальным путём сводятся к первому,
-// поэтому глобальный каталог, совпадающий с source, получает префикс source.
-// Невалидный config.yaml — ошибка: иначе модули его sources молча пропали бы
-// из list, а uninstall отказал бы «вне корней».
+// readModuleRoots — корни для чтения (list, update, uninstall) из глобальных
+// конфига и каталога модулей, с ./.futi относительно cwd. Невалидный
+// config.yaml — ошибка: иначе модули его sources молча пропали бы из list, а
+// uninstall отказал бы «вне корней».
 func readModuleRoots() ([]moduleRoot, error) {
 	cfg, err := core.LoadDefaultConfig()
 	if err != nil {
 		return nil, err
 	}
+	globalDir, err := core.DefaultModulesDir()
+	if err != nil {
+		return nil, err
+	}
+	return moduleRootsFrom(cfg, globalDir, "."), nil
+}
+
+// moduleRootsFrom — корни для чтения (list, update, uninstall): каждый source
+// из config.yaml со своим префиксом, глобальный каталог установки и
+// <localDir>/.futi (если есть) без префикса; при localDir == "" локальный
+// корень пропускается. Корни с одним реальным путём сводятся к первому,
+// поэтому глобальный каталог, совпадающий с source, получает префикс source.
+func moduleRootsFrom(cfg *config.Config, globalDir, localDir string) []moduleRoot {
 	var roots []moduleRoot
 	if cfg != nil {
 		for _, sc := range cfg.Sources {
 			roots = append(roots, moduleRoot{Dir: sc.Path, Prefix: sc.FullPrefix()})
 		}
 	}
-	globalDir, err := core.DefaultModulesDir()
-	if err != nil {
-		return nil, err
-	}
 	roots = append(roots, moduleRoot{Dir: globalDir})
-	if info, err := os.Stat(".futi"); err == nil && info.IsDir() {
-		if abs, err := filepath.Abs(".futi"); err == nil {
-			roots = append(roots, moduleRoot{Dir: abs})
+	if localDir != "" {
+		local := filepath.Join(localDir, ".futi")
+		if info, err := os.Stat(local); err == nil && info.IsDir() {
+			if abs, err := filepath.Abs(local); err == nil {
+				roots = append(roots, moduleRoot{Dir: abs})
+			}
 		}
 	}
 
@@ -57,7 +67,7 @@ func readModuleRoots() ([]moduleRoot, error) {
 		seen[real] = true
 		unique = append(unique, r)
 	}
-	return unique, nil
+	return unique
 }
 
 // rootDirs — каталоги корней.

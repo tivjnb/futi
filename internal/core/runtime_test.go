@@ -516,3 +516,24 @@ func TestRuntimeStartPartialError(t *testing.T) {
 		t.Fatalf("Start() err = %v, want *discovery.PartialError", err)
 	}
 }
+
+func TestRuntimeExecReturnsPolicy(t *testing.T) {
+	rt, err := core.NewRuntime(core.Options{ModulesDir: t.TempDir(), Exec: core.ServerExecPolicy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rt.Exec(); got != core.ServerExecPolicy {
+		t.Fatalf("Exec() = %+v, want %+v", got, core.ServerExecPolicy)
+	}
+}
+
+func TestRuntimeDirAccessors(t *testing.T) {
+	modDir, localDir := t.TempDir(), t.TempDir()
+	rt, err := core.NewRuntime(core.Options{ModulesDir: modDir, LocalDir: localDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.ModulesDir() != modDir || rt.LocalDir() != localDir {
+		t.Fatalf("ModulesDir()/LocalDir() = %q/%q, want %q/%q", rt.ModulesDir(), rt.LocalDir(), modDir, localDir)
+	}
+}

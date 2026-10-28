@@ -1,13 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
-	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/metayaml"
 )
 
@@ -38,34 +35,6 @@ func TestDotName(t *testing.T) {
 	}
 }
 
-func TestRunModulesListOutput(t *testing.T) {
-	root := t.TempDir()
-	installFixtureModule(t, root, "qr", &metayaml.Meta{Lockfile: metayaml.Lockfile{Source: "/src/qr"}})
-	t.Setenv("FUTI_MODULES_DIR", root)
-	t.Chdir(t.TempDir()) // без ./.futi
-
-	var b bytes.Buffer
-	if err := runModulesList(&b, nil); err != nil {
-		t.Fatalf("runModulesList: %v", err)
-	}
-	out := b.String()
-	if !strings.Contains(out, "qr") || !strings.Contains(out, "/src/qr") {
-		t.Fatalf("unexpected output:\n%s", out)
-	}
-}
-
-func TestRunModulesListEmpty(t *testing.T) {
-	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
-	t.Chdir(t.TempDir())
-	var b bytes.Buffer
-	if err := runModulesList(&b, nil); err != nil {
-		t.Fatalf("runModulesList: %v", err)
-	}
-	if !strings.Contains(b.String(), "No installed modules found") {
-		t.Fatalf("unexpected output:\n%s", b.String())
-	}
-}
-
 // Каталог *.futi-backup — не установленный модуль.
 func TestScanInstalledSkipsBackupDirs(t *testing.T) {
 	root := t.TempDir()
@@ -76,58 +45,5 @@ func TestScanInstalledSkipsBackupDirs(t *testing.T) {
 	got := scanInstalled([]moduleRoot{{Dir: root}})
 	if len(got) != 1 || got[0].Name != "other" {
 		t.Fatalf("want only other, got %+v", got)
-	}
-}
-
-// TestRunModulesListStripsControlChars: ESC в lockfile не доходит до терминала (audit F18).
-func TestRunModulesListStripsControlChars(t *testing.T) {
-	root := t.TempDir()
-	installFixtureModule(t, root, "qr", &metayaml.Meta{Lockfile: metayaml.Lockfile{
-		Source: "/src\x1b]0;pwned\x07/qr", Type: "git", Ref: "v1\x1b[2J",
-	}})
-	t.Setenv("FUTI_MODULES_DIR", root)
-	t.Chdir(t.TempDir())
-
-	var b bytes.Buffer
-	if err := runModulesList(&b, nil); err != nil {
-		t.Fatalf("runModulesList: %v", err)
-	}
-	out := b.String()
-	if strings.Contains(out, "\x1b") || strings.Contains(out, "\x07") {
-		t.Fatalf("output contains control chars: %q", out)
-	}
-	if !strings.Contains(out, "/src]0;pwned/qr") || !strings.Contains(out, "v1[2J") {
-		t.Fatalf("output lost visible text:\n%s", out)
-	}
-}
-
-// F62: ref из lockfile не-git источника не показывается как версия.
-func TestModulesListRefOnlyForGit(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("FUTI_MODULES_DIR", root)
-	t.Chdir(t.TempDir())
-	installFixtureModule(t, root, "old", &metayaml.Meta{Lockfile: metayaml.Lockfile{Source: "/src/old", Type: "local", Ref: "v9"}})
-	installFixtureModule(t, root, "gitm", &metayaml.Meta{Lockfile: metayaml.Lockfile{Source: "https://h/r.git", Type: "git", Ref: "v7"}})
-
-	var b bytes.Buffer
-	if err := runModulesList(&b, nil); err != nil {
-		t.Fatalf("runModulesList: %v", err)
-	}
-	if strings.Contains(b.String(), "v9") {
-		t.Fatalf("list shows ref of local module:\n%s", b.String())
-	}
-	if !strings.Contains(b.String(), "v7") {
-		t.Fatalf("list must show ref of git module:\n%s", b.String())
-	}
-}
-
-func TestModulesInfoRefOnlyForGit(t *testing.T) {
-	root := installFixtureModule(t, t.TempDir(), "old", &metayaml.Meta{Lockfile: metayaml.Lockfile{Source: "/src/old", Type: "archive", Ref: "v9"}})
-	var b bytes.Buffer
-	if err := runModulesInfo(&b, discovery.NewGlobalSource(root), []string{"old"}); err != nil {
-		t.Fatalf("runModulesInfo: %v", err)
-	}
-	if strings.Contains(b.String(), "v9") {
-		t.Fatalf("info shows ref of archive module:\n%s", b.String())
 	}
 }
