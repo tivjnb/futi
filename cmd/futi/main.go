@@ -37,7 +37,6 @@ type parsedArgs struct {
 	namespace string
 	command   string
 	flags     []string // сырые флаги между путём и `--` (привязка — bindFlags)
-	args      string   // строка после -- (как есть, joined)
 	argsList  []string // args после shlex-разбора
 	dryRun    bool     // глобальный --dry-run: напечатать команду, не исполняя
 }
@@ -61,7 +60,6 @@ func (e *listRequest) Unwrap() error { return errListCommand }
 type helpRequest struct {
 	positional []string
 	flags      []string
-	args       string
 	argsList   []string
 	dryRun     bool // глобальный --dry-run (переносится в пользовательскую help)
 }
@@ -112,15 +110,12 @@ func parseArgs(args []string) (*parsedArgs, error) {
 		return nil, &helpRequest{
 			positional: splitDots(path[:len(path)-1]),
 			flags:      flags,
-			args:       strings.Join(argsList, " "),
 			argsList:   argsList,
 		}
 	}
 
-	// args строка: join через пробел (сохраняет разделение для шаблона)
 	pa := &parsedArgs{
 		flags:    flags,
-		args:     strings.Join(argsList, " "),
 		argsList: argsList,
 	}
 	pa.namespace, pa.command = splitPath(path)
@@ -389,10 +384,6 @@ func renderCommandTable(w io.Writer, res core.ListResult, verbose bool) error {
 		return fmt.Errorf("list: render: %w", err)
 	}
 	return nil
-}
-
-func printChildren(w io.Writer, children []discovery.Child, verbose bool, loader modulerunner.ModuleLoader) error {
-	return renderChildren(w, core.DescribeChildren(children, loader), verbose)
 }
 
 // renderChildren prints the children of a namespace as a table.

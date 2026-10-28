@@ -29,7 +29,7 @@ func runHelp(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt 
 
 	resolved, executable := core.ExecutableHelpIn(source, loader, full)
 	if executable {
-		pa := &parsedArgs{flags: req.flags, args: req.args, argsList: req.argsList, dryRun: req.dryRun}
+		pa := &parsedArgs{flags: req.flags, argsList: req.argsList, dryRun: req.dryRun}
 		pa.namespace, pa.command = splitPath(full)
 		return runParsed(ctx, stdin, stdout, stderr, rt, pa)
 	}

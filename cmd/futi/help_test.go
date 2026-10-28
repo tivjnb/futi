@@ -230,7 +230,6 @@ func TestRunHelpUserCommandGetsFlagsAndArgs(t *testing.T) {
 	req := &helpRequest{
 		positional: []string{"m"},
 		flags:      []string{"--x", "1"},
-		args:       "a b",
 		argsList:   []string{"a", "b"},
 	}
 	code, stdout, stderr := runHelpFor(t, rt, req)
@@ -292,7 +291,7 @@ func TestRunHelpUserCommandHelpFlagShowsItsHelp(t *testing.T) {
 
 func TestRunHelpSystemIgnoresFlags(t *testing.T) {
 	rt := userHelpSource(t)
-	req := &helpRequest{positional: []string{"plain"}, flags: []string{"--x", "1"}, args: "a", argsList: []string{"a"}}
+	req := &helpRequest{positional: []string{"plain"}, flags: []string{"--x", "1"}, argsList: []string{"a"}}
 	code, stdout, stderr := runHelpFor(t, rt, req)
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
@@ -308,8 +307,8 @@ func TestParseArgsHelpRequestKeepsFlagsAndArgs(t *testing.T) {
 	if !errors.As(err, &hr) {
 		t.Fatalf("expected helpRequest, got %v", err)
 	}
-	if strings.Join(hr.flags, " ") != "--x 1" || hr.args != "a b" || strings.Join(hr.argsList, ",") != "a,b" {
-		t.Fatalf("flags=%v args=%q argsList=%v", hr.flags, hr.args, hr.argsList)
+	if strings.Join(hr.flags, " ") != "--x 1" || strings.Join(hr.argsList, ",") != "a,b" {
+		t.Fatalf("flags=%v argsList=%v", hr.flags, hr.argsList)
 	}
 }
 

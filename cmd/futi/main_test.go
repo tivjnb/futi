@@ -78,7 +78,7 @@ func builtFutiBinary(t testing.TB) string {
 
 // stubLoader — тестовый загрузчик модулей, который возвращает
 // предзаготовленный модуль для любого пути и считает вызовы.
-// Используется для проверки, что printCommands/printChildren/runList
+// Используется для проверки, что printCommands/renderChildren/runList
 // действительно обращаются к loader, а не к execmodule.LoadModule напрямую.
 type stubLoader struct {
 	mod   *execmodule.Module
@@ -304,9 +304,6 @@ func TestParseArgsDoubleDashArgs(t *testing.T) {
 	if pa.command != "echo" {
 		t.Fatalf("unexpected command: %q", pa.command)
 	}
-	if pa.args != "hello world" {
-		t.Fatalf("unexpected args: %q", pa.args)
-	}
 	if len(pa.argsList) != 2 || pa.argsList[0] != "hello" || pa.argsList[1] != "world" {
 		t.Fatalf("unexpected argsList: %+v", pa.argsList)
 	}
@@ -317,9 +314,6 @@ func TestParseArgsDoubleDashWithQuotedArg(t *testing.T) {
 	pa, err := parseArgs(args)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if pa.args != "hello world foo" {
-		t.Fatalf("unexpected args: %q", pa.args)
 	}
 	if len(pa.argsList) != 2 || pa.argsList[0] != "hello world" || pa.argsList[1] != "foo" {
 		t.Fatalf("unexpected argsList: %+v", pa.argsList)
@@ -338,8 +332,8 @@ func TestParseArgsDoubleDashOnly(t *testing.T) {
 	if pa.command != "" {
 		t.Fatalf("unexpected command: %q", pa.command)
 	}
-	if pa.args != "hello world" {
-		t.Fatalf("unexpected args: %q", pa.args)
+	if len(pa.argsList) != 2 || pa.argsList[0] != "hello" || pa.argsList[1] != "world" {
+		t.Fatalf("unexpected argsList: %+v", pa.argsList)
 	}
 }
 
@@ -354,9 +348,6 @@ func TestParseArgsDoubleDashEmpty(t *testing.T) {
 	}
 	if pa.command != "echo" {
 		t.Fatalf("unexpected command: %q", pa.command)
-	}
-	if pa.args != "" {
-		t.Fatalf("unexpected args: %q", pa.args)
 	}
 	if len(pa.argsList) != 0 {
 		t.Fatalf("unexpected argsList: %+v", pa.argsList)
@@ -378,8 +369,8 @@ func TestParseArgsDoubleDashWithFlags(t *testing.T) {
 	if !reflect.DeepEqual(pa.flags, []string{"--tag", "myapp"}) {
 		t.Fatalf("unexpected flags: %+v", pa.flags)
 	}
-	if pa.args != "extra arg" {
-		t.Fatalf("unexpected args: %q", pa.args)
+	if len(pa.argsList) != 2 || pa.argsList[0] != "extra" || pa.argsList[1] != "arg" {
+		t.Fatalf("unexpected argsList: %+v", pa.argsList)
 	}
 }
 
@@ -429,7 +420,7 @@ func TestPrintChildrenSortedAlphabetically(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := printChildren(&buf, children, false, nil); err != nil {
+	if err := renderChildren(&buf, core.DescribeChildren(children, nil), false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -459,7 +450,7 @@ func TestPrintChildrenSameNameOrderedByType(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if err := printChildren(&buf, tt.children, false, nil); err != nil {
+			if err := renderChildren(&buf, core.DescribeChildren(tt.children, nil), false); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			out := buf.String()
@@ -683,9 +674,9 @@ commands:
 	}
 }
 
-// TestPrintChildrenUsesLoader доказывает, что printChildren использует loader
-// для получения описаний module-children.
-func TestPrintChildrenUsesLoader(t *testing.T) {
+// TestRenderChildrenUsesLoader доказывает, что рендер детей использует loader
+// для получения описаний module-children (через core.DescribeChildren).
+func TestRenderChildrenUsesLoader(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "stub.yaml")
 
@@ -702,7 +693,7 @@ func TestPrintChildrenUsesLoader(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := printChildren(&buf, children, false, spy); err != nil {
+	if err := renderChildren(&buf, core.DescribeChildren(children, spy), false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -1931,7 +1922,7 @@ func TestPrintChildrenConflictSources(t *testing.T) {
 		ConflictSources: []string{"/a", "/b"},
 	}}
 	var buf bytes.Buffer
-	if err := printChildren(&buf, children, false, nil); err != nil {
+	if err := renderChildren(&buf, core.DescribeChildren(children, nil), false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "conflict: module in several sources: /a, /b") {
