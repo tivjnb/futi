@@ -56,17 +56,9 @@ func runModules(w io.Writer, stdin io.Reader, rt *core.Runtime, args []string) e
 	case "list":
 		return runModulesList(w, rt, rest)
 	case "add_command":
-		source, err := rt.Source()
-		if err != nil {
-			return err
-		}
-		return runModulesAddCommand(w, source, rt.Cache(), rest)
+		return runModulesAddCommand(w, rt, rest)
 	case "remove_command":
-		source, err := rt.Source()
-		if err != nil {
-			return err
-		}
-		return runModulesRemoveCommand(w, source, rt.Cache(), rest)
+		return runModulesRemoveCommand(w, rt, rest)
 	case "path":
 		return runModulesPath(w, rt, rest)
 	default:

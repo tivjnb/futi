@@ -229,3 +229,82 @@ func runModulesInit(w io.Writer, args []string) error {
 	}
 	return Init(w, os.Stderr, *opts)
 }
+
+// parseAddCommandArgs разбирает аргументы: позиционные module, command;
+// флаги --desc <text>, --cmd <shell> (паттерн requireValue).
+func parseAddCommandArgs(args []string) (*AddCommandOptions, error) {
+	cfg := &AddCommandOptions{}
+	var positional []string
+
+	requireValue := func(flagName string, i int) (string, error) {
+		if i+1 >= len(args) {
+			return "", fmt.Errorf("%s requires a value", flagName)
+		}
+		val := args[i+1]
+		if strings.HasPrefix(val, "--") {
+			return "", fmt.Errorf("%s requires a value, got flag %s", flagName, val)
+		}
+		return val, nil
+	}
+
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		switch {
+		case arg == "--desc":
+			val, err := requireValue("--desc", i)
+			if err != nil {
+				return nil, err
+			}
+			cfg.Desc = val
+			i++
+		case strings.HasPrefix(arg, "--desc="):
+			cfg.Desc = strings.TrimPrefix(arg, "--desc=")
+		case arg == "--cmd":
+			val, err := requireValue("--cmd", i)
+			if err != nil {
+				return nil, err
+			}
+			cfg.Cmd = val
+			i++
+		case strings.HasPrefix(arg, "--cmd="):
+			cfg.Cmd = strings.TrimPrefix(arg, "--cmd=")
+		case strings.HasPrefix(arg, "--"):
+			return nil, fmt.Errorf("unknown flag: %s", arg)
+		default:
+			positional = append(positional, arg)
+		}
+		i++
+	}
+
+	if len(positional) != 2 {
+		return nil, fmt.Errorf("usage: futi modules add_command <module> <command> [--desc <text>] [--cmd <shell>]")
+	}
+	cfg.Module, cfg.Command = positional[0], positional[1]
+	if err := validateResolveName(cfg.Module); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// runModulesAddCommand — `futi modules add_command`: adds a command to the
+// module's config.yaml.
+func runModulesAddCommand(w io.Writer, rt *core.Runtime, args []string) error {
+	opts, err := parseAddCommandArgs(args)
+	if err != nil {
+		return err
+	}
+	return newCLIManager(w, nil, rt).AddCommand(*opts)
+}
+
+// runModulesRemoveCommand — `futi modules remove_command`: removes a command
+// from the module's config.yaml.
+func runModulesRemoveCommand(w io.Writer, rt *core.Runtime, args []string) error {
+	if len(args) != 2 {
+		return fmt.Errorf("usage: futi modules remove_command <module> <command>")
+	}
+	if err := validateResolveName(args[0]); err != nil {
+		return err
+	}
+	return newCLIManager(w, nil, rt).RemoveCommand(RemoveCommandOptions{Module: args[0], Command: args[1]})
+}

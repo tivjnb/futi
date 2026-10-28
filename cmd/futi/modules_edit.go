@@ -3,14 +3,10 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
-	"github.com/tivjnb/futi/internal/modulecache"
 
 	"gopkg.in/yaml.v3"
 )
@@ -216,118 +212,64 @@ func writeValidated(path string, doc *yaml.Node) error {
 	return nil
 }
 
-// addCommandArgs — аргументы `futi modules add_command`.
-type addCommandArgs struct {
-	module  string
-	command string
-	desc    string
-	cmd     string
+// AddCommandOptions are the arguments of Manager.AddCommand. An empty Cmd
+// defaults to "echo <Command>".
+type AddCommandOptions struct {
+	Module, Command, Desc, Cmd string
 }
 
-// parseAddCommandArgs разбирает аргументы: позиционные module, command;
-// флаги --desc <text>, --cmd <shell> (паттерн requireValue).
-func parseAddCommandArgs(args []string) (*addCommandArgs, error) {
-	cfg := &addCommandArgs{}
-	var positional []string
-
-	requireValue := func(flagName string, i int) (string, error) {
-		if i+1 >= len(args) {
-			return "", fmt.Errorf("%s requires a value", flagName)
-		}
-		val := args[i+1]
-		if strings.HasPrefix(val, "--") {
-			return "", fmt.Errorf("%s requires a value, got flag %s", flagName, val)
-		}
-		return val, nil
-	}
-
-	i := 0
-	for i < len(args) {
-		arg := args[i]
-		switch {
-		case arg == "--desc":
-			val, err := requireValue("--desc", i)
-			if err != nil {
-				return nil, err
-			}
-			cfg.desc = val
-			i++
-		case strings.HasPrefix(arg, "--desc="):
-			cfg.desc = strings.TrimPrefix(arg, "--desc=")
-		case arg == "--cmd":
-			val, err := requireValue("--cmd", i)
-			if err != nil {
-				return nil, err
-			}
-			cfg.cmd = val
-			i++
-		case strings.HasPrefix(arg, "--cmd="):
-			cfg.cmd = strings.TrimPrefix(arg, "--cmd=")
-		case strings.HasPrefix(arg, "--"):
-			return nil, fmt.Errorf("unknown flag: %s", arg)
-		default:
-			positional = append(positional, arg)
-		}
-		i++
-	}
-
-	if len(positional) != 2 {
-		return nil, fmt.Errorf("usage: futi modules add_command <module> <command> [--desc <text>] [--cmd <shell>]")
-	}
-	cfg.module, cfg.command = positional[0], positional[1]
-	if err := validateResolveName(cfg.module); err != nil {
-		return nil, err
-	}
-	return cfg, nil
+// RemoveCommandOptions are the arguments of Manager.RemoveCommand.
+type RemoveCommandOptions struct {
+	Module, Command string
 }
 
-// runModulesAddCommand добавляет команду в config.yaml модуля.
-func runModulesAddCommand(w io.Writer, source discovery.Source, cache *modulecache.Cache, args []string) error {
-	s := cliStreams(w, nil)
-	cfg, err := parseAddCommandArgs(args)
+// AddCommand adds a command to the module's config.yaml.
+func (m *Manager) AddCommand(opts AddCommandOptions) error {
+	if err := validateResolveName(opts.Module); err != nil {
+		return err
+	}
+	source, err := m.rt.Source()
 	if err != nil {
 		return err
 	}
-	manifestPath, _, err := source.Resolve(cfg.module)
+	manifestPath, _, err := source.Resolve(opts.Module)
 	if err != nil {
 		return fmt.Errorf("modules add_command: %w", err)
 	}
 
-	cmdStr := cfg.cmd
+	cmdStr := opts.Cmd
 	if cmdStr == "" {
-		cmdStr = "echo " + cfg.command
+		cmdStr = "echo " + opts.Command
 	}
-	if err := addCommandToManifest(manifestPath, cfg.command, cmdStr, cfg.desc); err != nil {
+	if err := addCommandToManifest(manifestPath, opts.Command, cmdStr, opts.Desc); err != nil {
 		return fmt.Errorf("modules add_command: %w", err)
 	}
-	if err := cache.Invalidate(); err != nil {
-		fmt.Fprintf(s.Err, "cache: %v (continuing)\n", err)
+	if err := m.rt.Cache().Invalidate(); err != nil {
+		fmt.Fprintf(m.s.Err, "cache: %v (continuing)\n", err)
 	}
-	fmt.Fprintf(w, "Added command %q to %s\n", cfg.command, manifestPath)
+	fmt.Fprintf(m.s.Out, "Added command %q to %s\n", opts.Command, manifestPath)
 	return nil
 }
 
-// runModulesRemoveCommand удаляет команду из config.yaml модуля.
-func runModulesRemoveCommand(w io.Writer, source discovery.Source, cache *modulecache.Cache, args []string) error {
-	s := cliStreams(w, nil)
-	if len(args) != 2 {
-		return fmt.Errorf("usage: futi modules remove_command <module> <command>")
-	}
-	module, command := args[0], args[1]
-	if err := validateResolveName(module); err != nil {
+// RemoveCommand removes a command from the module's config.yaml.
+func (m *Manager) RemoveCommand(opts RemoveCommandOptions) error {
+	if err := validateResolveName(opts.Module); err != nil {
 		return err
 	}
-
-	manifestPath, _, err := source.Resolve(module)
+	source, err := m.rt.Source()
+	if err != nil {
+		return err
+	}
+	manifestPath, _, err := source.Resolve(opts.Module)
 	if err != nil {
 		return fmt.Errorf("modules remove_command: %w", err)
 	}
-	if err := removeCommandFromManifest(manifestPath, command); err != nil {
+	if err := removeCommandFromManifest(manifestPath, opts.Command); err != nil {
 		return fmt.Errorf("modules remove_command: %w", err)
 	}
-	if err := cache.Invalidate(); err != nil {
-		fmt.Fprintf(s.Err, "cache: %v (continuing)\n", err)
+	if err := m.rt.Cache().Invalidate(); err != nil {
+		fmt.Fprintf(m.s.Err, "cache: %v (continuing)\n", err)
 	}
-	fmt.Fprintf(w, "Removed command %q from %s\n", command, manifestPath)
+	fmt.Fprintf(m.s.Out, "Removed command %q from %s\n", opts.Command, manifestPath)
 	return nil
 }

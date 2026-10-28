@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
 )
 
@@ -130,12 +129,12 @@ func TestRemoveOnlyCommandRestoresManifest(t *testing.T) {
 func TestRunModulesAddCommandCLI(t *testing.T) {
 	dir := t.TempDir()
 	writeManifestFixture(t, dir, "qr")
-	src := discovery.NewGlobalSource(dir)
+	t.Setenv("FUTI_MODULES_DIR", dir)
 
 	var b bytes.Buffer
-	err := runModulesAddCommand(&b, src, newTestCache(), []string{"qr", "scan", "--desc", "Scan QR"})
+	err := newTestManager(t, &b, nil).AddCommand(AddCommandOptions{Module: "qr", Command: "scan", Desc: "Scan QR"})
 	if err != nil {
-		t.Fatalf("runModulesAddCommand: %v", err)
+		t.Fatalf("AddCommand: %v", err)
 	}
 	if !strings.Contains(b.String(), `Added command "scan"`) {
 		t.Fatalf("unexpected output: %s", b.String())
@@ -156,10 +155,10 @@ func TestRunModulesAddCommandCLI(t *testing.T) {
 func TestRunModulesAddCommandDefaultCmd(t *testing.T) {
 	dir := t.TempDir()
 	writeManifestFixture(t, dir, "qr")
-	src := discovery.NewGlobalSource(dir)
+	t.Setenv("FUTI_MODULES_DIR", dir)
 
-	if err := runModulesAddCommand(&bytes.Buffer{}, src, newTestCache(), []string{"qr", "scan"}); err != nil {
-		t.Fatalf("runModulesAddCommand: %v", err)
+	if err := newTestManager(t, &bytes.Buffer{}, nil).AddCommand(AddCommandOptions{Module: "qr", Command: "scan"}); err != nil {
+		t.Fatalf("AddCommand: %v", err)
 	}
 	mod, err := execmodule.LoadModule(filepath.Join(dir, "qr", "config.yaml"), filepath.Join(dir, "qr"))
 	if err != nil {
@@ -343,16 +342,17 @@ func TestAddCommandThroughSymlinkEditsTarget(t *testing.T) {
 func TestAddCommandInvalidatesCache(t *testing.T) {
 	dir := t.TempDir()
 	writeManifestFixture(t, dir, "qr")
-	src := discovery.NewGlobalSource(dir)
+	t.Setenv("FUTI_MODULES_DIR", dir)
 
-	cache := newTestCache()
+	rt := newTestRuntime(t)
+	cache := rt.Cache()
 	stranger := makeSourceModule(t, t.TempDir(), "stranger", "")
 	if _, err := cache.LoadModule(filepath.Join(stranger, "config.yaml"), stranger); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := runModulesAddCommand(&bytes.Buffer{}, src, cache, []string{"qr", "scan"}); err != nil {
-		t.Fatalf("runModulesAddCommand: %v", err)
+	if err := newCLIManager(&bytes.Buffer{}, nil, rt).AddCommand(AddCommandOptions{Module: "qr", Command: "scan"}); err != nil {
+		t.Fatalf("AddCommand: %v", err)
 	}
 	if got := cache.ModuleCount(); got != 0 {
 		t.Fatalf("cache must be invalidated after add_command, got %d entries", got)
@@ -362,16 +362,17 @@ func TestAddCommandInvalidatesCache(t *testing.T) {
 func TestRemoveCommandInvalidatesCache(t *testing.T) {
 	dir := t.TempDir()
 	writeManifestFixture(t, dir, "qr")
-	src := discovery.NewGlobalSource(dir)
+	t.Setenv("FUTI_MODULES_DIR", dir)
 
-	cache := newTestCache()
+	rt := newTestRuntime(t)
+	cache := rt.Cache()
 	stranger := makeSourceModule(t, t.TempDir(), "stranger", "")
 	if _, err := cache.LoadModule(filepath.Join(stranger, "config.yaml"), stranger); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := runModulesRemoveCommand(&bytes.Buffer{}, src, cache, []string{"qr", "make"}); err != nil {
-		t.Fatalf("runModulesRemoveCommand: %v", err)
+	if err := newCLIManager(&bytes.Buffer{}, nil, rt).RemoveCommand(RemoveCommandOptions{Module: "qr", Command: "make"}); err != nil {
+		t.Fatalf("RemoveCommand: %v", err)
 	}
 	if got := cache.ModuleCount(); got != 0 {
 		t.Fatalf("cache must be invalidated after remove_command, got %d entries", got)
@@ -395,5 +396,13 @@ func TestAddCommandOversizedResultRejected(t *testing.T) {
 	}
 	if got := listDir(t, filepath.Dir(path)); len(got) != 1 {
 		t.Fatalf("dir contents = %v, want only config.yaml", got)
+	}
+}
+
+func TestRemoveCommandRejectsSlashModule(t *testing.T) {
+	t.Setenv("FUTI_MODULES_DIR", t.TempDir())
+	err := newTestManager(t, &bytes.Buffer{}, nil).RemoveCommand(RemoveCommandOptions{Module: "a/b", Command: "x"})
+	if err == nil || !strings.Contains(err.Error(), "write the namespace with a dot") {
+		t.Fatalf("RemoveCommand err = %v, want namespace-with-a-dot error", err)
 	}
 }
