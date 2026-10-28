@@ -1,4 +1,4 @@
-package main
+package cli
 
 // bashCompletionScript — статичный bash-скрипт автодополнения для futi.
 // Адаптирован из cobra (BSD-3-Clause), упрощён для протокола __complete.

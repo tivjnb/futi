@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bytes"
@@ -64,7 +64,7 @@ func builtFutiBinary(t testing.TB) string {
 		}
 		futiBinDir = dir
 		// go build — с настоящим HOME: кэш сборки и модулей Go лежат в нём.
-		build := exec.Command("go", "build", "-o", filepath.Join(dir, "futi"), ".")
+		build := exec.Command("go", "build", "-o", filepath.Join(dir, "futi"), "github.com/tivjnb/futi/cmd/futi")
 		build.Env = append(os.Environ(), "HOME="+origHome)
 		if out, err := build.CombinedOutput(); err != nil {
 			futiBinErr = fmt.Errorf("go build: %v\n%s", err, out)

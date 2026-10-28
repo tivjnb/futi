@@ -1,4 +1,4 @@
-package main
+package cli
 
 // zshCompletionScript — статичный zsh-скрипт автодополнения для futi.
 // Адаптирован из cobra (BSD-3-Clause). Поддерживает описания через tab-формат:

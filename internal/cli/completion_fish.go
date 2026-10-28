@@ -1,4 +1,4 @@
-package main
+package cli
 
 // fishCompletionScript — статичный fish-скрипт автодополнения для futi.
 // Адаптирован из cobra (BSD-3-Clause). fish всегда отключает файловое

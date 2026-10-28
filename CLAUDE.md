@@ -25,17 +25,17 @@ GOOS=windows go build -o /dev/null ./cmd/futi # Windows: только сборк
 
 ## Архитектура
 
-`cmd/futi` — CLI: парсинг аргументов, диспетчер, help, completion-скрипты; пока здесь же `list`/`validate`/`cache` — вынос в `internal/cli` запланирован (фаза 1). Остальное — в `internal/`:
+`cmd/futi` — только `main.go` и `version`; CLI (argv, диспетчер, help, list/validate/cache, completion-скрипты, разбор флагов `modules`) — в `internal/cli` (`cli.Main`). Остальное — в `internal/`:
 
 - `discovery` — поиск модулей по SaltStack-модели: `dev/deploy.yaml` или `dev/deploy/config.yaml` → namespace `dev.deploy`; источники: глобальный, локальный (проект), из конфига; `composite.go` объединяет их. Конфликт `.yaml` vs `/config.yaml` — ошибка Resolve, в листинге — пометка. Частичный листинг (часть источников не читается) — `*PartialError` с валидным результатом; вызывающий различает его через `errors.As`.
 - `core` — `Options`/`DefaultOptions` (единственное чтение окружения: `FUTI_MODULES_DIR`, `HOME`, каталог кэша, cwd), `Runtime`: конфиг и глобальный source сразу, `Cache()`/`Source()` лениво (`sync.Once`), предупреждения через `Options.Warn`.
 - `config` — `config.yaml` futi (источники, политика кэша).
 - `execmodule` — модель модуля/команд (вложенные `commands`, `params`, fallback `cmd`), резолв команды, валидация, рендер шаблонов (`{{.param}}`, `{{quote .param}}`, `{{.module_root}}`), help.
 - `modulerunner` — запуск команды модуля и хуки; `executor` — низкоуровневый exec (stdin, пересылка сигналов, код выхода 128+N, группа процессов для хука без терминала; `InterruptSignal` — прерывающий сигнал из ошибки запуска).
-- `modules` — менеджер модулей: `Manager` (install/update/uninstall/info/list/path/add_command/remove_command) поверх `core.Runtime`, `Init` без Runtime; ввод/вывод — через `Streams`/`Prompter`; разбор флагов — в `cmd/futi/modules_cli.go`.
+- `modules` — менеджер модулей: `Manager` (install/update/uninstall/info/list/path/add_command/remove_command) поверх `core.Runtime`, `Init` без Runtime; ввод/вывод — через `Streams`/`Prompter`; разбор флагов — в `internal/cli/modules_cli.go`.
 - `modulecache` — кэш глобальных модулей (диск + политики обновления + проверка целостности); локальные модули в кэш не попадают.
 - `metayaml` — служебные метаданные модуля (`about` сохраняется из источника).
-- `completion` — логика автодополнения, вызывается скрытой командой `futi __complete`; шеллы bash/zsh/fish — в `cmd/futi/completion_*.go`.
+- `completion` — логика автодополнения, вызывается скрытой командой `futi __complete`; шеллы bash/zsh/fish — в `internal/cli/completion_*.go`.
 - `termtext` — фильтр управляющих символов для вывода текста из YAML/lockfile (`Line`, `Block`).
 - `testutil` — общие хелперы тестов.
 
