@@ -163,10 +163,14 @@ func TestSafeJoinEdgeCases(t *testing.T) {
 // gitRunTest выполняет git в dir с тестовыми author/committer.
 func gitRunTest(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cfg := executor.NewConfig().WithDir(dir).WithEnv(append(os.Environ(),
-		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
-		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com"))
-	cfg.Stdout, cfg.Stderr = os.Stdout, os.Stderr
+	cfg := &executor.Config{
+		Dir: dir,
+		Env: append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com"),
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+	}
 	if err := executor.RunWithConfig(context.Background(), cfg, "git", args...); err != nil {
 		t.Fatalf("git %v: %v", args, err)
 	}
