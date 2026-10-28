@@ -11,6 +11,8 @@ import (
 )
 
 // stdinIsTerminal сообщает, подключён ли stdin к терминалу; шов для тестов.
+// It inspects the process stdin (os.Stdin), which is what Main receives in the
+// futi binary.
 var stdinIsTerminal = func() bool {
 	fi, err := os.Stdin.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0

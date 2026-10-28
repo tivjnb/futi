@@ -198,7 +198,7 @@ func parseListRequest(namespace, flags []string) error {
 	return req
 }
 
-// cacheSubcommand извлекает cache subcommand из args (os.Args[1:]).
+// cacheSubcommand извлекает cache subcommand из args (args[1:], переданные в Main).
 // Возвращает (subcommand, true) если первый аргумент — "cache".
 // Возвращает ("", false) если "cache" не первый аргумент (обычная команда).
 // subcommand="" означает "cache" без подкоманды — main выведет понятную ошибку.
@@ -815,9 +815,9 @@ func systemHelpCode(stdout, stderr io.Writer, source discovery.Source, loader mo
 // (-h/--help → справка) → rt.Execute → formatRunError) для обычной ветки main и
 // пользовательской help. Пишет в переданные stdout/stderr и возвращает код
 // выхода. Второе значение — ошибка запуска (уже напечатанная в stderr): её
-// возвращаем наружу, чтобы вызывающий через exitAfterRunError корректно
-// обработал сигнальный путь (процесс гибнет тем же сигналом), а тесты
-// проверяли код без os.Exit.
+// возвращаем наружу, чтобы вызывающий через raiseInterrupt корректно
+// обработал сигнальный путь (процесс гибнет тем же сигналом), а Main
+// возвращает код, и тесты проверяют его без os.Exit.
 func runParsed(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt *core.Runtime, pa *parsedArgs) (int, error) {
 	source, _ := rt.Source() // main has already checked the error
 	loader := rt.Cache()
@@ -1074,10 +1074,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer, version stri
 				raiseInterrupt(runErr)
 				return core.ExitCode(runErr)
 			}
-			if code != 0 {
-				return code
-			}
-			return 0
+			return code
 		case errors.Is(err, errHelp):
 			printUsage(stdout)
 			return 0
@@ -1097,10 +1094,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer, version stri
 		raiseInterrupt(runErr)
 		return core.ExitCode(runErr)
 	}
-	if code != 0 {
-		return code
-	}
-	return 0
+	return code
 }
 
 // printedWarnings — ключи предупреждений (см. warningKey), уже выведенных в этом процессе:

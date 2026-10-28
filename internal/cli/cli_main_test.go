@@ -2,8 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tivjnb/futi/internal/metayaml"
 )
 
 func TestMainVersion(t *testing.T) {
@@ -77,5 +81,27 @@ func TestMainDryRunRejected(t *testing.T) {
 	}
 	if errb.String() != errDryRunScope+"\n" {
 		t.Fatalf("stderr = %q", errb.String())
+	}
+}
+
+func TestMainModulesUpdateWarningGoesToGivenStderr(t *testing.T) {
+	root := t.TempDir()
+	target := installFixtureModule(t, t.TempDir(), "qr", &metayaml.Meta{
+		Lockfile: metayaml.Lockfile{Source: "/src/qr", Type: "local", Hash: "sha256:ab"},
+	})
+	if err := os.Symlink(filepath.Join(target, "qr"), filepath.Join(root, "qr")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv("FUTI_MODULES_DIR", root)
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+
+	var out, errb bytes.Buffer
+	code := Main([]string{"futi", "modules", "update"}, nil, &out, &errb, "")
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr = %q", code, errb.String())
+	}
+	if want := "Warning: skipped qr: module directory is a symlink\n"; errb.String() != want {
+		t.Fatalf("stderr = %q, want %q", errb.String(), want)
 	}
 }
