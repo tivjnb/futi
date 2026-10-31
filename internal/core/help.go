@@ -46,6 +46,10 @@ func helpIn(src discovery.Source, loader modulerunner.ModuleLoader, path []strin
 	// Help shows what would run: modules are loaded verified, as for execution.
 	node, n, err := modulerunner.Walk(src, loader, path, modulerunner.WalkOptions{Verified: true})
 	if err != nil {
+		var collision *modulerunner.CollisionError
+		if errors.As(err, &collision) {
+			return HelpDoc{}, err
+		}
 		return HelpDoc{}, fmt.Errorf("help: %w", err)
 	}
 	if n < len(path) {

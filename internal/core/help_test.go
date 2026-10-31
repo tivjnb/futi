@@ -130,6 +130,9 @@ func TestHelpInCollision(t *testing.T) {
 	if !errors.As(err, &ce) {
 		t.Fatalf("err = %v, want *CollisionError", err)
 	}
+	if strings.HasPrefix(err.Error(), "help:") {
+		t.Errorf("err = %q, want the collision text without a help: prefix", err)
+	}
 }
 
 func TestHelpInNamespacePartial(t *testing.T) {
