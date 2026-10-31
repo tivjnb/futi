@@ -10,7 +10,7 @@ import (
 // input value and is "-", so the program would read it as an option.
 type DashError struct {
 	Input   Input
-	Value   string // the argv element
+	Value   string // the value of Input, not the whole argv element
 	Program string // base name of argv[0]
 }
 
@@ -34,12 +34,12 @@ func (e *DashError) Error() string {
 // filepath.Base(argv[0]).
 func CheckDash(args []Arg, inputs []Input, program string) error {
 	for _, a := range args {
-		if a.First == "" || a.Exempt || !strings.HasPrefix(a.Value, "-") {
+		if a.First == "" || a.Exempt || !strings.HasPrefix(a.firstValue, "-") {
 			continue
 		}
 		for _, in := range inputs {
 			if in.Name == a.First && !in.AllowDash && !in.Rest {
-				return &DashError{Input: in, Value: a.Value, Program: program}
+				return &DashError{Input: in, Value: a.firstValue, Program: program}
 			}
 		}
 	}

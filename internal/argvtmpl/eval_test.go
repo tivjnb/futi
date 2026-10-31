@@ -170,7 +170,7 @@ func TestEvalOrigin(t *testing.T) {
 	}{
 		{"glued inputs", `ssh {{.user}}@{{.host}}`, []Input{user, host},
 			map[string]Value{"user": scalar("u"), "host": scalar("h")},
-			[]Arg{{Value: "ssh"}, {Value: "u@h", First: "user", Users: []string{"user", "host"}}}},
+			[]Arg{{Value: "ssh"}, {Value: "u@h", First: "user", Users: []string{"user", "host"}, firstValue: "u"}}},
 		{"empty first value", `ssh {{.user}}@{{.host}}`, []Input{user, host},
 			map[string]Value{"user": scalar(""), "host": scalar("h")},
 			[]Arg{{Value: "ssh"}, {Value: "@h", Users: []string{"host"}}}},
@@ -182,11 +182,11 @@ func TestEvalOrigin(t *testing.T) {
 			[]Arg{{Value: "run"}, {Value: "/hv", Users: []string{"x"}}}},
 		{"after an exempting --", `cp -- {{.src}}`, []Input{src},
 			map[string]Value{"src": list("a", "b")},
-			[]Arg{{Value: "cp"}, {Value: "--"}, {Value: "a", First: "src", Users: []string{"src"}, Exempt: true},
-				{Value: "b", First: "src", Users: []string{"src"}, Exempt: true}}},
+			[]Arg{{Value: "cp"}, {Value: "--"}, {Value: "a", First: "src", Users: []string{"src"}, Exempt: true, firstValue: "a"},
+				{Value: "b", First: "src", Users: []string{"src"}, Exempt: true, firstValue: "b"}}},
 		{"after a -- that does not exempt", `kubectl exec -- ls {{.x}}`, []Input{x},
 			map[string]Value{"x": scalar("v")},
-			[]Arg{{Value: "kubectl"}, {Value: "exec"}, {Value: "--"}, {Value: "ls"}, {Value: "v", First: "x", Users: []string{"x"}}}},
+			[]Arg{{Value: "kubectl"}, {Value: "exec"}, {Value: "--"}, {Value: "ls"}, {Value: "v", First: "x", Users: []string{"x"}, firstValue: "v"}}},
 	}
 	env := func(string) (string, bool) { return "/h", true }
 	for _, tc := range tests {

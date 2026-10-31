@@ -38,7 +38,7 @@ func TestCheckDash(t *testing.T) {
 			`value "-la" for <path> starts with "-" and would be read as an option by kubectl; use --opt={{.path}}, put a literal -- before it, or set allow_dash`},
 		{"X6 glued value first", `ssh {{.user}}@{{.host}}`, []Input{user, host},
 			map[string]Value{"user": scalar("-oProxyCommand=x"), "host": scalar("h")}, "ssh",
-			`value "-oProxyCommand=x@h" for <user> starts with "-" and would be read as an option by ssh; use --opt={{.user}}, put a literal -- before it, or set allow_dash`},
+			`value "-oProxyCommand=x" for <user> starts with "-" and would be read as an option by ssh; use --opt={{.user}}, put a literal -- before it, or set allow_dash`},
 		{"X6 glued value not first", `ssh {{.user}}@{{.host}}`, []Input{user, host},
 			map[string]Value{"user": scalar("u"), "host": scalar("-h")}, "ssh", ""},
 		{"X7 negative int", `tail {{.n}} f`, []Input{n},

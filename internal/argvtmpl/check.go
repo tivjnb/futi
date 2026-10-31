@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"text/template/parse"
 )
 
 // Kind is the value type of an input.
@@ -73,6 +74,9 @@ func (t *Template) Check(inputs []Input) []error {
 			add(u.item, u.pos, "range over "+strconv.Quote(u.name)+": only variadic inputs can be ranged")
 		case u.inEq && in.isList():
 			add(u.item, u.pos, "eq cannot compare list input "+strconv.Quote(u.name))
+		}
+		if u.ranged && t.list && !t.wholeItemRange(u) {
+			add(u.item, u.pos, "range in a list item must be the whole item")
 		}
 	}
 	for i, r := range t.runs {
@@ -160,6 +164,22 @@ func firstDroppable(r run, byName map[string]Input) (piece, bool) {
 		}
 	}
 	return piece{}, false
+}
+
+// wholeItemRange reports whether the range with header u is the only node
+// of its list item: every iteration of such a range is one argv element.
+func (t *Template) wholeItemRange(u use) bool {
+	it := t.items[u.item]
+	nodes := it.tree.Root.Nodes
+	if len(nodes) != 1 {
+		return false
+	}
+	r, ok := nodes[0].(*parse.RangeNode)
+	if !ok {
+		return false
+	}
+	f, ok := r.Pipe.Cmds[0].Args[0].(*parse.FieldNode)
+	return ok && (&parser{src: it.src}).fieldStart(f) == u.pos
 }
 
 func (t *Template) loc(at srcPos) string {

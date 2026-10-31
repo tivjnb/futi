@@ -241,3 +241,39 @@ func TestGuardedList(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckListRangeWholeItem(t *testing.T) {
+	envs := Input{Name: "envs", Variadic: true}
+	f := Input{Name: "f", Kind: Bool}
+	const msg = "range in a list item must be the whole item"
+	tests := []struct {
+		name   string
+		items  []string
+		inputs []Input
+		want   []string
+	}{
+		{"whole item", []string{"run", "{{range .envs}}--env={{.}}{{end}}"}, []Input{envs}, nil},
+		{"text before", []string{"run", "--env={{range .envs}}{{.}}{{end}}"}, []Input{envs}, []string{"[2] 1:15: " + msg}},
+		{"text after", []string{"run", "{{range .envs}}{{.}}{{end}}x"}, []Input{envs}, []string{"[2] 1:9: " + msg}},
+		{"inside if", []string{"run", "{{if .f}}{{range .envs}}{{.}}{{end}}{{end}}"}, []Input{envs, f}, []string{"[2] 1:18: " + msg}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpl, err := ParseList(tc.items)
+			if err != nil {
+				t.Fatalf("ParseList(%q) error: %v", tc.items, err)
+			}
+			if got := errStrings(tmpl.Check(tc.inputs)); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("Check() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	// The string form has no items: text around a range is allowed.
+	tmpl, err := Parse(`run --env={{range .envs}}{{.}}{{end}}x`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := tmpl.Check([]Input{envs}); len(errs) != 0 {
+		t.Errorf("string form Check() = %q, want none", errStrings(errs))
+	}
+}

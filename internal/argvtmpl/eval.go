@@ -37,6 +37,9 @@ type Arg struct {
 	Users []string
 	// Exempt marks an element after the literal -- whose exemption applies.
 	Exempt bool
+	// firstValue is the whole value of First, shown by the dash guard
+	// instead of the element so that values glued after it do not leak.
+	firstValue string
 }
 
 // Argv returns the element values.
@@ -88,6 +91,7 @@ type elem struct {
 	dropped  bool // references an unset input
 	hasFirst bool
 	first    string
+	firstVal string // the whole value that gave the first character
 	users    []string
 	hasPos   bool
 	pos      int // offset of the first piece in the item
@@ -119,6 +123,9 @@ func (e *evaluator) write(s, from string, pos int) {
 	e.mark(pos)
 	if !e.cur.hasFirst {
 		e.cur.hasFirst, e.cur.first = true, from
+		if from != "" {
+			e.cur.firstVal = s
+		}
 	}
 	if from != "" && !slices.Contains(e.cur.users, from) {
 		e.cur.users = append(e.cur.users, from)
@@ -131,10 +138,11 @@ func (e *evaluator) flush() {
 	c := &e.cur
 	if c.started && !c.dropped {
 		e.out = append(e.out, Arg{
-			Value:  c.buf.String(),
-			First:  c.first,
-			Users:  c.users,
-			Exempt: e.t.exempt(e.item, c.pos),
+			Value:      c.buf.String(),
+			First:      c.first,
+			Users:      c.users,
+			Exempt:     e.t.exempt(e.item, c.pos),
+			firstValue: c.firstVal,
 		})
 	}
 	e.cur = elem{}
