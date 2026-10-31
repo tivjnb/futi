@@ -31,6 +31,9 @@ type Input struct {
 
 func (in Input) isList() bool { return in.Variadic || in.Rest }
 
+// decimalLiteral matches the number literals allowed in a condition.
+var decimalLiteral = regexp.MustCompile(`^[+-]?[0-9]+(\.[0-9]+)?$`)
+
 var optionLike = regexp.MustCompile(`^--?[A-Za-z]`)
 
 // checkErr is an error of Check with its position for ordering.
@@ -79,7 +82,13 @@ func (t *Template) Check(inputs []Input) []error {
 			add(u.item, u.pos, "range in a list item must be the whole item")
 		}
 	}
+	for _, l := range t.lits {
+		if !decimalLiteral.MatchString(l.text) {
+			add(l.item, l.pos, "number "+l.text+" in a condition: only decimal numbers are supported")
+		}
+	}
 	for i, r := range t.runs {
+		wholeArgErr := false
 		var names []string // distinct non-bool inputs printed in the run, {{.}} as its ranged input
 		for _, pc := range r.pieces {
 			if pc.ref == refDot {
@@ -101,14 +110,16 @@ func (t *Template) Check(inputs []Input) []error {
 				continue
 			case in.Rest && len(r.pieces) > 1:
 				add(r.item, pc.pos, "rest input "+strconv.Quote(in.Name)+" must be a whole argument")
+				wholeArgErr = true
 			case in.Variadic && len(r.pieces) > 1:
 				add(r.item, pc.pos, "variadic input "+strconv.Quote(in.Name)+" must be a whole argument; use {{range .env}}--env={{.}}{{end}}")
+				wholeArgErr = true
 			}
 			if !slices.Contains(names, in.Name) {
 				names = append(names, in.Name)
 			}
 		}
-		if len(names) >= 2 {
+		if len(names) >= 2 && !wholeArgErr {
 			if pc, ok := firstDroppable(r, byName); ok {
 				other := names[0]
 				if other == pc.name {

@@ -112,6 +112,10 @@ func TestEval(t *testing.T) {
 		{"eq on unset is false", `{{if eq .tail 0}}z{{else}}u{{end}}`, nil, []Input{optTail}, nil, []string{"u"}, ""},
 		{"eq on int compares canonical form", `{{if eq .tail 007}}seven{{end}}`, nil, []Input{optTail},
 			map[string]Value{"tail": scalar("7")}, []string{"seven"}, ""},
+		{"eq literal with leading zero is decimal", `{{if eq .tail 010}}ten{{else}}other{{end}}`, nil, []Input{optTail},
+			map[string]Value{"tail": scalar("10")}, []string{"ten"}, ""},
+		{"eq literal with leading zero is not octal", `{{if eq .tail 010}}eight{{else}}other{{end}}`, nil, []Input{optTail},
+			map[string]Value{"tail": scalar("8")}, []string{"other"}, ""},
 		{"eq on bool", `{{if eq .f true}}t{{end}}`, nil, []Input{flagF},
 			map[string]Value{"f": scalar("true")}, []string{"t"}, ""},
 	}

@@ -30,6 +30,8 @@ func TestParseAccepts(t *testing.T) {
 		{"comment between spaces", `a {{/* note */}} b`, nil},
 		{"comment at edges", "{{/* note */}} a {{/* tail */}}", nil},
 		{"negative number is not a trim marker", `{{if eq .n -3}}x{{end}}`, []string{"n"}},
+		{"trim-like text outside actions", `foo -}} {{.x}}`, []string{"x"}},
+		{"trim-like text in a string literal", `{{if eq .a " -}}"}}x{{end}}`, []string{"a"}},
 		{"refs deduplicated and sorted", `{{.b}} {{.a}} {{.b}}`, []string{"a", "b"}},
 	}
 	for _, tc := range tests {
@@ -55,6 +57,8 @@ func TestParseListAccepts(t *testing.T) {
 		{"quotes are literal", []string{`"a`, `it's`, `{{.y}}'`}, []string{"y"}},
 		{"refs across items", []string{"{{.b}}", "{{if .a}}{{.c}}{{end}}", "{{.b}}"}, []string{"a", "b", "c"}},
 		{"empty list", nil, nil},
+		{"comment as a whole item", []string{"a", "{{/* note */}}"}, nil},
+		{"quote opened in a body is literal", []string{"{{if .x}}\"{{end}}", "'"}, []string{"x"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,6 +106,9 @@ func TestParseRejects(t *testing.T) {
 		{"left trim marker", `{{- .x}}`, "trim markers {{- -}} are not supported"},
 		{"right trim marker", `{{.x -}}`, "trim markers {{- -}} are not supported"},
 		{"left trim marker with newline", "a\n{{-\n.x}}", "trim markers {{- -}} are not supported"},
+		{"right trim marker after a string literal", `{{if eq .a "}} x" -}}y{{end}}`, "trim markers {{- -}} are not supported"},
+		{"right trim marker after a comment", "{{/* c */ -}}", "trim markers {{- -}} are not supported"},
+		{"minus before a number is not a trim marker", `{{-3}}`, "literal"},
 		{"comment inside argument", `a{{/*c*/}}b`, "comment inside an argument"},
 		{"comment inside quotes", `"a {{/*c*/}} b"`, "comment inside an argument"},
 		{"comment next to action", `{{.x}}{{/*c*/}} b`, "comment inside an argument"},
@@ -140,6 +147,10 @@ func TestParseListRejects(t *testing.T) {
 		{"with", []string{"a", "{{with .x}}b{{end}}"}, "with"},
 		{"trim", []string{"{{- .x}}"}, "trim markers"},
 		{"nested field", []string{"{{.x.y}}"}, ".x.y"},
+		{"dot outside range", []string{"a", "{{.}}"}, "."},
+		{"unclosed action", []string{"a", "{{if .x}}b"}, "unexpected"},
+		{"comment inside an item", []string{"a", "b{{/*c*/}}c"}, "comment inside an argument"},
+		{"trim marker in a later item", []string{"a", "b", "{{.x -}}"}, "trim markers"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -163,6 +174,8 @@ func TestErrorLocation(t *testing.T) {
 	}{
 		{"string form", func() error { _, err := Parse(`ab {{.x.y}}`); return err }, "1:6: .x.y is not supported: only .x, .env.NAME, .module_root and .module_name are available"},
 		{"second line", func() error { _, err := Parse("a\n  {{- .x}}"); return err }, "2:3: trim markers {{- -}} are not supported"},
+		{"list item parse error", func() error { _, err := ParseList([]string{"a", "b", "{{.}}"}); return err }, "[3] 1:3: . is only available inside range"},
+		{"list item syntax error", func() error { _, err := ParseList([]string{"a", "{{if .x}}b"}); return err }, "[2] 1: unexpected EOF"},
 		{"list item", func() error { _, err := ParseList([]string{"a", "b {{.x.y}}"}); return err }, "[2] 1:5: .x.y is not supported: only .x, .env.NAME, .module_root and .module_name are available"},
 	}
 	for _, tc := range tests {
@@ -170,6 +183,45 @@ func TestErrorLocation(t *testing.T) {
 			err := tc.do()
 			if err == nil || err.Error() != tc.want {
 				t.Errorf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestParseNoPanicOnBrokenInput feeds incomplete and misplaced constructs to
+// every entry point: each must end in an error, never in a panic.
+func TestParseNoPanicOnBrokenInput(t *testing.T) {
+	in := []Input{{Name: "xs", Variadic: true}}
+	tests := []struct {
+		name  string
+		src   string
+		items []string
+	}{
+		{name: "dot outside range", src: `{{.}}`},
+		{name: "dot outside range in list", items: []string{"a", "{{.}}"}},
+		{name: "incomplete range", src: `{{range .xs}}-e {{.}}`},
+		{name: "incomplete range in list", items: []string{"a", "{{range .xs}}{{.}}"}},
+		{name: "range without pipeline in list", items: []string{"{{range}}{{end}}"}},
+		{name: "stray end in list", items: []string{"{{end}}"}},
+		{name: "unclosed action in list", items: []string{"{{range .xs"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var (
+				tmpl *Template
+				err  error
+			)
+			if tc.items != nil {
+				tmpl, err = ParseList(tc.items)
+			} else {
+				tmpl, err = Parse(tc.src)
+			}
+			if err == nil {
+				t.Fatalf("parse succeeded, want an error (Check: %v)", tmpl.Check(in))
+			}
+			var perr *Error
+			if !errors.As(err, &perr) {
+				t.Errorf("error = %v, want *Error", err)
 			}
 		})
 	}

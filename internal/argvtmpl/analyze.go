@@ -52,6 +52,13 @@ type use struct {
 	ranged bool // the range header
 }
 
+// numberLit is a number literal in an if condition.
+type numberLit struct {
+	item int
+	pos  int
+	text string
+}
+
 // srcPos is a position in the template: item index and byte offset.
 type srcPos struct {
 	item, pos int
@@ -65,6 +72,7 @@ func (a srcPos) less(b srcPos) bool {
 type analysis struct {
 	runs []run
 	uses []use
+	lits []numberLit
 	// exemptAfter is the position of the literal -- after which values are
 	// not dash-guarded; nil when there is no such -- or it does not apply.
 	exemptAfter *srcPos
@@ -79,6 +87,7 @@ func (t *Template) analyze() {
 		f := &flattener{p: &parser{src: it.src}, item: i}
 		f.list(it.tree.Root, flatCtx{top: true})
 		a.uses = append(a.uses, f.uses...)
+		a.lits = append(a.lits, f.lits...)
 		a.runs = append(a.runs, splitRuns(i, f.pieces, !t.list)...)
 	}
 	for i, r := range a.runs {
@@ -119,6 +128,7 @@ type flattener struct {
 	item   int
 	pieces []piece
 	uses   []use
+	lits   []numberLit
 	bodies int // bodies numbered so far
 }
 
@@ -182,6 +192,8 @@ func (f *flattener) cond(pipe *parse.PipeNode, inEq bool) {
 			if name, ok := inputName(o); ok {
 				f.uses = append(f.uses, use{item: f.item, pos: f.p.fieldStart(o), name: name, inEq: inEq})
 			}
+		case *parse.NumberNode:
+			f.lits = append(f.lits, numberLit{item: f.item, pos: int(o.Pos), text: o.Text})
 		case *parse.PipeNode:
 			f.cond(o, inEq)
 		}

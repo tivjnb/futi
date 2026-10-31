@@ -79,8 +79,6 @@ func sortedKeys(m map[string]struct{}) []string {
 }
 
 var (
-	trimLeft   = regexp.MustCompile(`\{\{-[ \t\r\n]`)
-	trimRight  = regexp.MustCompile(`[ \t\r\n]-\}\}`)
 	defineLike = regexp.MustCompile(`\{\{\s*(define|block)\b`)
 )
 
@@ -97,9 +95,9 @@ type parser struct {
 func parseItem(src, prefix string, quotes bool, refs map[string]struct{}) (item, error) {
 	p := &parser{src: src, prefix: prefix, quotes: quotes, refs: refs}
 
-	// The parser swallows trim markers silently, so look at the raw text.
-	// "{{-3}}" is a number and does not match.
-	if i := earliest(trimLeft.FindStringIndex(src), trimRight.FindStringIndex(src)); i >= 0 {
+	// The parser swallows trim markers silently, so look at the raw text of
+	// the actions. "{{-3}}" is a number and is not a marker.
+	if i := findTrimMarker(src); i >= 0 {
 		return item{}, p.errAt(i, trimMsg)
 	}
 
@@ -126,16 +124,55 @@ func parseItem(src, prefix string, quotes bool, refs map[string]struct{}) (item,
 	return item{tree: tree, src: src}, nil
 }
 
-func earliest(a, b []int) int {
-	switch {
-	case a == nil && b == nil:
+// findTrimMarker returns the offset of the first trim marker ("{{- " or
+// " -}}") that sits in an action, or -1. Text outside actions and string
+// literals inside them are not examined, so a literal " -}}" is not a marker.
+func findTrimMarker(src string) int {
+	isSpace := func(c byte) bool { return c == ' ' || c == '\t' || c == '\r' || c == '\n' }
+outer:
+	for i := 0; ; {
+		j := strings.Index(src[i:], "{{")
+		if j < 0 {
+			return -1
+		}
+		start := i + j
+		k := start + 2
+		if k+1 < len(src) && src[k] == '-' && isSpace(src[k+1]) {
+			return start
+		}
+		if strings.HasPrefix(src[k:], "/*") {
+			e := strings.Index(src[k+2:], "*/")
+			if e < 0 {
+				return -1
+			}
+			k += 2 + e + 2
+		}
+		// Find the end of the action, skipping quoted literals.
+		for ; k < len(src); k++ {
+			switch c := src[k]; c {
+			case '"', '\'':
+				for k++; k < len(src) && src[k] != c; k++ {
+					if src[k] == '\\' {
+						k++
+					}
+				}
+			case '`':
+				e := strings.IndexByte(src[k+1:], '`')
+				if e < 0 {
+					return -1
+				}
+				k += 1 + e
+			case '}':
+				if k+1 < len(src) && src[k+1] == '}' {
+					if k >= 2 && src[k-1] == '-' && isSpace(src[k-2]) {
+						return k - 2
+					}
+					i = k + 2
+					continue outer
+				}
+			}
+		}
 		return -1
-	case a == nil:
-		return b[0]
-	case b == nil || a[0] < b[0]:
-		return a[0]
-	default:
-		return b[0]
 	}
 }
 
@@ -174,7 +211,8 @@ func (p *parser) syntaxErr(err error) *Error {
 	return &Error{Loc: p.prefix + line, Msg: msg}
 }
 
-// quoteState is the lexical quote state of literal text: 0, '\” or '"'.
+// quoteState is the lexical quote state of literal text: none, single or
+// double quote (ch is 0, a single quote or a double quote).
 type quoteState struct {
 	ch  byte
 	pos int // offset where the quote was opened

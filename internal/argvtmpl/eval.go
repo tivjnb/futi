@@ -359,17 +359,33 @@ func (e *evaluator) str(n parse.Node) (string, bool) {
 	case *parse.StringNode:
 		return n.Text, true
 	case *parse.NumberNode:
-		switch {
-		case n.IsInt:
-			return strconv.FormatInt(n.Int64, 10), true
-		case n.IsUint:
-			return strconv.FormatUint(n.Uint64, 10), true
-		}
-		return n.Text, true
+		return canonicalNumber(n.Text), true
 	case *parse.BoolNode:
 		return strconv.FormatBool(n.True), true
 	case *parse.PipeNode:
 		return strconv.FormatBool(e.truth(n)), true
 	}
 	return "", false
+}
+
+// canonicalNumber returns the decimal literal text without a plus sign and
+// leading zeros, so that 010 is ten (not the octal eight) and compares equal
+// to the canonical form of an int input. Any other text is returned as is.
+func canonicalNumber(text string) string {
+	if !decimalLiteral.MatchString(text) {
+		return text
+	}
+	neg := strings.HasPrefix(text, "-")
+	text = strings.TrimLeft(text, "+-")
+	whole, frac, hasFrac := strings.Cut(text, ".")
+	if whole = strings.TrimLeft(whole, "0"); whole == "" {
+		whole = "0"
+	}
+	if hasFrac {
+		whole += "." + frac
+	}
+	if neg && strings.Trim(whole, "0.") != "" {
+		whole = "-" + whole
+	}
+	return whole
 }

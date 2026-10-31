@@ -62,6 +62,10 @@ func TestCheckErrors(t *testing.T) {
 		{"or does not guard", `{{if or .a .user}}{{.user}}@{{end}}{{.host}}`, []Input{flagA, user, host}, []string{"1:21: " + dropHint}},
 		{"same optional twice", `{{.user}}:{{.user}}`, []Input{user}, nil},
 		{"optional glued with range element", `{{range .envs}}--env={{.}}{{end}}{{.user}}`, []Input{envs, user}, []string{`1:36: "user" may be unset and would drop the whole argument with "envs"; use {{if .user}}{{.user}}@{{end}}{{.envs}}`}},
+		{"whole-argument error is not doubled by may-be-unset", `{{.user}}{{.envs}}`, []Input{user, envs}, []string{`1:12: variadic input "envs" must be a whole argument; use {{range .env}}--env={{.}}{{end}}`}},
+		{"hex literal in condition", `{{if eq .n 0x10}}x{{end}} {{.n}}`, []Input{{Name: "n", Kind: Int}}, []string{`1:12: number 0x10 in a condition: only decimal numbers are supported`}},
+		{"char literal in condition", `{{if eq .n 'a'}}x{{end}} {{.n}}`, []Input{{Name: "n", Kind: Int}}, []string{`1:12: number 'a' in a condition: only decimal numbers are supported`}},
+		{"decimal literals in condition", `{{if or (eq .n 010) (eq .n -3) (eq .n 1.5)}}x{{end}} {{.n}}`, []Input{{Name: "n", Kind: Int}}, nil},
 		{"dangling flag", `kubectl logs --tail {{.tail}}`, []Input{tail}, []string{"1:14: " + x3Hint}},
 		{"dangling flag inside if", `logs {{if .a}}--tail{{end}} {{.tail}}`, []Input{flagA, tail}, []string{"1:15: " + x3Hint}},
 		{"flag with value glued", `kubectl logs --tail={{.tail}}`, []Input{tail}, nil},
@@ -255,6 +259,8 @@ func TestCheckListRangeWholeItem(t *testing.T) {
 		{"whole item", []string{"run", "{{range .envs}}--env={{.}}{{end}}"}, []Input{envs}, nil},
 		{"text before", []string{"run", "--env={{range .envs}}{{.}}{{end}}"}, []Input{envs}, []string{"[2] 1:15: " + msg}},
 		{"text after", []string{"run", "{{range .envs}}{{.}}{{end}}x"}, []Input{envs}, []string{"[2] 1:9: " + msg}},
+		{"nested range", []string{"run", "{{range .envs}}{{range .envs}}{{.}}{{end}}{{end}}"}, []Input{envs}, []string{"[2] 1:24: " + msg}},
+		{"nested range with text", []string{"run", "{{range .envs}}a{{range .envs}}{{.}}{{end}}{{end}}"}, []Input{envs}, []string{"[2] 1:25: " + msg}},
 		{"inside if", []string{"run", "{{if .f}}{{range .envs}}{{.}}{{end}}{{end}}"}, []Input{envs, f}, []string{"[2] 1:18: " + msg}},
 	}
 	for _, tc := range tests {
