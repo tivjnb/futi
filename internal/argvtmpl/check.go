@@ -316,8 +316,9 @@ var optionLike = regexp.MustCompile(`^--?[A-Za-z]`)
 
 // checkErr is an error of Check with its position for ordering.
 type checkErr struct {
-	at  srcPos
-	msg string
+	at      srcPos
+	msg     string
+	unknown string // the unknown input name, reported at its first occurrence only
 }
 
 // Check runs the static checks of the template against the declared inputs
@@ -332,22 +333,20 @@ func (t *Template) Check(inputs []Input) []error {
 	add := func(item, pos int, msg string) {
 		errs = append(errs, checkErr{at: srcPos{item: item, pos: pos}, msg: msg})
 	}
-	unknown := map[string]bool{}
+	// Every occurrence of an unknown name is collected; duplicates are
+	// dropped after sorting, so the first occurrence in the text is kept.
 	lookup := func(item, pos int, name string) (Input, bool) {
 		in, ok := byName[name]
-		if !ok && !unknown[name] {
-			unknown[name] = true
+		if !ok {
+			msg := "unknown input " + strconv.Quote(name)
 			if name == "args" || name == "args_list" {
-				add(item, pos, "{{."+name+"}} was replaced by a rest arg (see README)")
-			} else {
-				add(item, pos, "unknown input "+strconv.Quote(name))
+				msg = "{{." + name + "}} was replaced by a rest arg (see README)"
 			}
+			errs = append(errs, checkErr{at: srcPos{item: item, pos: pos}, msg: msg, unknown: name})
 		}
 		return in, ok
 	}
 
-	// Unknown names are reported at their first occurrence, which may be
-	// in a run or in a condition, so both are visited before sorting.
 	for _, u := range t.uses {
 		in, ok := lookup(u.item, u.pos, u.name)
 		switch {
@@ -359,21 +358,31 @@ func (t *Template) Check(inputs []Input) []error {
 		}
 	}
 	for i, r := range t.runs {
-		var names []string // distinct scalar inputs of the run
+		var names []string // distinct non-bool inputs printed in the run, {{.}} as its ranged input
 		for _, pc := range r.pieces {
+			if pc.ref == refDot {
+				if !slices.Contains(names, pc.name) {
+					names = append(names, pc.name)
+				}
+				continue
+			}
 			if pc.ref != refInput {
 				continue
 			}
 			in, ok := lookup(r.item, pc.pos, pc.name)
+			if !ok {
+				continue
+			}
 			switch {
-			case !ok:
 			case in.Kind == Bool:
 				add(r.item, pc.pos, "bool input "+strconv.Quote(in.Name)+" can only be used in a condition: {{if ."+in.Name+"}}…{{end}}")
-			case in.isList():
-				if len(r.pieces) > 1 {
-					add(r.item, pc.pos, "variadic input "+strconv.Quote(in.Name)+" must be a whole argument; use {{range .env}}--env={{.}}{{end}}")
-				}
-			case !slices.Contains(names, in.Name):
+				continue
+			case in.Rest && len(r.pieces) > 1:
+				add(r.item, pc.pos, "rest input "+strconv.Quote(in.Name)+" must be a whole argument")
+			case in.Variadic && len(r.pieces) > 1:
+				add(r.item, pc.pos, "variadic input "+strconv.Quote(in.Name)+" must be a whole argument; use {{range .env}}--env={{.}}{{end}}")
+			}
+			if !slices.Contains(names, in.Name) {
 				names = append(names, in.Name)
 			}
 		}
@@ -387,6 +396,9 @@ func (t *Template) Check(inputs []Input) []error {
 					"; use {{if ."+pc.name+"}}{{."+pc.name+"}}@{{end}}{{."+other+"}}")
 			}
 		}
+		// X3 only concerns an optional scalar input (firstDroppable skips
+		// lists): "--x {{.list}}" is broken for two or more values anyway,
+		// and "ls -la {{.paths}}" is a legitimate template.
 		if i+1 < len(t.runs) && len(r.pieces) == 1 && r.pieces[0].ref == refNone && optionLike.MatchString(r.pieces[0].text) {
 			if pc, ok := firstDroppable(t.runs[i+1], byName); ok {
 				flag := r.pieces[0].text
@@ -398,7 +410,14 @@ func (t *Template) Check(inputs []Input) []error {
 	sort.SliceStable(errs, func(i, j int) bool { return errs[i].at.less(errs[j].at) })
 
 	var out []error
+	reported := map[string]bool{}
 	for _, e := range errs {
+		if e.unknown != "" {
+			if reported[e.unknown] {
+				continue
+			}
+			reported[e.unknown] = true
+		}
 		out = append(out, &Error{Loc: t.loc(e.at), Msg: e.msg})
 	}
 	for _, in := range inputs {
