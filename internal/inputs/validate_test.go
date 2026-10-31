@@ -59,6 +59,31 @@ func TestValidate(t *testing.T) {
 			want: []string{`arg "env": name "env" is reserved`},
 		},
 		{
+			name: "reserved help",
+			args: []Spec{{Name: "help"}},
+			want: []string{`arg "help": name "help" is reserved`},
+		},
+		{
+			name:  "reserved module_root",
+			flags: []Spec{{Name: "module_root", Flag: true}},
+			want:  []string{`flag "module_root": name "module_root" is reserved`},
+		},
+		{
+			name: "reserved module_name",
+			args: []Spec{{Name: "module_name"}},
+			want: []string{`arg "module_name": name "module_name" is reserved`},
+		},
+		{
+			name: "duplicate among args",
+			args: []Spec{{Name: "x"}, {Name: "x"}},
+			want: []string{`arg "x": duplicate name "x"`},
+		},
+		{
+			name:  "duplicate among flags",
+			flags: []Spec{{Name: "x", Flag: true}, {Name: "x", Flag: true}},
+			want:  []string{`flag "x": duplicate name "x"`},
+		},
+		{
 			name:  "duplicate across args and flags",
 			args:  []Spec{{Name: "x"}},
 			flags: []Spec{{Name: "x", Flag: true}},
@@ -185,6 +210,29 @@ func TestValidate(t *testing.T) {
 			name: "form: optional after variadic",
 			args: []Spec{{Name: "a", Variadic: true}, {Name: "b"}},
 			want: []string{formMsg},
+		},
+		{
+			name: "form: optional before rest",
+			args: []Spec{{Name: "a"}, {Name: "r", Rest: true}},
+			want: []string{formMsg},
+		},
+		{
+			name: "form: optional after rest is reported once",
+			args: []Spec{{Name: "r", Rest: true}, {Name: "a"}},
+			want: []string{`arg "r": rest must be the last arg`},
+		},
+		{
+			name: "form: required after rest is reported once",
+			args: []Spec{{Name: "r", Rest: true}, {Name: "a", Required: true}},
+			want: []string{`arg "r": rest must be the last arg`},
+		},
+		{
+			name: "required rest after required",
+			args: []Spec{{Name: "a", Required: true}, {Name: "r", Rest: true, Required: true}},
+		},
+		{
+			name: "required variadic alone",
+			args: []Spec{{Name: "v", Variadic: true, Required: true}},
 		},
 		{
 			name: "form: one error per node",

@@ -100,6 +100,8 @@ func TestParse(t *testing.T) {
 		{name: "S20 -m value --amend", node: gitCommit, toks: []string{"-m", "fix: x", "--amend"}, want: map[string]any{"message": "fix: x", "amend": "true"}},
 		{name: "value is a known flag", node: gitCommit, toks: []string{"--message", "--amend"}, err: "flag --message requires a value (got --amend; use --message=--amend)"},
 		{name: "value is a known short", node: dockerBuild, toks: []string{"--file", "-t", "x"}, err: "flag --file requires a value (got -t; use --file=-t)"},
+		{name: "value looks like short with =", node: dockerBuild, toks: []string{"--file", "-t=x"}, want: map[string]any{"file": "-t=x"}},
+		{name: "value is a known long with =", node: gitCommit, toks: []string{"--message", "--amend=x"}, err: "flag --message requires a value (got --amend=x; use --message=--amend=x)"},
 		{name: "value is --", node: gitCommit, toks: []string{"-m", "--"}, err: "flag --message requires a value (got --; use --message=--)"},
 		{name: "S21 no value", node: gitCommit, toks: []string{"-m"}, err: "flag --message requires a value"},
 
@@ -124,6 +126,10 @@ func TestParse(t *testing.T) {
 		{name: "unknown flag hides value", node: k8sLogs, toks: []string{"mypod", "--x=secret"}, err: `unknown flag --x for "futi k8s logs"`},
 		{name: "underscore spelling is unknown", node: filesGrep, toks: []string{"--ignore_case", "x"}, err: `unknown flag --ignore_case for "futi files grep" (did you mean --ignore-case?)`},
 		{name: "§4.1 dry-run after path", node: k8sLogs, toks: []string{"x", "--dry-run"}, err: `unknown flag --dry-run for "futi k8s logs"`},
+		{name: "short name: no noisy suggestion", node: dockerRun, toks: []string{"--it", "nginx"}, err: `unknown flag --it for "futi docker run"`},
+		{name: "short name: distance 1 suggests", node: dockerRun, toks: []string{"--rn", "nginx"}, err: `unknown flag --rn for "futi docker run" (did you mean --rm?)`},
+		{name: "empty long name", node: dockerRun, toks: []string{"--=x", "nginx"}, err: `unknown flag "--" for "futi docker run"`},
+		{name: "empty short name", node: dockerRun, toks: []string{"-=x", "nginx"}, err: `unknown flag "-" for "futi docker run"`},
 		{name: "unknown short", node: k8sLogs, toks: []string{"-x"}, err: `unknown flag -x for "futi k8s logs"`},
 		{name: "combined shorts", node: filesGrep, toks: []string{"-fi", "x"}, err: `unknown flag -fi for "futi files grep" (short flags cannot be combined: use -f -i)`},
 		{name: "combined with unknown letter", node: filesGrep, toks: []string{"-fx", "x"}, err: `unknown flag -fx for "futi files grep"`},
@@ -222,6 +228,18 @@ func TestScan(t *testing.T) {
 		}
 		if !st.Used["tag"] {
 			t.Errorf("Used = %v, want tag", st.Used)
+		}
+	})
+	t.Run("invalid bool value does not mark the flag used", func(t *testing.T) {
+		st := Scan(k8sLogs.args, k8sLogs.flags, []string{"--follow=x"})
+		if st.Used["follow"] {
+			t.Fatalf("Used = %v, want follow unused", st.Used)
+		}
+	})
+	t.Run("valid bool value marks the flag used", func(t *testing.T) {
+		st := Scan(k8sLogs.args, k8sLogs.flags, []string{"--follow=off"})
+		if !st.Used["follow"] {
+			t.Fatalf("Used = %v, want follow", st.Used)
 		}
 	})
 	t.Run("pending resolved by value", func(t *testing.T) {

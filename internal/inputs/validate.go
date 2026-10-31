@@ -121,7 +121,7 @@ func isASCIILetter(b byte) bool { return b >= 'a' && b <= 'z' || b >= 'A' && b <
 
 // validArgsForm reports whether args fit one of the forms
 // req* opt*, req* variadic req*, req* rest. A misplaced rest is reported by
-// the per-input check, so a rest only closes the list here.
+// the per-input check, so whatever follows a rest is not examined here.
 func validArgsForm(args []Spec) bool {
 	const (
 		required = iota
@@ -135,6 +135,9 @@ func validArgsForm(args []Spec) bool {
 		case isList:
 			if state != required {
 				return false
+			}
+			if s.Rest {
+				return true
 			}
 			state = afterList
 		case s.Required:

@@ -198,10 +198,13 @@ func (s *scanner) longFlag(tok string) {
 	name, value, hasValue := strings.Cut(tok[2:], "=")
 	f := s.long[name]
 	if f == nil {
+		if name == "" {
+			s.fail("unknown flag %q for %q", "--", s.label)
+			return
+		}
 		s.fail("unknown flag --%s for %q%s", name, s.label, s.suggest(name))
 		return
 	}
-	s.used[f.Name] = true
 	switch {
 	case hasValue && f.Kind() == argvtmpl.Bool:
 		b, ok := parseBool(value)
@@ -209,10 +212,13 @@ func (s *scanner) longFlag(tok string) {
 			s.fail("invalid bool value %q for %s (valid: %s)", value, f.CLIName(), boolValues)
 			return
 		}
+		s.used[f.Name] = true
 		s.values[f.Name] = fmt.Sprint(b)
 	case hasValue:
+		s.used[f.Name] = true
 		s.setFlag(f, value)
 	default:
+		s.used[f.Name] = true
 		s.bareFlag(f)
 	}
 }
@@ -230,6 +236,8 @@ func (s *scanner) shortFlag(tok string) {
 	case f != nil:
 		s.used[f.Name] = true
 		s.bareFlag(f)
+	case name == "":
+		s.fail("unknown flag %q for %q", "-", s.label)
 	default:
 		s.fail("unknown flag -%s for %q%s", name, s.label, s.combinedHint(name))
 	}
@@ -360,14 +368,19 @@ func argsUsage(args []Spec) string {
 }
 
 // suggest returns " (did you mean --x?)" for the declared flag closest to an
-// unknown long name: Levenshtein distance at most 2 or a common prefix of at
-// least 3 characters.
+// unknown long name: Levenshtein distance at most 2 (at most 1 for a name
+// shorter than 3 characters, where distance 2 is mostly noise) or a common
+// prefix of at least 3 characters.
 func (s *scanner) suggest(name string) string {
+	maxDist := 2
+	if len(name) < 3 {
+		maxDist = 1
+	}
 	best, bestDist := "", 0
 	for _, f := range s.flags {
 		cand := cliName(f.Name)
 		d := levenshtein(name, cand)
-		if d > 2 && commonPrefix(name, cand) < 3 {
+		if d > maxDist && commonPrefix(name, cand) < 3 {
 			continue
 		}
 		if best == "" || d < bestDist {
