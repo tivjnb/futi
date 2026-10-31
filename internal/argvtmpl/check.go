@@ -50,6 +50,14 @@ type piece struct {
 	name   string   // refInput: the input; refDot: the ranged input
 	guards []string // inputs whose truth is required by the enclosing if bodies
 	top    bool     // not inside if/range
+	body   []int    // ids of the enclosing if/else/range bodies, outermost first
+	prints bool     // literal text that prints at least one character
+}
+
+// within reports whether the piece is printed whenever other is: its
+// enclosing bodies are a prefix of those of other.
+func (pc piece) within(other piece) bool {
+	return len(pc.body) <= len(other.body) && slices.Equal(pc.body, other.body[:len(pc.body)])
 }
 
 // run is a static argv element: a maximal chain of pieces not separated by
@@ -127,6 +135,7 @@ func (t *Template) exempt(item, pos int) bool {
 type flatCtx struct {
 	guards []string
 	top    bool
+	body   []int  // ids of the enclosing bodies
 	ranged string // the input of the innermost enclosing range
 }
 
@@ -136,15 +145,24 @@ type flattener struct {
 	item   int
 	pieces []piece
 	uses   []use
+	bodies int // bodies numbered so far
+}
+
+// enter returns the context of a new nested body.
+func (f *flattener) enter(ctx flatCtx) flatCtx {
+	f.bodies++
+	ctx.top = false
+	ctx.body = append(slices.Clip(ctx.body), f.bodies)
+	return ctx
 }
 
 func (f *flattener) list(l *parse.ListNode, ctx flatCtx) {
 	for _, n := range l.Nodes {
 		switch n := n.(type) {
 		case *parse.TextNode:
-			f.pieces = append(f.pieces, piece{text: string(n.Text), pos: int(n.Pos), guards: ctx.guards, top: ctx.top})
+			f.pieces = append(f.pieces, piece{text: string(n.Text), pos: int(n.Pos), guards: ctx.guards, top: ctx.top, body: ctx.body, prints: len(n.Text) > 0})
 		case *parse.ActionNode:
-			pc := piece{pos: int(n.Pos), guards: ctx.guards, top: ctx.top}
+			pc := piece{pos: int(n.Pos), guards: ctx.guards, top: ctx.top, body: ctx.body}
 			switch a := n.Pipe.Cmds[0].Args[0].(type) {
 			case *parse.DotNode:
 				pc.ref, pc.name, pc.pos = refDot, ctx.ranged, int(a.Pos)
@@ -159,20 +177,17 @@ func (f *flattener) list(l *parse.ListNode, ctx flatCtx) {
 			f.pieces = append(f.pieces, pc)
 		case *parse.IfNode:
 			f.cond(n.Pipe, false)
-			body := ctx
-			body.top = false
+			body := f.enter(ctx)
 			body.guards = append(slices.Clip(ctx.guards), condGuards(n.Pipe)...)
 			f.list(n.List, body)
 			if n.ElseList != nil {
-				body.guards = ctx.guards
-				f.list(n.ElseList, body)
+				f.list(n.ElseList, f.enter(ctx))
 			}
 		case *parse.RangeNode:
 			fn := n.Pipe.Cmds[0].Args[0].(*parse.FieldNode)
 			name, _ := inputName(fn)
 			f.uses = append(f.uses, use{item: f.item, pos: f.p.fieldStart(fn), name: name, ranged: true})
-			body := ctx
-			body.top = false
+			body := f.enter(ctx)
 			body.ranged = name
 			f.list(n.List, body)
 		}
@@ -260,13 +275,13 @@ func splitRuns(item int, pieces []piece, split bool) []run {
 			cur = append(cur, pc)
 			continue
 		}
-		start := -1
+		start, prints := -1, false
 		emit := func(end int) {
 			if start >= 0 {
 				part := pc
-				part.text, part.pos = pc.text[start:end], pc.pos+start
+				part.text, part.pos, part.prints = pc.text[start:end], pc.pos+start, prints
 				cur = append(cur, part)
-				start = -1
+				start, prints = -1, false
 			}
 		}
 		for i := 0; i < len(pc.text); i++ {
@@ -284,8 +299,11 @@ func splitRuns(item int, pieces []piece, split bool) []run {
 				q = c
 			case q == '"' && c == '\\' && i+1 < len(pc.text) && (pc.text[i+1] == '"' || pc.text[i+1] == '\\'):
 				i++
+				prints = true
 			case q != 0 && c == q:
 				q = 0
+			default:
+				prints = true
 			}
 		}
 		emit(len(pc.text))
@@ -417,19 +435,31 @@ func (t *Template) loc(at srcPos) string {
 
 // Guarded reports whether at least one occurrence of the input is subject to
 // the dash guard: it is printed (directly or as {{.}} of a range over it)
-// outside the exemption after a literal --, and the input is neither
-// allow_dash nor rest.
+// outside the exemption after a literal --, can give the first character of
+// its argument, and the input is neither allow_dash nor rest.
 func (t *Template) Guarded(inputs []Input, name string) bool {
 	i := slices.IndexFunc(inputs, func(in Input) bool { return in.Name == name })
 	if i < 0 || inputs[i].AllowDash || inputs[i].Rest {
 		return false
 	}
 	for _, r := range t.runs {
-		for _, pc := range r.pieces {
-			if (pc.ref == refInput || pc.ref == refDot) && pc.name == name && !t.exempt(r.item, pc.pos) {
+		for j, pc := range r.pieces {
+			if (pc.ref == refInput || pc.ref == refDot) && pc.name == name && !t.exempt(r.item, pc.pos) && canStart(r.pieces[:j], pc) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// canStart reports whether ref may give the first character of its run: no
+// literal printed whenever ref is printed precedes it. Preceding references
+// do not count, their values may be empty.
+func canStart(before []piece, ref piece) bool {
+	for _, pc := range before {
+		if pc.ref == refNone && pc.prints && pc.within(ref) {
+			return false
+		}
+	}
+	return true
 }

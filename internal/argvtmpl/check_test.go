@@ -189,6 +189,16 @@ func TestGuarded(t *testing.T) {
 		{"-- inside if does not exempt", `x {{if .f}}--{{end}} {{.a}}`, []Input{{Name: "f", Kind: Bool}, s("a")}, "a", true},
 		{"condition only", `x {{if .a}}y{{end}}`, []Input{s("a")}, "a", false},
 		{"unknown input", `cp {{.src}}`, []Input{s("src")}, "nope", false},
+		{"literal before value", `--tail={{.tail}}`, []Input{s("tail")}, "tail", false},
+		{"conditional literal before value", `{{if .f}}--x={{end}}{{.v}}`, []Input{{Name: "f", Kind: Bool}, s("v")}, "v", true},
+		{"literal in else before value", `{{if .f}}x{{else}}--x={{.v}}{{end}}`, []Input{{Name: "f", Kind: Bool}, s("v")}, "v", false},
+		{"literal in the same if body", `{{if .f}}--x={{.v}}{{end}}`, []Input{{Name: "f", Kind: Bool}, s("v")}, "v", false},
+		{"literal in if before value in else", `{{if .f}}--x={{else}}{{.v}}{{end}}`, []Input{{Name: "f", Kind: Bool}, s("v")}, "v", true},
+		{"other input before value", `{{.a}}{{.b}}`, []Input{s("a"), s("b")}, "b", true},
+		{"quotes before value", `x "{{.a}}"`, []Input{s("a")}, "a", true},
+		{"literal in quotes before value", `x "-o {{.a}}"`, []Input{s("a")}, "a", false},
+		{"literal in range body", `x {{range .e}}--env={{.}} {{end}}`, []Input{{Name: "e", Variadic: true}}, "e", false},
+		{"one of two occurrences can start", `x --a={{.a}} {{.a}}`, []Input{s("a")}, "a", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -214,6 +224,7 @@ func TestGuardedList(t *testing.T) {
 		{"literal after --", []string{"cp", "--", "x", "{{.src}}"}, true},
 		{"space is literal in list", []string{"cp", "--", "{{.src}} "}, true},
 		{"-- with space is not --", []string{"cp", "-- ", "{{.src}}"}, true},
+		{"quote is literal in list", []string{"cp", `"{{.src}}`}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
