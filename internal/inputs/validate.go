@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
-	"strings"
 )
 
 var nameRE = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -68,9 +67,7 @@ func Validate(args, flags []Spec) []error {
 					fail("default is not an integer")
 				}
 			case isBool:
-				switch strings.ToLower(*s.Default) {
-				case "true", "false", "1", "0", "yes", "no", "on", "off":
-				default:
+				if _, ok := parseBool(*s.Default); !ok {
 					fail("default is not a boolean (true/false/1/0/yes/no/on/off)")
 				}
 			}
