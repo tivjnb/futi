@@ -21,6 +21,7 @@ type Template struct {
 	items []item
 	list  bool // list form: every item is exactly one argv element
 	refs  []string
+	analysis
 }
 
 // item is one parsed template text: the whole string form or one list item.
@@ -37,7 +38,9 @@ func Parse(src string) (*Template, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Template{items: []item{it}, refs: sortedKeys(refs)}, nil
+	t := &Template{items: []item{it}, refs: sortedKeys(refs)}
+	t.analyze()
+	return t, nil
 }
 
 // ParseList parses the list form: every item is exactly one argv element,
@@ -53,6 +56,7 @@ func ParseList(items []string) (*Template, error) {
 		t.items = append(t.items, it)
 	}
 	t.refs = sortedKeys(refs)
+	t.analyze()
 	return t, nil
 }
 
