@@ -179,6 +179,31 @@ func TestWalkCollisionBetweenSources(t *testing.T) {
 	}
 }
 
+func TestWalkCollisionBetweenLayers(t *testing.T) {
+	global := writeTree(t, map[string]string{"dev/deploy.yaml": "cmd: echo b\n"})
+	local := writeTree(t, map[string]string{"dev.yaml": "commands:\n  deploy:\n    cmd: echo a\n"})
+	src := discovery.NewLayeredSource(discovery.NewGlobalSource(local), discovery.NewGlobalSource(global))
+
+	_, _, err := Walk(src, nil, []string{"dev", "deploy"}, WalkOptions{})
+	var ce *CollisionError
+	if !errors.As(err, &ce) {
+		t.Fatalf("err = %v, want *CollisionError", err)
+	}
+	want := `path "dev deploy" is ambiguous: command "deploy" of module dev (` + filepath.Join(local, "dev.yaml") +
+		`) and module dev.deploy (` + filepath.Join(global, "dev", "deploy.yaml") + `)`
+	if err.Error() != want {
+		t.Errorf("err = %q\nwant  %q", err.Error(), want)
+	}
+}
+
+func TestIsFlagToken(t *testing.T) {
+	for tok, want := range map[string]bool{"": false, "-": false, "a": false, "-a": true, "--": true, "--x=y": true, "-5": true, "a-b": false} {
+		if got := IsFlagToken(tok); got != want {
+			t.Errorf("IsFlagToken(%q) = %v, want %v", tok, got, want)
+		}
+	}
+}
+
 func TestWalkLayeredOverrideIsNotCollision(t *testing.T) {
 	global := writeTree(t, map[string]string{"docker.yaml": dockerYAML})
 	local := writeTree(t, map[string]string{"docker.yaml": "commands:\n  build:\n    cmd: echo local\n"})
@@ -271,6 +296,8 @@ func TestResolveWordsErrors(t *testing.T) {
 		{[]string{"docker"}, `"futi docker" requires a subcommand (available: build, run)`, execmodule.ErrRequiresSubcommand},
 		{[]string{"tools", "--v"}, `"futi tools" requires a subcommand (available: a)`, execmodule.ErrRequiresSubcommand},
 		{[]string{"docker", "--v", "run"}, `"futi docker" requires a subcommand (available: build, run) (put the full command path before flags)`, execmodule.ErrRequiresSubcommand},
+		{[]string{"docker", "--", "run"}, `"futi docker" requires a subcommand (available: build, run)`, execmodule.ErrRequiresSubcommand},
+		{[]string{"docker", "--v", "--", "run"}, `"futi docker" requires a subcommand (available: build, run)`, execmodule.ErrRequiresSubcommand},
 	}
 	for _, tt := range tests {
 		_, _, err := ResolveWords(src, nil, tt.words)

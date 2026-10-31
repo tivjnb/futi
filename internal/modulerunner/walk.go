@@ -83,7 +83,7 @@ func Walk(source discovery.Source, loader ModuleLoader, words []string, opt Walk
 	node := &Node{}
 	n := 0
 	for _, w := range words {
-		if w == "--" || isFlagToken(w) {
+		if w == "--" || IsFlagToken(w) {
 			break
 		}
 		next := node
@@ -272,7 +272,7 @@ func ResolveWords(source discovery.Source, loader ModuleLoader, words []string) 
 func noCommandError(source discovery.Source, node *Node, rest []string) error {
 	children := node.Children(source)
 	var err *PathError
-	if len(rest) > 0 && rest[0] != "--" && !isFlagToken(rest[0]) {
+	if len(rest) > 0 && rest[0] != "--" && !IsFlagToken(rest[0]) {
 		err = UnknownCommandError(source, node, rest[0]).(*PathError)
 	} else {
 		err = &PathError{
@@ -282,7 +282,10 @@ func noCommandError(source discovery.Source, node *Node, rest []string) error {
 		}
 	}
 	for _, w := range rest {
-		if w != "--" && slices.Contains(children, w) {
+		if w == "--" {
+			break // what follows "--" are command args, not a misplaced path
+		}
+		if slices.Contains(children, w) {
 			err.msg += " (put the full command path before flags)"
 			break
 		}
@@ -316,7 +319,8 @@ func available(names []string) string {
 	return " (available: " + strings.Join(names, ", ") + ")"
 }
 
-// isFlagToken reports a token starting with "-" and longer than one character.
-func isFlagToken(tok string) bool {
+// IsFlagToken reports a token starting with "-" and longer than one character
+// ("--" included): the token that ends a command path.
+func IsFlagToken(tok string) bool {
 	return len(tok) > 1 && tok[0] == '-'
 }
