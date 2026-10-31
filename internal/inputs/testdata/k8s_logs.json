@@ -1,0 +1,23 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "follow": {
+      "type": "boolean"
+    },
+    "pod": {
+      "minLength": 1,
+      "not": {
+        "pattern": "^-"
+      },
+      "type": "string"
+    },
+    "tail": {
+      "default": 100,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "pod"
+  ],
+  "type": "object"
+}

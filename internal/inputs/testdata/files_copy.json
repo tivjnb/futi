@@ -1,0 +1,31 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "dst": {
+      "minLength": 1,
+      "not": {
+        "pattern": "^-"
+      },
+      "type": "string"
+    },
+    "force": {
+      "type": "boolean"
+    },
+    "src": {
+      "items": {
+        "minLength": 1,
+        "not": {
+          "pattern": "^-"
+        },
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "src",
+    "dst"
+  ],
+  "type": "object"
+}
