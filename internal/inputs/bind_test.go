@@ -1,6 +1,7 @@
 package inputs
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -59,6 +60,19 @@ func TestBind(t *testing.T) {
 		{"list for scalar", k8sLogs, map[string]any{"pod": []string{"a"}}, nil, `input "pod" must be a single value`},
 		{"scalar for list", filesCopy, map[string]any{"src": "a", "dst": "d"}, nil, `input "src" must be a list`},
 		{"bool for string", k8sLogs, map[string]any{"pod": true}, nil, `input "pod" must be a string`},
+		{"int from float64", k8sLogs, map[string]any{"pod": "p", "tail": float64(7)},
+			map[string]argvtmpl.Value{"pod": sc("p"), "follow": sc("false"), "tail": sc("7")}, ""},
+		{"int from Go int", k8sLogs, map[string]any{"pod": "p", "tail": 8},
+			map[string]argvtmpl.Value{"pod": sc("p"), "follow": sc("false"), "tail": sc("8")}, ""},
+		{"int from int64", k8sLogs, map[string]any{"pod": "p", "tail": int64(9)},
+			map[string]argvtmpl.Value{"pod": sc("p"), "follow": sc("false"), "tail": sc("9")}, ""},
+		{"int from json.Number", k8sLogs, map[string]any{"pod": "p", "tail": json.Number("007")},
+			map[string]argvtmpl.Value{"pod": sc("p"), "follow": sc("false"), "tail": sc("7")}, ""},
+		{"fractional float64 for int", k8sLogs, map[string]any{"pod": "p", "tail": 1.5}, nil, `invalid int value "1.5" for --tail`},
+		{"number for string", k8sLogs, map[string]any{"pod": float64(1)}, nil, `input "pod" must be a string`},
+		{"number for bool", k8sLogs, map[string]any{"pod": "p", "follow": float64(1)}, nil, `input "follow" must be a string`},
+		{"required with default takes the default", node{args: []Spec{{Name: "a", Required: true, Default: str("x")}}}, map[string]any{},
+			map[string]argvtmpl.Value{"a": sc("x")}, ""},
 		{"unknown key wins over missing", k8sLogs, map[string]any{"nope": "1"}, nil, `unknown input "nope"`},
 	}
 	for _, tc := range tests {

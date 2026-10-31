@@ -1,6 +1,7 @@
 package inputs
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
@@ -131,6 +132,15 @@ func asScalar(s Spec, raw any) (string, error) {
 			return strconv.FormatBool(v), nil
 		}
 		return "", fmt.Errorf("input %q must be a string", s.Name)
+	case float64, int, int64, json.Number:
+		// JSON numbers arrive here because the schema declares int as "integer".
+		if s.Kind() != argvtmpl.Int {
+			return "", fmt.Errorf("input %q must be a string", s.Name)
+		}
+		if f, ok := v.(float64); ok {
+			return strconv.FormatFloat(f, 'f', -1, 64), nil
+		}
+		return fmt.Sprint(v), nil
 	case []string, []any:
 		return "", fmt.Errorf("input %q must be a single value", s.Name)
 	}
