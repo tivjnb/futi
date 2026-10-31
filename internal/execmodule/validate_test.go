@@ -405,21 +405,16 @@ func TestValidateSchemaRules(t *testing.T) {
 	}
 }
 
-// TestValidateReservedListCommand: имя list на любом уровне — ошибка схемы
-// (команда недостижима: list последним словом пути — системный запрос);
-// help и validate зарезервированными не считаются.
-func TestValidateReservedListCommand(t *testing.T) {
+// TestValidateBuiltinNamesAllowedAsCommands: builtins are recognized only as
+// the first CLI word, so list, help and validate are valid command names.
+func TestValidateBuiltinNamesAllowedAsCommands(t *testing.T) {
 	tests := []struct {
 		name     string
 		manifest string
 		want     []string
 	}{
-		{"top level", "commands:\n  list:\n    cmd: echo\n", []string{`command "list": "list" is reserved (use a different command name)`}},
-		{"nested", "commands:\n  a:\n    commands:\n      list:\n        cmd: echo\n", []string{`command "a.list": "list" is reserved (use a different command name)`}},
-		{"parent before nested", "commands:\n  list:\n    commands:\n      list:\n        cmd: echo\n", []string{
-			`command "list": "list" is reserved (use a different command name)`,
-			`command "list.list": "list" is reserved (use a different command name)`,
-		}},
+		{"list top level", "commands:\n  list:\n    cmd: echo\n", nil},
+		{"list nested", "commands:\n  a:\n    commands:\n      list:\n        cmd: echo\n", nil},
 		{"help allowed", "commands:\n  help:\n    cmd: echo\n", nil},
 		{"validate allowed", "commands:\n  validate:\n    cmd: echo\n", nil},
 		{"list as param name allowed", "commands:\n  x:\n    cmd: echo\n    params:\n      - name: list\n", nil},
@@ -436,16 +431,6 @@ func TestValidateReservedListCommand(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestLoadModuleRejectsListCommand: модуль с командой list не загружается.
-func TestLoadModuleRejectsListCommand(t *testing.T) {
-	dir := t.TempDir()
-	manifestPath := filepath.Join(dir, "bad.yaml")
-	writeFile(t, manifestPath, "commands:\n  list:\n    cmd: echo\n")
-	if _, err := LoadModule(manifestPath, dir); err == nil || !strings.Contains(err.Error(), `"list" is reserved`) {
-		t.Fatalf("err = %v, want '\"list\" is reserved'", err)
 	}
 }
 

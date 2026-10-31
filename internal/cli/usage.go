@@ -16,8 +16,8 @@ CLI interface. Install a module once — use it everywhere.
 USAGE
   futi <namespace...> <command> [--param value] [--bool-flag] [-- args]
   futi <namespace>                    Invoke module's default command (if defined)
-  futi <namespace...> list [flags]
-  futi list [flags]
+  futi help <path...>                 Show help for a module, command or namespace
+  futi list [<path...>] [flags]       List modules, namespaces or commands
   futi modules validate <namespace>   Validate module schema
   futi modules init <name> [flags]    Create a new module from template
   futi modules <subcommand>           Manage modules (install, uninstall, ...)
@@ -27,18 +27,21 @@ USAGE
   futi -h | --help
   futi --version                      Print version
 
-The last positional argument (without --) is the command; everything before
-it is the namespace, joined with dots. Example: "futi dev deploy staging"
-resolves to namespace "dev.deploy", command "staging".
+The path is read left to right over the merged tree of namespaces, modules
+and their commands. Example: "futi dev deploy staging" runs command "staging"
+of module "dev.deploy" (dev/deploy.yaml). A dotted word is the same as
+separate words: "futi dev.deploy staging". A path that names two things at
+once (a module command and a module or namespace) is an error.
 
 The order is strict: path, then flags, then "-- args". The path ends at the
 first token starting with "-"; a word after a flag is only accepted as the
 value of the preceding string/int flag. "-h" / "--help" after the path shows
 help for that path.
 
-Reserved words: "list", "cache", "modules", "completion", "__complete". They
-cannot be used as a module name or as any segment of a module path, and "list"
-cannot be a command name in a module.
+Reserved words: "help", "list", "cache", "modules", "completion",
+"__complete". They are builtin commands only as the first word, so they cannot
+be top-level module or namespace names; deeper in the path they are ordinary
+names ("futi git help" runs command "help" of module "git").
 
 Arguments after "--" are passed to the command's template as {{.args}}
 (space-joined string) and {{.args_list}} (array). Example:
@@ -79,12 +82,12 @@ CONFIGURATION
 
 LISTING
   futi list                        Show top-level modules and namespaces
-  futi <ns> list                   Show children of a namespace or commands
+  futi list <ns>                   Show children of a namespace or commands
                                    of a module
-  futi <ns> <cmd> list             Show subcommands of a command
+  futi list <ns> <cmd>             Show subcommands of a command
   futi list -r, --recurse          Recursively traverse the subtree
   futi list -v, --verbose          Add a PATH column (manifest location)
-  futi <ns> list -r -v             Flags combine
+  futi list <ns> -r -v             Flags combine
 
   The (default) marker in command listings indicates the module's default
   command (cmd field), invoked when no command is specified.
@@ -260,14 +263,15 @@ FLAGS
 EXAMPLES
   futi docker build -h             Show help for "docker build"
   futi docker build --tag myapp    Run "build" command in "docker" module
-  futi dev deploy staging           Namespace "dev.deploy", command "staging"
+  futi help docker build           Show help for "docker build"
+  futi dev deploy staging           Module "dev.deploy", command "staging"
   futi k8s logs --follow            Bool flag --follow
   futi db migrate up                Nested command: "migrate up" in "db" module
-  futi db migrate list              List subcommands of "migrate"
+  futi list db migrate              List subcommands of "migrate"
   futi echo_mod echo -- hello world Pass args to command (via {{.args}})
   futi echo_mod -- hello world      Invoke module's default command with args
-  futi images list -r               Recursively list all image modules
-  futi docker list -v               Show docker commands with manifest path
+  futi list images -r               Recursively list all image modules
+  futi list docker -v               Show docker commands with manifest path
 
   Exit codes: futi propagates the exit code of the called command.
   If docker build exits with 5, futi exits with 5.

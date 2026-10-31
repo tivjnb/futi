@@ -58,7 +58,8 @@ commands:
 `
 
 // TestOldValidateSyntaxHint: старый синтаксис не находит команду validate и
-// получает подсказку про `modules validate`.
+// получает подсказку про `modules validate`. After a runnable command (m ps
+// validate) the word is an input of the command, not a path word.
 func TestOldValidateSyntaxHint(t *testing.T) {
 	cases := []struct {
 		args []string
@@ -67,7 +68,6 @@ func TestOldValidateSyntaxHint(t *testing.T) {
 		{[]string{"m", "validate"}, "hint: use 'futi modules validate m'"},
 		{[]string{"validate"}, "hint: use 'futi modules validate <namespace>'"},
 		{[]string{"nomod", "validate"}, "hint: use 'futi modules validate <namespace>'"},
-		{[]string{"m", "ps", "validate"}, "hint: use 'futi modules validate <namespace>'"},
 		{[]string{"m", "validate", "-h"}, "hint: use 'futi modules validate m'"},
 		{[]string{"m", "validate", "help"}, "hint: use 'futi modules validate m'"},
 		{[]string{"validate", "-h"}, "hint: use 'futi modules validate <namespace>'"},

@@ -31,22 +31,23 @@ func runValidate(w io.Writer, source discovery.Source, namespace string) error {
 	return nil
 }
 
-// withValidateHint дописывает к ошибке резолва подсказку о переезде validate
-// (`futi <ns> validate` → `futi modules validate <ns>`), если путь оканчивается
-// словом validate и команда/модуль не найдены. Конкретный <ns> подставляется,
-// только если он резолвится в существующий модуль; иначе — общая форма.
-// Прочие ошибки (в том числе исполнения пользовательской команды validate)
-// возвращаются как есть.
+// withValidateHint appends a hint about the move of validate
+// (`futi <ns> validate` → `futi modules validate <ns>`) when err is an unknown
+// path word and that word or the last of the leading words path is
+// "validate". The concrete <ns> is used only if the unknown word is validate
+// and the node before it is an existing module; otherwise the generic form.
+// Other errors (including a run of a user command validate) are returned as is.
 func withValidateHint(msg string, err error, path []string, source discovery.Source) string {
-	if !errors.Is(err, modulerunner.ErrModuleNotFound) && !errors.Is(err, execmodule.ErrCommandNotFound) {
+	var pathErr *modulerunner.PathError
+	if !errors.As(err, &pathErr) || pathErr.Word == "" {
 		return msg
 	}
-	if len(path) == 0 || path[len(path)-1] != "validate" {
+	if pathErr.Word != "validate" && (len(path) == 0 || path[len(path)-1] != "validate") {
 		return msg
 	}
 	ns := "<namespace>"
-	if len(path) > 1 {
-		cand := strings.Join(path[:len(path)-1], ".")
+	if pathErr.Word == "validate" && len(pathErr.Path) > 0 {
+		cand := strings.Join(pathErr.Path, ".")
 		if _, _, rerr := source.Resolve(cand); rerr == nil {
 			ns = cand
 		}

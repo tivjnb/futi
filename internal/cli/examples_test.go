@@ -87,7 +87,11 @@ func TestExamplesRender(t *testing.T) {
 
 // prepareExample resolves, validates and renders a module command without running it.
 func prepareExample(src discovery.Source, ns, cmd string, params map[string]string, argsList []string) (*modulerunner.Prepared, error) {
-	r, err := modulerunner.Resolve(src, nil, ns, cmd)
+	words := strings.Split(ns, ".")
+	if cmd != "" {
+		words = append(words, cmd)
+	}
+	r, _, err := modulerunner.ResolveWords(src, nil, words)
 	if err != nil {
 		return nil, err
 	}

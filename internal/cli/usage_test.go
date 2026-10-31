@@ -148,7 +148,7 @@ func TestUsageDescriptionsAligned(t *testing.T) {
 	col := -1
 	var sawDryRun bool
 	for _, line := range strings.Split(buf.String(), "\n") {
-		if strings.HasPrefix(line, "The last positional") {
+		if strings.HasPrefix(line, "The path is read") {
 			break
 		}
 		m := re.FindStringSubmatch(line)

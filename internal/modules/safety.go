@@ -34,15 +34,14 @@ func validateModuleName(name string) error {
 	return nil
 }
 
-// checkReservedSegments отвергает путь, в котором любой сегмент (разделитель
-// sep) — зарезервированное слово корня: такой модуль перехватывался бы
-// builtin-командами и не был бы вызван. Проверяются только новые пути
-// (init/install); уже установленные модули не трогаются.
+// checkReservedSegments rejects a path whose top-level segment (separator
+// sep) is a reserved word: builtin commands are recognized as the first word,
+// so such a module would never run. Deeper segments are ordinary names. Only
+// new paths are checked (init/install); installed modules are left alone.
 func checkReservedSegments(path, sep string) error {
-	for _, seg := range strings.Split(path, sep) {
-		if completion.IsReservedName(seg) {
-			return fmt.Errorf("%q is a reserved name, choose a different module name", seg)
-		}
+	top, _, _ := strings.Cut(path, sep)
+	if completion.IsReservedName(top) {
+		return fmt.Errorf("%q is a reserved name, choose a different module name", top)
 	}
 	return nil
 }

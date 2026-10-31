@@ -599,15 +599,15 @@ out = os.path.join(os.getcwd(), "result.png")
 
 ```bash
 futi <namespace...> <command> [--param val] [-- args]   # вызов команды модуля
-futi <namespace...> [<command>] -h          # справка по пути (модуль, ветка или команда)
+futi <path...> -h                           # справка по пути (namespace, модуль, ветка или команда)
 futi <namespace>                            # команда по умолчанию (если есть cmd на уровне модуля)
 futi --dry-run <path...> <command>          # показать команду, не исполняя
+futi help <path...>                         # справка по пути
 futi list                                   # модули и namespaces в корне
-futi <namespace...> list                    # содержимое namespace или команды модуля
-futi <namespace...> list -v                 # то же, с колонкой PATH
-futi <namespace...> list -r                 # рекурсивный обход поддерева
+futi list <path...>                         # содержимое namespace или команды модуля
+futi list <path...> -v                      # то же, с колонкой PATH
+futi list <path...> -r                      # рекурсивный обход поддерева
 futi modules validate <namespace>           # валидация схемы модуля
-futi <namespace...> help                    # справка по модулю/команде
 futi modules init <name> [flags]            # создать модуль с шаблоном
 futi modules install <source> [flags]       # установить модуль из source (local/git/archive)
 futi modules uninstall <name> [flags]       # detach + удаление (с подтверждением)
@@ -628,15 +628,19 @@ futi --version                              # вывести версию
 
 Удалить единственную команду модуля без `cmd` нельзя — получился бы пустой модуль; `futi modules remove_command` откажет и оставит манифест без изменений.
 
-Парсинг: путь — слова до первого флага (токена с `-`); последнее слово пути — команда, всё до него — namespace (сегменты через `.`); затем флаги, затем `--`. Аргументы после `--` передаются в шаблон команды как `{{.args}}` (строка) и `{{.args_list}}` (массив). Сегменты пути можно писать через точку: `futi docker.build` = `futi docker build` (если есть модуль `docker.build`, побеждает он — сначала пробуется длиннейший namespace).
+Парсинг: путь читается по словам по объединённому дереву всех источников — namespace-каталоги, модули и их команды. Слово продолжает путь, только если точно совпадает с именем ребёнка текущего узла; путь заканчивается на первом токене, начинающемся с `-` (длиннее одного символа), на `--`, на слове, которое не ребёнок, или в конце. Слово с точками делится на сегменты и продолжает путь, только если совпали все: `futi docker.build` = `futi docker build`, а `file.txt` после узла с ребёнком `file` — не слово пути. После пути — флаги, затем `--`. Аргументы после `--` передаются в шаблон команды как `{{.args}}` (строка) и `{{.args_list}}` (массив). Флаги родительского узла подкомандами не наследуются.
 
-**Зарезервированные имена**: `list`, `cache`, `modules`, `completion`, `__complete` (перехватываются CLI до резолва модулей) нельзя использовать ни в одном сегменте пути модуля — ни в namespace, ни в имени. Проверка выполняется при `futi modules init` и `futi modules install` (для `--namespace` и итогового имени); уже установленные модули не затрагиваются. Команда модуля с именем `list` — ошибка схемы (см. раздел ошибок валидации). `help` — исключение: если в модуле определена своя команда `help`, вызывается она.
+Если у итогового узла нет `cmd`, вызов завершается ошибкой: `unknown command "x" for "futi docker" (available: build, run)`, если дальше есть слово, иначе `"futi db" requires a subcommand (available: migrate)`. Если имя подкоманды встречается дальше в строке (`futi db --verbose migrate up`), добавляется подсказка ` (put the full command path before flags)`.
+
+**Коллизия путей**: путь, который называет две сущности сразу, — ошибка, например модуль `dev/deploy.yaml` (`dev deploy`) и команда `deploy` модуля `dev.yaml`: `path "dev deploy" is ambiguous: command "deploy" of module dev (<manifest>) and module dev.deploy (<manifest>)`. Проверяется по всем источникам вместе при резолве пути. Локальный модуль, перекрывающий одноимённый глобальный, — не коллизия.
+
+**Зарезервированные имена**: `help`, `list`, `cache`, `modules`, `completion`, `__complete` — встроенные команды только первым словом, поэтому не могут быть именами модулей и namespace верхнего уровня. Глубже в пути это обычные имена: `futi git help` и `futi git list` вызывают команды `help` и `list` модуля `git`, а `tools/help.yaml` — допустимый модуль. Проверка выполняется при `futi modules init` и `futi modules install` (для `--namespace` и, без namespace, для итогового имени); уже установленные модули не затрагиваются.
 
 ```bash
-futi docker build --tag myapp        # namespace=docker, command=build
-futi dev deploy staging              # namespace=dev.deploy, command=staging
-futi k8s logs --follow -- mypod      # namespace=k8s, command=logs, follow=true, args="mypod"
-futi echo_mod echo -- hello world    # namespace=echo_mod, command=echo, args="hello world"
+futi docker build --tag myapp        # модуль docker, команда build
+futi dev deploy staging              # модуль dev.deploy, команда staging
+futi k8s logs --follow -- mypod      # модуль k8s, команда logs, follow=true, args="mypod"
+futi echo_mod echo -- hello world    # модуль echo_mod, команда echo, args="hello world"
 futi echo_mod -- hello world         # default cmd модуля echo_mod, args="hello world"
 ```
 
@@ -644,7 +648,7 @@ futi echo_mod -- hello world         # default cmd модуля echo_mod, args="
 
 ### Навигация через `list`
 
-`list` показывает содержимое текущего уровня иерархии:
+`futi list [<path...>]` показывает содержимое уровня иерархии (путь можно писать через пробел или точку: `futi list images converter` = `futi list images.converter`):
 
 ```bash
 $ futi list                          # корень: модули и namespaces
@@ -655,7 +659,7 @@ $ futi list                          # корень: модули и namespaces
 │ namespace │ images │                   │
 └───────────┴────────┴───────────────────┘
 
-$ futi images list                   # namespace: вложенные namespaces и модули
+$ futi list images                   # namespace: вложенные namespaces и модули
 ┌───────────┬───────────┬───────────────┐
 │   TYPE    │   NAME    │  DESCRIPTION  │
 ├───────────┼───────────┼───────────────┤
@@ -663,14 +667,14 @@ $ futi images list                   # namespace: вложенные namespaces 
 │ module    │ png       │ PNG utilities │
 └───────────┴───────────┴───────────────┘
 
-$ futi images converter list         # вложенный namespace
+$ futi list images converter         # вложенный namespace
 ┌────────┬────────┬──────────────────────┐
 │  TYPE  │  NAME  │     DESCRIPTION      │
 ├────────┼────────┼──────────────────────┤
 │ module │ to_png │ Convert images to PNG │
 └────────┴────────┴──────────────────────┘
 
-$ futi images png list               # модуль: команды
+$ futi list images png               # модуль: команды
 ┌─────────┬─────────────┐
 │ COMMAND │ DESCRIPTION │
 ├─────────┼─────────────┤
@@ -678,7 +682,7 @@ $ futi images png list               # модуль: команды
 │ resize  │             │
 └─────────┴─────────────┘
 
-$ futi docker list                   # модуль в корне: команды
+$ futi list docker                   # модуль в корне: команды
 ┌─────────┬─────────────┐
 │ COMMAND │ DESCRIPTION │
 ├─────────┼─────────────┤
@@ -690,7 +694,7 @@ $ futi docker list                   # модуль в корне: команд�
 Если у модуля есть команда по умолчанию (`cmd` на уровне модуля), она отображается первой с маркером `(default)`:
 
 ```bash
-$ futi echo_mod list                 # модуль с default cmd
+$ futi list echo_mod                 # модуль с default cmd
 ┌───────────┬─────────────┐
 │ COMMAND   │ DESCRIPTION │
 ├───────────┼─────────────┤
@@ -701,7 +705,7 @@ $ futi echo_mod list                 # модуль с default cmd
 
 То же касается subcommands: если команда имеет `cmd` + `commands`, `cmd` показывается как `(default)` (fallback при вызове без subcommand).
 
-Логика: если namespace резолвится как модуль — `list` показывает его команды. Если как namespace-директория — показывает непосредственных детей (вложенные namespaces и модули). `list` зарезервирован — команда с именем `list` (на любом уровне вложенности) в модуле — ошибка схемы.
+Логика: если namespace резолвится как модуль — `list` показывает его команды. Если как namespace-директория — показывает непосредственных детей (вложенные namespaces и модули). `list` — встроенная команда только первым словом: `futi docker list` вызывает команду `list` модуля `docker` (ошибка, если её нет).
 
 Флаг `-v`/`--verbose` добавляет колонку `PATH` — путь к манифесту модуля. Полезно при нескольких источниках модулей или отладке:
 
@@ -729,7 +733,7 @@ $ futi list -r
 │ module    │ images.png           │ PNG utilities        │
 └───────────┴──────────────────────┴──────────────────────┘
 
-$ futi images list -r                # от контекста images
+$ futi list images -r                # от контекста images
 ┌───────────┬──────────────────┬──────────────────────┐
 │   TYPE    │       NAME       │     DESCRIPTION      │
 ├───────────┼──────────────────┼──────────────────────┤
@@ -743,18 +747,19 @@ $ futi images list -r                # от контекста images
 
 ### Справка через `help`
 
-`help` — контекстная справка на любом уровне, без выхода в README:
+`futi help <path...>` — контекстная справка на любом уровне, без выхода в README; `-h`/`--help` после пути делает то же:
 
 ```bash
-futi demo help                 # справка по модулю
-futi demo build help           # справка по команде
-futi demo migrate help         # справка по ветке команд
+futi help demo                 # справка по модулю
+futi help demo build           # справка по команде (= futi demo build -h)
+futi help demo migrate         # справка по ветке команд
+futi help images               # namespace: его дети
 ```
 
 Модульная справка — описание, default cmd и список команд:
 
 ```bash
-$ futi demo help
+$ futi help demo
 demo — Demo module
 default: echo default
 commands:
@@ -766,7 +771,7 @@ commands:
 позиционные требования и итоговый шаблон команды:
 
 ```bash
-$ futi demo build help
+$ futi help demo build
 demo build — Build the project
 
 USAGE
@@ -781,9 +786,7 @@ CMD
   docker build -t {{.tag}} -f {{.file}} .
 ```
 
-`help` подсказывается автодополнением на каждом уровне (модуль/команда/
-subcommand). Если в модуле определена собственная команда `help` — вызывается
-она, системная справка не перехватывает user-defined имена. Пользовательская `help` исполняется как обычная команда: получает флаги и `-- args`, её stderr и код выхода пробрасываются.
+Каждое слово после `futi help` должно быть словом пути: `futi help docker build extra` — ошибка `unknown command "extra" for "futi docker build"`. `help` — встроенная команда только первым словом: `futi demo help` вызывает команду `help` модуля `demo` как обычную команду (флаги, `-- args`, её stderr и код выхода) и завершается ошибкой, если такой команды нет; `futi help demo help` показывает справку этой команды.
 
 ### `--dry-run`
 
@@ -800,8 +803,8 @@ docker build -t 'my app' -f Dockerfile .
 
 - Флаг распознаётся только первым аргументом `futi`; после пути `--dry-run` — обычный флаг модуля, а не зарезервированное имя параметра.
 - Хуки (`attach`/`detach`) не исполняются и не показываются: печатается только команда.
-- `-h` / `--help` после пути работает как обычно (справка, код 0). Пользовательская команда `help` модуля показывается как любая другая.
-- `list`, `help` (системная справка), `modules`, `cache`, `completion`, `--version` и `-h` без пути не команды модулей: с `--dry-run` они завершаются ошибкой `--dry-run applies only to module commands` (код 1).
+- `-h` / `--help` после пути работает как обычно (справка, код 0). Команда модуля с именем `help` (`futi --dry-run demo help`) показывается как любая другая.
+- `list`, `help`, `modules`, `cache`, `completion`, `--version` и `-h` без пути не команды модулей: с `--dry-run` они завершаются ошибкой `--dry-run applies only to module commands` (код 1).
 - **Секреты:** шаблон подставляет значения `{{.env.X}}` — они попадут в вывод. Не публикуйте результат `--dry-run` для команд с токенами и паролями в окружении.
 
 ---
@@ -846,7 +849,6 @@ $ echo $?
 - `params` или `positional.min` без `cmd` — на любом уровне (модуль, команда); параметры не наследуются подкомандами
 - синтаксическая ошибка шаблона в `cmd`, `attach`, `detach` (проверяется только разбор, имена переменных — нет)
 - недопустимое имя команды в `commands`: пустое, начинается с `-`, содержит `.`, пробельные или управляющие символы
-- команда с именем `list` (на любом уровне) — недостижима, `list` перехватывается как системный запрос
 - дубликаты имён `params` в команде
 - `type` параметра не из `{string, bool, int}` (пустой = `string`)
 - имя параметра зарезервировано (`args`, `args_list`, `env`, `module_name`, `module_root`) — иначе оно перекрылось бы служебной переменной шаблона

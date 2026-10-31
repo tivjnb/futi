@@ -498,10 +498,10 @@ func TestRunInitThroughSymlinkShowsResolvedPath(t *testing.T) {
 	}
 }
 
-// F57: зарезервированное слово запрещено в любом сегменте пути, а не только
-// в basename; validate и help зарезервированными не являются.
+// Reserved words are builtin commands, recognized only as the first word: they
+// are rejected as the top-level segment only; validate is not reserved.
 func TestRunInitReservedSegments(t *testing.T) {
-	for _, arg := range []string{"list", "cache", "modules", "completion", "__complete", "cache/tool", "a/list", "a/list.yaml", "a/list.yml", "a/modules/b"} {
+	for _, arg := range []string{"help", "list", "cache", "modules", "completion", "__complete", "cache/tool", "help.yaml", "list.yml"} {
 		t.Run("reject/"+arg, func(t *testing.T) {
 			t.Chdir(t.TempDir())
 			err := Init(&bytes.Buffer{}, io.Discard, InitOptions{Path: arg})
@@ -513,7 +513,7 @@ func TestRunInitReservedSegments(t *testing.T) {
 			}
 		})
 	}
-	for _, arg := range []string{"a/validate", "tools/help", "validate"} {
+	for _, arg := range []string{"a/validate", "tools/help", "validate", "a/list", "a/list.yaml", "a/modules/b"} {
 		t.Run("accept/"+arg, func(t *testing.T) {
 			t.Chdir(t.TempDir())
 			if err := Init(&bytes.Buffer{}, io.Discard, InitOptions{Path: arg}); err != nil {

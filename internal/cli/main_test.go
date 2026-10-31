@@ -158,9 +158,9 @@ func TestFutiBoolFlagDoesNotEatWord(t *testing.T) {
 	}
 	// Флаг до команды: "logs" больше не значение флага и не команда — путь [m].
 	out, errOut, code = runFutiBin(t, strictOrderManifest, "m", "--follow", "logs")
-	if code != 1 || out != "" || !strings.Contains(errOut, `module "m" has no default command`) ||
-		!strings.Contains(errOut, "the command path goes before flags") {
-		t.Fatalf("code=%d out=%q stderr=%q, want no-default-command error with path hint", code, out, errOut)
+	want := "\"futi m\" requires a subcommand (available: grp, logs, say) (put the full command path before flags)\n"
+	if code != 1 || out != "" || errOut != want {
+		t.Fatalf("code=%d out=%q stderr=%q, want 1 and %q", code, out, errOut, want)
 	}
 }
 
@@ -254,7 +254,7 @@ func runFutiBinary(t *testing.T, mods string, args ...string) (stdout, stderr st
 	return out.String(), errb.String(), code
 }
 
-// TestSystemHelpForNamespaceDirectory: futi <ns> -h и futi <ns> help для
+// TestSystemHelpForNamespaceDirectory: futi <ns> -h и futi help <ns> для
 // каталога-namespace (не модуля) печатают дочерние элементы, код 0 (audit F70).
 func TestSystemHelpForNamespaceDirectory(t *testing.T) {
 	mods := t.TempDir()
@@ -263,7 +263,7 @@ func TestSystemHelpForNamespaceDirectory(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(mods, "docker", "build.yaml"), "name: build\ncmd: \"echo built\"\n")
 
-	for _, args := range [][]string{{"docker", "-h"}, {"docker", "help"}} {
+	for _, args := range [][]string{{"docker", "-h"}, {"help", "docker"}} {
 		stdout, stderr, code := runFutiBinary(t, mods, args...)
 		if code != 0 || !strings.Contains(stdout, "build") {
 			t.Fatalf("futi %v: code=%d stdout=%q stderr=%q, want code 0 and stdout with %q", args, code, stdout, stderr, "build")

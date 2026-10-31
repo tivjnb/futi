@@ -549,15 +549,15 @@ out = os.path.join(os.getcwd(), "result.png")
 
 ```bash
 futi <namespace...> <command> [--param val] [-- args]   # call a module command
-futi <namespace...> [<command>] -h          # help for a path (module, branch or command)
+futi <path...> -h                           # help for a path (namespace, module, branch or command)
 futi <namespace>                            # default command (if the module has a module-level cmd)
 futi --dry-run <path...> <command>          # print the command without running it
+futi help <path...>                         # help for a path
 futi list                                   # modules and namespaces at the root
-futi <namespace...> list                    # contents of a namespace or module commands
-futi <namespace...> list -v                 # the same, with a PATH column
-futi <namespace...> list -r                 # recursive subtree traversal
+futi list <path...>                         # contents of a namespace or module commands
+futi list <path...> -v                      # the same, with a PATH column
+futi list <path...> -r                      # recursive subtree traversal
 futi modules validate <namespace>           # validate a module schema
-futi <namespace...> help                    # help for a module/command
 futi modules init <name> [flags]            # create a module from a template
 futi modules install <source> [flags]       # install a module from a source (local/git/archive)
 futi modules uninstall <name> [flags]       # detach + remove (with confirmation)
@@ -578,15 +578,19 @@ futi --version                              # print the version
 
 You cannot remove the only command of a module that has no `cmd`: the module would be empty; `futi modules remove_command` refuses and leaves the manifest unchanged.
 
-Parsing: the path is the words up to the first flag (a token with `-`); the last word of the path is the command, everything before it is the namespace (segments joined with `.`); then flags, then `--`. Arguments after `--` are passed to the command template as `{{.args}}` (a string) and `{{.args_list}}` (an array). Path segments may be written with dots: `futi docker.build` = `futi docker build` (if a module `docker.build` exists, it wins: the longest namespace is tried first).
+Parsing: the path is read word by word over the merged tree of all sources — namespace directories, modules and their commands. A word continues the path only if it is exactly the name of a child of the current node; the path ends at the first token that starts with `-` (longer than one character), at `--`, at a word that is not a child, or at the end. A word with dots is split into segments and continues the path only if all of them match: `futi docker.build` = `futi docker build`, while `file.txt` after a node with a child `file` is not a path word. After the path come flags, then `--`. Arguments after `--` are passed to the command template as `{{.args}}` (a string) and `{{.args_list}}` (an array). Flags of a parent node are not inherited by its subcommands.
 
-**Reserved names**: `list`, `cache`, `modules`, `completion`, `__complete` (intercepted by the CLI before module resolution) cannot be used in any segment of a module path — neither in a namespace nor in a name. The check runs in `futi modules init` and `futi modules install` (for `--namespace` and the resulting name); modules that are already installed are not affected. A module command named `list` is a schema error (see the validation errors section). `help` is an exception: if a module defines its own `help` command, it is called.
+If the reached node has no `cmd`, the call fails: `unknown command "x" for "futi docker" (available: build, run)` when a word follows, otherwise `"futi db" requires a subcommand (available: migrate)`. If a subcommand name appears later in the line (`futi db --verbose migrate up`), the hint ` (put the full command path before flags)` is added.
+
+**Path collision**: a path that names two things at once is an error, for example the module `dev/deploy.yaml` (`dev deploy`) and the command `deploy` of the module `dev.yaml`: `path "dev deploy" is ambiguous: command "deploy" of module dev (<manifest>) and module dev.deploy (<manifest>)`. It is checked over all sources together while the path is resolved. A local module that overrides a global module with the same name is not a collision.
+
+**Reserved names**: `help`, `list`, `cache`, `modules`, `completion`, `__complete` are builtin commands only as the first word, so they cannot be top-level module or namespace names. Deeper in the path they are ordinary names: `futi git help` and `futi git list` call the commands `help` and `list` of the module `git`, and `tools/help.yaml` is a valid module. The check runs in `futi modules init` and `futi modules install` (for `--namespace` and, without a namespace, for the resulting name); modules that are already installed are not affected.
 
 ```bash
-futi docker build --tag myapp        # namespace=docker, command=build
-futi dev deploy staging              # namespace=dev.deploy, command=staging
-futi k8s logs --follow -- mypod      # namespace=k8s, command=logs, follow=true, args="mypod"
-futi echo_mod echo -- hello world    # namespace=echo_mod, command=echo, args="hello world"
+futi docker build --tag myapp        # module docker, command build
+futi dev deploy staging              # module dev.deploy, command staging
+futi k8s logs --follow -- mypod      # module k8s, command logs, follow=true, args="mypod"
+futi echo_mod echo -- hello world    # module echo_mod, command echo, args="hello world"
 futi echo_mod -- hello world         # default cmd of the echo_mod module, args="hello world"
 ```
 
@@ -594,7 +598,7 @@ futi echo_mod -- hello world         # default cmd of the echo_mod module, args=
 
 ### Navigation with `list`
 
-`list` shows the contents of the current level of the hierarchy:
+`futi list [<path...>]` shows the contents of a level of the hierarchy (the path may be written with spaces or dots: `futi list images converter` = `futi list images.converter`):
 
 ```bash
 $ futi list                          # root: modules and namespaces
@@ -605,7 +609,7 @@ $ futi list                          # root: modules and namespaces
 │ namespace │ images │                   │
 └───────────┴────────┴───────────────────┘
 
-$ futi images list                   # namespace: nested namespaces and modules
+$ futi list images                   # namespace: nested namespaces and modules
 ┌───────────┬───────────┬───────────────┐
 │   TYPE    │   NAME    │  DESCRIPTION  │
 ├───────────┼───────────┼───────────────┤
@@ -613,14 +617,14 @@ $ futi images list                   # namespace: nested namespaces and modules
 │ module    │ png       │ PNG utilities │
 └───────────┴───────────┴───────────────┘
 
-$ futi images converter list         # nested namespace
+$ futi list images converter         # nested namespace
 ┌────────┬────────┬──────────────────────┐
 │  TYPE  │  NAME  │     DESCRIPTION      │
 ├────────┼────────┼──────────────────────┤
 │ module │ to_png │ Convert images to PNG │
 └────────┴────────┴──────────────────────┘
 
-$ futi images png list               # module: commands
+$ futi list images png               # module: commands
 ┌─────────┬─────────────┐
 │ COMMAND │ DESCRIPTION │
 ├─────────┼─────────────┤
@@ -628,7 +632,7 @@ $ futi images png list               # module: commands
 │ resize  │             │
 └─────────┴─────────────┘
 
-$ futi docker list                   # module at the root: commands
+$ futi list docker                   # module at the root: commands
 ┌─────────┬─────────────┐
 │ COMMAND │ DESCRIPTION │
 ├─────────┼─────────────┤
@@ -640,7 +644,7 @@ $ futi docker list                   # module at the root: commands
 If a module has a default command (a module-level `cmd`), it is shown first with the `(default)` marker:
 
 ```bash
-$ futi echo_mod list                 # module with a default cmd
+$ futi list echo_mod                 # module with a default cmd
 ┌───────────┬─────────────┐
 │ COMMAND   │ DESCRIPTION │
 ├───────────┼─────────────┤
@@ -651,7 +655,7 @@ $ futi echo_mod list                 # module with a default cmd
 
 The same goes for subcommands: if a command has `cmd` + `commands`, `cmd` is shown as `(default)` (the fallback when called without a subcommand).
 
-Logic: if the namespace resolves to a module, `list` shows its commands. If it resolves to a namespace directory, it shows the direct children (nested namespaces and modules). `list` is reserved: a command named `list` (at any nesting level) in a module is a schema error.
+Logic: if the namespace resolves to a module, `list` shows its commands. If it resolves to a namespace directory, it shows the direct children (nested namespaces and modules). `list` is a builtin only as the first word: `futi docker list` calls the command `list` of the module `docker` (an error if there is none).
 
 The `-v`/`--verbose` flag adds a `PATH` column — the path to the module manifest. Useful with several module sources or when debugging:
 
@@ -679,7 +683,7 @@ $ futi list -r
 │ module    │ images.png           │ PNG utilities        │
 └───────────┴──────────────────────┴──────────────────────┘
 
-$ futi images list -r                # from the images context
+$ futi list images -r                # from the images context
 ┌───────────┬──────────────────┬──────────────────────┐
 │   TYPE    │       NAME       │     DESCRIPTION      │
 ├───────────┼──────────────────┼──────────────────────┤
@@ -693,18 +697,19 @@ $ futi images list -r                # from the images context
 
 ### Help with `help`
 
-`help` is contextual help at any level, without leaving the terminal for the README:
+`futi help <path...>` is contextual help at any level, without leaving the terminal for the README; `-h`/`--help` after a path does the same:
 
 ```bash
-futi demo help                 # module help
-futi demo build help           # command help
-futi demo migrate help         # help for a command branch
+futi help demo                 # module help
+futi help demo build           # command help (= futi demo build -h)
+futi help demo migrate         # help for a command branch
+futi help images               # namespace: its children
 ```
 
 Module help shows the description, the default cmd and the list of commands:
 
 ```bash
-$ futi demo help
+$ futi help demo
 demo — Demo module
 default: echo default
 commands:
@@ -715,7 +720,7 @@ commands:
 Command help shows USAGE with parameters (type, required, default, description), positional requirements and the final command template:
 
 ```bash
-$ futi demo build help
+$ futi help demo build
 demo build — Build the project
 
 USAGE
@@ -730,7 +735,7 @@ CMD
   docker build -t {{.tag}} -f {{.file}} .
 ```
 
-`help` is suggested by completion at every level (module/command/subcommand). If a module defines its own `help` command, that one is called; system help does not intercept user-defined names. A user-defined `help` runs as an ordinary command: it receives flags and `-- args`, and its stderr and exit code are passed through.
+Every word after `futi help` must be a path word: `futi help docker build extra` fails with `unknown command "extra" for "futi docker build"`. `help` is a builtin only as the first word: `futi demo help` calls the command `help` of the module `demo` as an ordinary command (flags, `-- args`, its stderr and exit code), and fails if there is no such command; `futi help demo help` shows the help of that command.
 
 ### `--dry-run`
 
@@ -747,8 +752,8 @@ The output is one line on stdout: the command's argv after template rendering an
 
 - The flag is recognized only as the first argument of `futi`; after the path `--dry-run` is an ordinary module flag, not a reserved parameter name.
 - Hooks (`attach`/`detach`) are not executed and not shown: only the command is printed.
-- `-h` / `--help` after the path works as usual (help, exit code 0). A module's user-defined `help` command is shown like any other.
-- `list`, `help` (system help), `modules`, `cache`, `completion`, `--version` and `-h` without a path are not module commands: with `--dry-run` they fail with the error `--dry-run applies only to module commands` (exit code 1).
+- `-h` / `--help` after the path works as usual (help, exit code 0). A module command named `help` (`futi --dry-run demo help`) is shown like any other.
+- `list`, `help`, `modules`, `cache`, `completion`, `--version` and `-h` without a path are not module commands: with `--dry-run` they fail with the error `--dry-run applies only to module commands` (exit code 1).
 - **Secrets:** the template substitutes `{{.env.X}}` values, and they will appear in the output. Do not publish `--dry-run` output for commands with tokens and passwords in the environment.
 
 ---
@@ -793,7 +798,6 @@ $ echo $?
 - `params` or `positional.min` without `cmd` — at any level (module, command); parameters are not inherited by subcommands
 - a template syntax error in `cmd`, `attach`, `detach` (only parsing is checked, not variable names)
 - an invalid command name in `commands`: empty, starts with `-`, contains `.`, whitespace or control characters
-- a command named `list` (at any level) is unreachable: `list` is intercepted as a system request
 - duplicate `params` names in a command
 - a parameter `type` outside `{string, bool, int}` (empty = `string`)
 - a reserved parameter name (`args`, `args_list`, `env`, `module_name`, `module_root`) — otherwise it would be shadowed by a template service variable

@@ -332,9 +332,9 @@ func TestRunModulesInstallReservedSegments(t *testing.T) {
 		mod  string
 	}{
 		{"namespace cache", func(src string) InstallOptions { return InstallOptions{Source: src, Namespace: "cache"} }, "qr"},
-		{"namespace a.list", func(src string) InstallOptions { return InstallOptions{Source: src, Namespace: "a.list"} }, "qr"},
-		{"namespace a/list", func(src string) InstallOptions { return InstallOptions{Source: src, Namespace: "a/list"} }, "qr"},
+		{"namespace help/x", func(src string) InstallOptions { return InstallOptions{Source: src, Namespace: "help/x"} }, "qr"},
 		{"manifest name completion", func(src string) InstallOptions { return InstallOptions{Source: src} }, "completion"},
+		{"manifest name help", func(src string) InstallOptions { return InstallOptions{Source: src} }, "help"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -379,7 +379,7 @@ func TestRunModulesInstallReservedFallbackName(t *testing.T) {
 func TestRunModulesInstallLocalReservedNamespace(t *testing.T) {
 	t.Chdir(t.TempDir())
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
-	err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Local: true, Namespace: "x.modules"})
+	err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Local: true, Namespace: "modules.x"})
 	if err == nil || !strings.Contains(err.Error(), "is a reserved name") {
 		t.Fatalf("expected reserved name error, got %v", err)
 	}
@@ -388,15 +388,37 @@ func TestRunModulesInstallLocalReservedNamespace(t *testing.T) {
 	}
 }
 
+// Below the top level reserved words are ordinary names: a namespace segment
+// and a module name under a namespace.
+func TestRunModulesInstallReservedBelowTopLevelOK(t *testing.T) {
+	for _, tc := range []struct{ namespace, mod, want string }{
+		{"a.list", "qr", filepath.Join("a", "list", "qr")},
+		{"tools", "help", filepath.Join("tools", "help")},
+	} {
+		t.Run(tc.namespace+"/"+tc.mod, func(t *testing.T) {
+			global := t.TempDir()
+			t.Setenv("FUTI_MODULES_DIR", global)
+			t.Chdir(t.TempDir())
+			src := makeSourceModule(t, t.TempDir(), tc.mod, "")
+			if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Namespace: tc.namespace}); err != nil {
+				t.Fatalf("install: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(global, tc.want, "config.yaml")); err != nil {
+				t.Fatalf("module not installed: %v", err)
+			}
+		})
+	}
+}
+
 func TestRunModulesInstallNonReservedNamespaceOK(t *testing.T) {
 	global := t.TempDir()
 	t.Setenv("FUTI_MODULES_DIR", global)
 	t.Chdir(t.TempDir())
 	src := makeSourceModule(t, t.TempDir(), "qr", "")
-	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Namespace: "validate.help"}); err != nil {
+	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Namespace: "validate.x"}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(global, "validate", "help", "qr", "config.yaml")); err != nil {
+	if _, err := os.Stat(filepath.Join(global, "validate", "x", "qr", "config.yaml")); err != nil {
 		t.Fatalf("module not installed: %v", err)
 	}
 }

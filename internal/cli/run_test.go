@@ -84,7 +84,7 @@ func TestRunParsedPassesStdin(t *testing.T) {
 	writeMainTestFile(t, filepath.Join(dir, "m.yaml"), "cmd: cat\n")
 	rt := testRuntime(t, core.Options{ModulesDir: dir})
 	var stdout, stderr bytes.Buffer
-	code, err := runParsed(t.Context(), strings.NewReader("x"), &stdout, &stderr, rt, &parsedArgs{command: "m"})
+	code, err := runParsed(t.Context(), strings.NewReader("x"), &stdout, &stderr, rt, &parsedArgs{words: []string{"m"}})
 	if code != 0 || err != nil || stdout.String() != "x" {
 		t.Fatalf("code=%d err=%v stdout=%q stderr=%q, want 0, nil, %q", code, err, stdout.String(), stderr.String(), "x")
 	}

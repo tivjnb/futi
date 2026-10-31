@@ -108,7 +108,7 @@ func TestCompleteEmptyArgsRoot(t *testing.T) {
 	got := text(matches)
 
 	// builtins + корневые модули + namespace (отсортировано по алфавиту).
-	want := []string{"cache", "completion", "dev", "docker", "git", "list", "meta", "modules", "tools"}
+	want := []string{"cache", "completion", "dev", "docker", "git", "help", "list", "meta", "modules", "tools"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected matches: %v, want %v", got, want)
 	}
@@ -780,8 +780,8 @@ func TestIsReservedName(t *testing.T) {
 		{"modules", true},
 		{"completion", true},
 		{"__complete", true},
+		{"help", true},
 		{"validate", false},
-		{"help", false},
 		{"init", false},
 		{"", false},
 	}
@@ -790,8 +790,8 @@ func TestIsReservedName(t *testing.T) {
 			t.Errorf("IsReservedName(%q) = %v, want %v", tt.name, got, tt.want)
 		}
 	}
-	if len(ReservedNames) != 5 {
-		t.Errorf("ReservedNames = %v, want 5 names", ReservedNames)
+	if len(ReservedNames) != 6 {
+		t.Errorf("ReservedNames = %v, want 6 names", ReservedNames)
 	}
 }
 
@@ -831,7 +831,7 @@ func TestCompleteBuiltinWinsOverModule(t *testing.T) {
 func TestCompleteRootBuiltinNotDuplicatedByModule(t *testing.T) {
 	src := newReservedSource(t, "cache", "dev")
 	matches, _ := Complete(src, nil, []string{}, "")
-	want := []string{"cache", "completion", "dev", "list", "modules"}
+	want := []string{"cache", "completion", "dev", "help", "list", "modules"}
 	if got := text(matches); !reflect.DeepEqual(got, want) {
 		t.Fatalf("root matches = %v, want %v", got, want)
 	}

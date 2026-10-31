@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,9 +52,9 @@ commands:
 	return testRuntime(t, core.Options{ModulesDir: dir})
 }
 
-// helpArgs — helpRequest для позиционного пути без флагов и args.
-func helpArgs(positional ...string) *helpRequest {
-	return &helpRequest{positional: positional}
+// helpArgs — helpRequest для пути (futi help <path...>).
+func helpArgs(path ...string) *helpRequest {
+	return &helpRequest{path: path}
 }
 
 // testRuntime builds a Runtime with the CLI exec policy for tests.
@@ -74,8 +73,17 @@ func testRuntime(t *testing.T, opts core.Options) *core.Runtime {
 func runHelpFor(t *testing.T, rt *core.Runtime, req *helpRequest) (code int, stdout, stderr string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code, _ = runHelp(context.Background(), nil, &out, &errOut, rt, req)
+	code = runHelp(&out, &errOut, rt, req.path)
 	return code, out.String(), errOut.String()
+}
+
+// runWordsFor runs the command words through runParsed with separate
+// stdout/stderr buffers.
+func runWordsFor(t *testing.T, rt *core.Runtime, words ...string) (code int, runErr error, stdout, stderr string) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	code, runErr = runParsed(context.Background(), nil, &out, &errOut, rt, &parsedArgs{words: words})
+	return code, runErr, out.String(), errOut.String()
 }
 
 func TestRunHelpModule(t *testing.T) {
@@ -114,27 +122,15 @@ func TestRunHelpBranch(t *testing.T) {
 	}
 }
 
-func TestRunHelpUserDefinedWins(t *testing.T) {
+// futi help <module> is system help even if the module has a command help.
+func TestRunHelpSystemEvenWithUserHelpCommand(t *testing.T) {
 	rt := helpTestSource(t)
-	// demo имеет команду help → user-defined help выигрывает (выполняется).
 	code, stdout, stderr := runHelpFor(t, rt, helpArgs("demo"))
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}
-	if !strings.Contains(stdout, "CUSTOM") {
-		t.Fatalf("expected user-defined help to run, got:\n%s", stdout)
-	}
-}
-
-func TestRunHelpUserDefinedSubcommandWins(t *testing.T) {
-	rt := helpTestSource(t)
-	// demo.greet не имеет subcommand help → системная справка команды.
-	code, stdout, stderr := runHelpFor(t, rt, helpArgs("demo", "greet"))
-	if code != 0 {
-		t.Fatalf("code = %d, stderr: %s", code, stderr)
-	}
-	if strings.Contains(stdout, "CUSTOM") {
-		t.Fatalf("unexpected user-defined help for greet: %s", stdout)
+	if strings.Contains(stdout, "CUSTOM") || !strings.Contains(stdout, "Feature showcase") {
+		t.Fatalf("expected system help of demo, got:\n%s", stdout)
 	}
 }
 
@@ -158,20 +154,6 @@ func TestRunHelpNotFound(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "nonexistent") {
 		t.Fatalf("expected command name in error, got: %v", stderr)
-	}
-}
-
-func TestParseArgsHelpDetection(t *testing.T) {
-	_, err := parseArgs([]string{"demo", "greet", "help"})
-	if err == nil {
-		t.Fatal("expected helpRequest")
-	}
-	var hr *helpRequest
-	if !errors.As(err, &hr) {
-		t.Fatalf("expected helpRequest, got %T", err)
-	}
-	if len(hr.positional) != 2 || hr.positional[0] != "demo" || hr.positional[1] != "greet" {
-		t.Fatalf("unexpected positional: %v", hr.positional)
 	}
 }
 
@@ -225,61 +207,44 @@ commands:
 	return testRuntime(t, core.Options{ModulesDir: dir})
 }
 
-func TestRunHelpUserCommandGetsFlagsAndArgs(t *testing.T) {
+// A trailing help is an ordinary user command: flags, args, streams and the
+// exit code are those of the command.
+func TestRunTrailingHelpUserCommandGetsFlagsAndArgs(t *testing.T) {
 	rt := userHelpSource(t)
-	req := &helpRequest{
-		positional: []string{"m"},
-		flags:      []string{"--x", "1"},
-		argsList:   []string{"a", "b"},
-	}
-	code, stdout, stderr := runHelpFor(t, rt, req)
+	code, _, stdout, stderr := runWordsFor(t, rt, "m", "help", "--x", "1", "--", "a", "b")
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}
 	if !strings.Contains(stdout, "x=1 args=a b") {
 		t.Fatalf("stdout = %q, want it to contain %q", stdout, "x=1 args=a b")
 	}
-}
-
-func TestRunHelpUserCommandStderrSeparate(t *testing.T) {
-	rt := userHelpSource(t)
-	req := &helpRequest{positional: []string{"m"}, flags: []string{"--x", "1"}}
-	_, stdout, stderr := runHelpFor(t, rt, req)
-	if strings.Contains(stdout, "ERRTEXT") {
-		t.Fatalf("stderr команды попал в stdout: %q", stdout)
-	}
-	if !strings.Contains(stderr, "ERRTEXT") {
-		t.Fatalf("stderr = %q, want it to contain ERRTEXT", stderr)
+	if strings.Contains(stdout, "ERRTEXT") || !strings.Contains(stderr, "ERRTEXT") {
+		t.Fatalf("stdout = %q, stderr = %q, want ERRTEXT only in stderr", stdout, stderr)
 	}
 }
 
-func TestRunHelpUserCommandExitCode(t *testing.T) {
+func TestRunTrailingHelpUserCommandExitCode(t *testing.T) {
 	rt := userHelpSource(t)
-	var out, errOut bytes.Buffer
-	code, err := runHelp(context.Background(), nil, &out, &errOut, rt, helpArgs("bad"))
+	code, runErr, _, stderr := runWordsFor(t, rt, "bad", "help")
 	if code != 3 {
-		t.Fatalf("code = %d, want 3 (stderr: %s)", code, errOut.String())
+		t.Fatalf("code = %d, want 3 (stderr: %s)", code, stderr)
 	}
-	if err == nil {
+	if runErr == nil {
 		t.Fatal("ожидалась ошибка запуска для сигнального пути вызывающего")
 	}
 }
 
-func TestRunHelpUserCommandMissingRequiredParam(t *testing.T) {
+func TestRunTrailingHelpUserCommandMissingRequiredParam(t *testing.T) {
 	rt := userHelpSource(t)
-	code, _, stderr := runHelpFor(t, rt, helpArgs("m"))
-	if code != 1 {
-		t.Fatalf("code = %d, want 1", code)
-	}
-	if !strings.Contains(stderr, "required") {
-		t.Fatalf("stderr = %q, want it to mention required", stderr)
+	code, _, _, stderr := runWordsFor(t, rt, "m", "help")
+	if code != 1 || !strings.Contains(stderr, "required") {
+		t.Fatalf("code = %d, stderr = %q, want 1 and a required error", code, stderr)
 	}
 }
 
-func TestRunHelpUserCommandHelpFlagShowsItsHelp(t *testing.T) {
+func TestRunTrailingHelpUserCommandHelpFlagShowsItsHelp(t *testing.T) {
 	rt := userHelpSource(t)
-	req := &helpRequest{positional: []string{"m"}, flags: []string{"--help"}}
-	code, stdout, stderr := runHelpFor(t, rt, req)
+	code, _, stdout, stderr := runWordsFor(t, rt, "m", "help", "--help")
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}
@@ -289,60 +254,23 @@ func TestRunHelpUserCommandHelpFlagShowsItsHelp(t *testing.T) {
 	}
 }
 
-func TestRunHelpSystemIgnoresFlags(t *testing.T) {
+// futi help <path> describes a command named help instead of running it.
+func TestRunHelpDescribesUserHelpCommand(t *testing.T) {
 	rt := userHelpSource(t)
-	req := &helpRequest{positional: []string{"plain"}, flags: []string{"--x", "1"}, argsList: []string{"a"}}
-	code, stdout, stderr := runHelpFor(t, rt, req)
-	if code != 0 {
-		t.Fatalf("code = %d, stderr: %s", code, stderr)
-	}
-	if !strings.Contains(stdout, "Plain module") {
-		t.Fatalf("stdout = %q, want system help of module", stdout)
+	code, stdout, stderr := runHelpFor(t, rt, helpArgs("m", "help"))
+	if code != 0 || !strings.Contains(stdout, "Custom help text") || stderr != "" {
+		t.Fatalf("code = %d, stdout = %q, stderr = %q, want system help of m help", code, stdout, stderr)
 	}
 }
 
-func TestParseArgsHelpRequestKeepsFlagsAndArgs(t *testing.T) {
-	_, err := parseArgs([]string{"m", "help", "--x", "1", "--", "a", "b"})
-	var hr *helpRequest
-	if !errors.As(err, &hr) {
-		t.Fatalf("expected helpRequest, got %v", err)
-	}
-	if strings.Join(hr.flags, " ") != "--x 1" || strings.Join(hr.argsList, ",") != "a,b" {
-		t.Fatalf("flags=%v argsList=%v", hr.flags, hr.argsList)
-	}
-}
-
-// `futi help` при модуле help с default cmd: namespace="help", command="".
-func TestRunHelpUserModuleNamedHelp(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "help.yaml"), `
-name: help
-cmd: "echo MODULEHELP"
-`)
-	code, stdout, stderr := runHelpFor(t, testRuntime(t, core.Options{ModulesDir: dir}), helpArgs())
-	if code != 0 {
-		t.Fatalf("code = %d, stderr: %s", code, stderr)
-	}
-	if !strings.Contains(stdout, "MODULEHELP") {
-		t.Fatalf("stdout = %q, want default cmd of module help", stdout)
-	}
-}
-
-// `demo.greet help` должен вести себя как `demo greet help`: сегмент пути с
-// точкой делится на namespace и команду.
-func TestParseArgsHelpDotNamespaceMatchesSpacedPath(t *testing.T) {
+func TestRunHelpDottedPath(t *testing.T) {
 	rt := helpTestSource(t)
-	_, err := parseArgs([]string{"demo.greet", "help"})
-	var req *helpRequest
-	if !errors.As(err, &req) {
-		t.Fatalf("err = %v, want helpRequest", err)
-	}
-	code, stdout, stderr := runHelpFor(t, rt, req)
+	code, stdout, stderr := runHelpFor(t, rt, helpArgs("demo.greet"))
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}
-	if !strings.Contains(stdout, "Greet someone") || !strings.Contains(stdout, "--name") {
-		t.Fatalf("expected help of command greet, got:\n%s", stdout)
+	if !strings.HasPrefix(stdout, "demo greet — Greet someone\n") || !strings.Contains(stdout, "--name") {
+		t.Fatalf("expected help of command demo greet, got:\n%s", stdout)
 	}
 }
 
@@ -390,38 +318,9 @@ commands:
 	}
 }
 
-func TestIsExecutableHelpReloadsChangedManifest(t *testing.T) {
-	src, cache := staleCacheSource(t, `
-name: stale
-commands:
-  run:
-    cmd: "echo run"
-`, `
-name: stale
-commands:
-  run:
-    cmd: "echo run"
-  help:
-    cmd: "echo CUSTOM"
-`)
-	if _, ok := core.ExecutableHelpIn(src, cache, []string{"stale", "help"}); !ok {
-		t.Error("ExecutableHelpIn executable = false, want true (help добавлена на диске)")
-	}
-}
-
-// TestRunHelpDecision pins which path runHelp takes (user-defined help vs
-// system help) and what each path prints.
-func TestRunHelpDecision(t *testing.T) {
+// TestRunHelpPaths pins what futi help <path> prints for each kind of node.
+func TestRunHelpPaths(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "leaf.yaml"), `
-name: leaf
-commands:
-  help:
-    params:
-      - name: x
-        type: string
-    cmd: "echo leafhelp x={{.x}} args={{quote .args}}"
-`)
 	writeFile(t, filepath.Join(dir, "branch.yaml"), `
 name: branch
 description: Branch module
@@ -438,17 +337,7 @@ commands:
   run:
     cmd: "echo running"
 `)
-	writeFile(t, filepath.Join(dir, "x", "help.yaml"), `
-name: xhelp
-cmd: "echo xhelp"
-`)
 	writeFile(t, filepath.Join(dir, "bad.yaml"), "commands: [")
-	writeFile(t, filepath.Join(dir, "ex.yaml"), `
-name: ex
-commands:
-  help:
-    cmd: "sh -c 'exit 3'"
-`)
 	writeFile(t, filepath.Join(dir, "c", "help.yaml"), `
 name: chelp
 cmd: "echo a"
@@ -466,16 +355,12 @@ cmd: "echo b"
 		wantStdout string
 		wantStderr string
 	}{
-		{"executable leaf binds flag", &helpRequest{positional: []string{"leaf"}, flags: []string{"--x", "1"}}, 0, "leafhelp x=1 args=\n", ""},
-		{"branch without cmd gives system help", helpArgs("branch"), 0, "branch — Branch module\ncommands:\n  help\n", ""},
-		{"module without help gives system help", helpArgs("plain"), 0, "plain — Plain module\ncommands:\n  run\n", ""},
-		{"positional x resolves to module x.help", helpArgs("x"), 0, "xhelp\n", ""},
+		{"module", helpArgs("branch"), 0, "branch — Branch module\ncommands:\n  help\n", ""},
+		{"module without help command", helpArgs("plain"), 0, "plain — Plain module\ncommands:\n  run\n", ""},
 		{"broken yaml", helpArgs("bad"), 1, "", "help: execmodule: parse manifest \"" + filepath.Join(dir, "bad.yaml") + "\": yaml: line 1: did not find expected node content\n"},
-		{"unknown path with dry-run is plain not-found", &helpRequest{positional: []string{"nope"}, dryRun: true}, 1, "", "help: module not found for \"nope\"\n"},
-		{"known module without help with dry-run is rejected", &helpRequest{positional: []string{"plain"}, dryRun: true}, 1, "", "futi: --dry-run applies only to module commands\n"},
-		{"executable help gets args", &helpRequest{positional: []string{"leaf"}, argsList: []string{"a", "b"}}, 0, "leafhelp x= args=a b\n", ""},
-		{"executable help with dry-run prints argv", &helpRequest{positional: []string{"leaf"}, flags: []string{"--x", "1"}, dryRun: true}, 0, "echo leafhelp x=1 args=\n", ""},
-		{"executable help exit code", helpArgs("ex"), 3, "", "run: executor: run \"sh\": exit status 3\n"},
+		{"unknown path", helpArgs("nope"), 1, "", "unknown command \"nope\" for \"futi\"\n"},
+		{"unknown command", helpArgs("plain", "nope"), 1, "", "unknown command \"nope\" for \"futi plain\" (available: run)\n"},
+		{"extra word after a leaf", helpArgs("plain", "run", "x"), 1, "", "unknown command \"x\" for \"futi plain run\"\n"},
 		{"yaml vs config.yaml conflict on help", helpArgs("c"), 0, "┌────────┬──────┬──────────────────────────────────────────┐\n│  TYPE  │ NAME │               DESCRIPTION                │\n├────────┼──────┼──────────────────────────────────────────┤\n│ module │ help │ conflict: help.yaml and help/config.yaml │\n└────────┴──────┴──────────────────────────────────────────┘\n", ""},
 	}
 	for _, tc := range tests {

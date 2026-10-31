@@ -129,8 +129,11 @@ func (m *Manager) Install(ctx context.Context, opts InstallOptions) (retErr erro
 	if err := validateModuleName(name); err != nil {
 		return fmt.Errorf("modules install: %w", err)
 	}
-	if err := checkReservedSegments(name, "/"); err != nil {
-		return fmt.Errorf("modules install: %w", err)
+	if opts.Namespace == "" {
+		// Under a namespace the module name is not a top-level segment.
+		if err := checkReservedSegments(name, "/"); err != nil {
+			return fmt.Errorf("modules install: %w", err)
+		}
 	}
 	if err := validateSegmentsNoDot(name); err != nil {
 		if mod.Name == "" {

@@ -4,10 +4,22 @@ import (
 	"context"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/executor"
 )
+
+// resolveForTest resolves namespace and command, the old two-part form, via
+// ResolveWords: namespace segments, then command if it is not empty.
+func resolveForTest(source discovery.Source, loader ModuleLoader, namespace, command string) (*Resolved, error) {
+	words := strings.Split(namespace, ".")
+	if command != "" {
+		words = append(words, command)
+	}
+	r, _, err := ResolveWords(source, loader, words)
+	return r, err
+}
 
 // prepareForTest resolves, validates and renders a command in one step.
 func prepareForTest(
@@ -17,7 +29,7 @@ func prepareForTest(
 	argsList []string,
 	loader ModuleLoader,
 ) (*Prepared, error) {
-	r, err := Resolve(source, loader, namespace, command)
+	r, err := resolveForTest(source, loader, namespace, command)
 	if err != nil {
 		return nil, err
 	}

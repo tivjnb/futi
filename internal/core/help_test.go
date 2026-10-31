@@ -85,16 +85,50 @@ func TestHelpInNamespaceChildren(t *testing.T) {
 }
 
 func TestHelpInNotFound(t *testing.T) {
-	src := discovery.NewGlobalSource(t.TempDir())
-	_, err := core.HelpIn(src, nil, []string{"a", "b"})
-	if err == nil || err.Error() != `help: module not found for "a b"` {
-		t.Fatalf("err = %v, want help: module not found for \"a b\"", err)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "db.yaml"), "name: db\ncommands:\n  up:\n    cmd: echo up\n")
+	src := discovery.NewGlobalSource(dir)
+	tests := []struct {
+		path []string
+		want string
+		is   error
+	}{
+		{[]string{"a", "b"}, `unknown command "a" for "futi"`, modulerunner.ErrModuleNotFound},
+		{[]string{"db", "up", "extra"}, `unknown command "extra" for "futi db up"`, execmodule.ErrCommandNotFound},
+		{[]string{"db", "down"}, `unknown command "down" for "futi db" (available: up)`, execmodule.ErrCommandNotFound},
 	}
-	if !errors.Is(err, modulerunner.ErrModuleNotFound) {
-		t.Errorf("err does not unwrap to modulerunner.ErrModuleNotFound: %v", err)
+	for _, tt := range tests {
+		_, err := core.HelpIn(src, nil, tt.path)
+		if err == nil || err.Error() != tt.want {
+			t.Errorf("HelpIn(%q) err = %v, want %q", tt.path, err, tt.want)
+			continue
+		}
+		if !errors.Is(err, tt.is) || !errors.Is(err, core.ErrNotFound) {
+			t.Errorf("HelpIn(%q) err = %v, want %v classified ErrNotFound", tt.path, err, tt.is)
+		}
 	}
-	if !errors.Is(err, core.ErrNotFound) {
-		t.Errorf("err is not classified ErrNotFound: %v", err)
+}
+
+func TestHelpInDottedPath(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "db.yaml"), "name: db\ncommands:\n  up:\n    description: Apply\n    cmd: echo up\n")
+	doc, err := core.HelpIn(discovery.NewGlobalSource(dir), nil, []string{"db.up"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Kind != core.HelpCommand || doc.Command.Description != "Apply" || !reflect.DeepEqual(doc.Path, []string{"db", "up"}) {
+		t.Errorf("doc = %+v, want HelpCommand of db up", doc)
+	}
+}
+
+func TestHelpInCollision(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "dev.yaml"), "name: dev\ncommands:\n  deploy:\n    cmd: echo a\n")
+	writeFile(t, filepath.Join(dir, "dev", "deploy.yaml"), "cmd: echo b\n")
+	_, err := core.HelpIn(discovery.NewGlobalSource(dir), nil, []string{"dev", "deploy"})
+	var ce *modulerunner.CollisionError
+	if !errors.As(err, &ce) {
+		t.Fatalf("err = %v, want *CollisionError", err)
 	}
 }
 
@@ -142,37 +176,6 @@ func TestHelpInModuleUsesVerifiedLoad(t *testing.T) {
 	}
 	if spy.verified != 1 || spy.plain != 0 {
 		t.Errorf("verified=%d plain=%d, want 1, 0", spy.verified, spy.plain)
-	}
-}
-
-func TestExecutableHelpIn(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "x.yaml"),
-		"name: x\ncommands:\n  help:\n    cmd: echo custom\n")
-	writeFile(t, filepath.Join(dir, "y.yaml"),
-		"name: y\ncommands:\n  run:\n    cmd: echo run\n")
-	writeFile(t, filepath.Join(dir, "help.yaml"), "name: help\ncmd: echo help\n")
-	src := discovery.NewGlobalSource(dir)
-
-	tests := []struct {
-		name           string
-		path           []string
-		wantResolved   bool
-		wantExecutable bool
-	}{
-		{"leaf help with cmd", []string{"x", "help"}, true, true},
-		{"no help command", []string{"y", "help"}, true, false},
-		{"module help with cmd", []string{"help"}, true, true},
-		{"missing path", []string{"nope", "help"}, false, false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			resolved, executable := core.ExecutableHelpIn(src, nil, tc.path)
-			if resolved != tc.wantResolved || executable != tc.wantExecutable {
-				t.Errorf("ExecutableHelpIn(%v) = (%v, %v), want (%v, %v)",
-					tc.path, resolved, executable, tc.wantResolved, tc.wantExecutable)
-			}
-		})
 	}
 }
 

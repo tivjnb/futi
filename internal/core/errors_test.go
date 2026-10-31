@@ -25,7 +25,6 @@ func TestClassify(t *testing.T) {
 		{"module not found", modulerunner.ErrModuleNotFound, fmt.Errorf("modulerunner: %w", modulerunner.ErrModuleNotFound), ErrNotFound},
 		{"command not found", execmodule.ErrCommandNotFound, fmt.Errorf("modulerunner: %w", execmodule.ErrCommandNotFound), ErrNotFound},
 		{"invalid namespace", discovery.ErrInvalidNamespace, fmt.Errorf("modulerunner: %w", discovery.ErrInvalidNamespace), ErrInvalidInput},
-		{"no default command", modulerunner.ErrNoDefaultCommand, fmt.Errorf("modulerunner: %w", modulerunner.ErrNoDefaultCommand), ErrInvalidInput},
 		{"requires subcommand", execmodule.ErrRequiresSubcommand, fmt.Errorf("modulerunner: %w", execmodule.ErrRequiresSubcommand), ErrInvalidInput},
 	}
 	for _, tc := range cases {

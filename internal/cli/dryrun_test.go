@@ -112,14 +112,14 @@ func TestFutiDryRun(t *testing.T) {
 		{"--dry-run", "--help"},
 		{"--dry-run", "--version"},
 		{"--dry-run", "list"},
-		{"--dry-run", "m", "list"},
+		{"--dry-run", "list", "m"},
 		{"--dry-run", "modules", "list"},
 		{"--dry-run", "modules", "init", "zz"},
 		{"--dry-run", "modules", "validate", "m"},
 		{"--dry-run", "cache", "status"},
 		{"--dry-run", "completion", "bash"},
 		{"--dry-run", "__complete", ""},
-		{"--dry-run", "plain", "help"},
+		{"--dry-run", "help", "plain"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			stdout, stderr, code := run(args...)

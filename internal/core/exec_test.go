@@ -16,7 +16,6 @@ import (
 
 	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/execmodule"
-	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
 func TestResolveTarget(t *testing.T) {
@@ -29,7 +28,7 @@ func TestResolveTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tgt, err := rt.Resolve("m", "c")
+	tgt, _, err := rt.ResolveWords([]string{"m", "c"})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -52,32 +51,44 @@ func TestResolveErrorClasses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src, err := rt.Source()
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	cases := []struct {
-		name, ns, cmd string
-		want          error
+		name  string
+		words []string
+		want  error
+		text  string
 	}{
-		{"missing module", "nope", "c", core.ErrNotFound},
-		{"missing command", "nodef", "zzz", core.ErrNotFound},
-		{"no default command", "nodef", "", core.ErrInvalidInput},
-		{"invalid namespace", "a..b", "c", core.ErrInvalidInput},
-		{"group requires subcommand", "group", "g", core.ErrInvalidInput},
+		{"missing module", []string{"nope", "c"}, core.ErrNotFound, `unknown command "nope" for "futi"`},
+		{"missing command", []string{"nodef", "zzz"}, core.ErrNotFound, `unknown command "zzz" for "futi nodef" (available: c)`},
+		{"module without cmd", []string{"nodef"}, core.ErrInvalidInput, `"futi nodef" requires a subcommand (available: c)`},
+		{"group requires subcommand", []string{"group", "g"}, core.ErrInvalidInput, `"futi group g" requires a subcommand (available: leaf)`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := rt.Resolve(tc.ns, tc.cmd)
+			_, _, err := rt.ResolveWords(tc.words)
 			if !errors.Is(err, tc.want) {
-				t.Fatalf("Resolve(%q, %q) err = %v, want class %v", tc.ns, tc.cmd, err, tc.want)
+				t.Fatalf("ResolveWords(%q) err = %v, want class %v", tc.words, err, tc.want)
 			}
-			_, base := modulerunner.Resolve(src, nil, tc.ns, tc.cmd)
-			if base == nil || err.Error() != base.Error() {
-				t.Errorf("text = %q, want %v", err, base)
+			if err.Error() != tc.text {
+				t.Errorf("text = %q, want %q", err, tc.text)
 			}
 		})
+	}
+}
+
+func TestResolveWordsRest(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "m.yaml"), "name: mod\ncommands:\n  c:\n    cmd: echo hi\n")
+	rt, err := core.NewRuntime(core.Options{ModulesDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tgt, rest, err := rt.ResolveWords([]string{"m.c", "--x", "1", "--", "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tgt.Command().Cmd != "echo hi" || !reflect.DeepEqual(rest, []string{"--x", "1", "--", "a"}) {
+		t.Errorf("cmd = %q, rest = %q", tgt.Command().Cmd, rest)
 	}
 }
 
@@ -91,7 +102,7 @@ func newExecRT(t *testing.T, opts core.Options, cmd string) (*core.Runtime, *cor
 	if err != nil {
 		t.Fatal(err)
 	}
-	tgt, err := rt.Resolve("m", "c")
+	tgt, _, err := rt.ResolveWords([]string{"m", "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +266,7 @@ func TestExecuteValidationIsInvalidInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tgt, err := rt.Resolve("m", "c")
+	tgt, _, err := rt.ResolveWords([]string{"m", "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +371,7 @@ func TestResolveExecuteLoadsModuleOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tgt, err := rt.Resolve("m", "c")
+	tgt, _, err := rt.ResolveWords([]string{"m", "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +410,7 @@ func TestExecuteConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			tgt, err := rt.Resolve("m", "c")
+			tgt, _, err := rt.ResolveWords([]string{"m", "c"})
 			if err != nil {
 				t.Error(err)
 				return

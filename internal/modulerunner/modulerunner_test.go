@@ -958,8 +958,8 @@ func TestRunRootConfigNotUsedAsModule(t *testing.T) {
 	if err == nil {
 		t.Fatal("ожидалась ошибка для неизвестного модуля")
 	}
-	if !strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), `in module ""`) {
-		t.Errorf("Run(zzz, x) err = %q, ожидалось not found без `in module \"\"`", err)
+	if !errors.Is(err, ErrModuleNotFound) || strings.Contains(err.Error(), `in module ""`) {
+		t.Errorf("Run(zzz, x) err = %q, want ErrModuleNotFound without `in module \"\"`", err)
 	}
 
 	stdout.Reset()
@@ -1082,7 +1082,7 @@ func TestResolveCommand(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res, err := Resolve(source, nil, tt.namespace, tt.command)
+			res, err := resolveForTest(source, nil, tt.namespace, tt.command)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -1100,9 +1100,9 @@ func TestResolveCommand(t *testing.T) {
 func TestResolveCommandNoDefaultCmdSameErrorAsRun(t *testing.T) {
 	source := writeResolveFixture(t)
 
-	_, err := Resolve(source, nil, "nodef", "")
-	if err == nil || !strings.Contains(err.Error(), `module "nodef" has no default command`) {
-		t.Fatalf("err = %v, want 'module \"nodef\" has no default command'", err)
+	_, err := resolveForTest(source, nil, "nodef", "")
+	if err == nil || !strings.Contains(err.Error(), `"futi nodef" requires a subcommand`) {
+		t.Fatalf("err = %v, want '\"futi nodef\" requires a subcommand'", err)
 	}
 	runErr := runForTest(context.Background(), source, "nodef", "", nil, nil, nil, nil, nil)
 	if runErr == nil || runErr.Error() != err.Error() {
@@ -1112,9 +1112,9 @@ func TestResolveCommandNoDefaultCmdSameErrorAsRun(t *testing.T) {
 
 func TestResolveCommandModuleNotFound(t *testing.T) {
 	source := writeResolveFixture(t)
-	_, err := Resolve(source, nil, "nonexistent", "cmd")
-	if err == nil || !strings.Contains(err.Error(), "module not found") {
-		t.Fatalf("err = %v, want module not found", err)
+	_, err := resolveForTest(source, nil, "nonexistent", "cmd")
+	if !errors.Is(err, ErrModuleNotFound) {
+		t.Fatalf("err = %v, want ErrModuleNotFound", err)
 	}
 }
 
@@ -1138,7 +1138,7 @@ func TestResolveCommandUsesVerifiedLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := Resolve(source, cache, "m", "c")
+	res, err := resolveForTest(source, cache, "m", "c")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1244,7 +1244,6 @@ func writeModules(t *testing.T, files map[string]string) discovery.Source {
 func TestResolveCommandDotNamespaceWithoutCommand(t *testing.T) {
 	const docker = "name: docker\ncommands:\n  build:\n    cmd: \"echo docker-build\"\n"
 	const devDeploy = "name: dev.deploy\ncmd: \"echo deploy-default\"\n"
-	const dockerBuildMod = "name: docker.build\ncmd: \"echo module-docker-build\"\n"
 
 	tests := []struct {
 		name      string
@@ -1254,12 +1253,11 @@ func TestResolveCommandDotNamespaceWithoutCommand(t *testing.T) {
 	}{
 		{"dot split to module and command", map[string]string{"docker.yaml": docker}, "docker.build", "echo docker-build"},
 		{"module with dotted name keeps default cmd", map[string]string{"dev/deploy.yaml": devDeploy}, "dev.deploy", "echo deploy-default"},
-		{"longest module wins", map[string]string{"docker.yaml": docker, "docker/build.yaml": dockerBuildMod}, "docker.build", "echo module-docker-build"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			source := writeModules(t, tt.files)
-			res, err := Resolve(source, nil, tt.namespace, "")
+			res, err := resolveForTest(source, nil, tt.namespace, "")
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -1402,7 +1400,7 @@ func TestResolveLoadsOnce(t *testing.T) {
 	src, _ := writeValueFixture(t)
 	loader := &countLoader{}
 
-	r, err := Resolve(src, loader, "m", "c")
+	r, err := resolveForTest(src, loader, "m", "c")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -1424,7 +1422,7 @@ func TestResolveLoadsOnce(t *testing.T) {
 
 func TestResolvedPrepareArgsJoin(t *testing.T) {
 	src, _ := writeValueFixture(t)
-	r, err := Resolve(src, nil, "m", "a")
+	r, err := resolveForTest(src, nil, "m", "a")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -1451,13 +1449,13 @@ func TestPreparedEnv(t *testing.T) {
 	}
 }
 
-func TestResolveNoDefaultCommandSentinel(t *testing.T) {
+func TestResolveModuleWithoutCmdRequiresSubcommand(t *testing.T) {
 	source := writeResolveFixture(t)
-	_, err := Resolve(source, nil, "nodef", "")
-	if !errors.Is(err, ErrNoDefaultCommand) {
-		t.Fatalf("err = %v, want ErrNoDefaultCommand", err)
+	_, err := resolveForTest(source, nil, "nodef", "")
+	if !errors.Is(err, execmodule.ErrRequiresSubcommand) {
+		t.Fatalf("err = %v, want ErrRequiresSubcommand", err)
 	}
-	want := `modulerunner: module "nodef" has no default command; specify one`
+	want := `"futi nodef" requires a subcommand (available: a)`
 	if err.Error() != want {
 		t.Errorf("err text = %q, want %q", err.Error(), want)
 	}
@@ -1465,7 +1463,7 @@ func TestResolveNoDefaultCommandSentinel(t *testing.T) {
 
 func TestResolveRequiresSubcommandSentinel(t *testing.T) {
 	source := writeResolveFixture(t)
-	_, err := Resolve(source, nil, "m", "grp")
+	_, err := resolveForTest(source, nil, "m", "grp")
 	if !errors.Is(err, execmodule.ErrRequiresSubcommand) {
 		t.Fatalf("err = %v, want ErrRequiresSubcommand", err)
 	}

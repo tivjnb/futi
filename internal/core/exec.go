@@ -48,18 +48,19 @@ func (t *Target) ModuleName() string { return t.r.ModuleName() }
 // Manifest returns the path of the module manifest.
 func (t *Target) Manifest() string { return t.r.ManifestPath }
 
-// Resolve finds the command for namespace and command. Not-found and
-// invalid-input failures carry ErrNotFound and ErrInvalidInput.
-func (r *Runtime) Resolve(namespace, command string) (*Target, error) {
+// ResolveWords walks the command path at the start of words over the merged
+// module tree and returns the runnable command and the words after the path.
+// Not-found and invalid-input failures carry ErrNotFound and ErrInvalidInput.
+func (r *Runtime) ResolveWords(words []string) (*Target, []string, error) {
 	src, err := r.Source()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	res, err := modulerunner.Resolve(src, r.loader(), namespace, command)
+	res, rest, err := modulerunner.ResolveWords(src, r.loader(), words)
 	if err != nil {
-		return nil, classify(err)
+		return nil, nil, classify(err)
 	}
-	return &Target{r: res}, nil
+	return &Target{r: res}, rest, nil
 }
 
 // ExecuteRequest describes one command run.

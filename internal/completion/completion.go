@@ -23,14 +23,11 @@ type Match struct {
 	Description string
 }
 
-// ReservedNames — единый canonical-список слов корня, которые нельзя
-// использовать ни в одном сегменте пути модуля: main.go перехватывает их
-// до резолва модулей (cache/modules/completion/__complete — по первому
-// аргументу, list — по последнему позиционному), поэтому модуль с таким
-// сегментом никогда не будет вызван. При добавлении новой builtin-команды
-// в main.go — добавить имя сюда. help не зарезервирован: диспетчер сначала
-// пробует его как пользовательскую команду.
-var ReservedNames = []string{"list", "cache", "modules", "completion", "__complete"}
+// ReservedNames is the canonical list of builtin commands. The CLI recognizes
+// them only as the first word, so only top-level names (root modules and
+// namespaces) are reserved; a command help or list inside a module is fine.
+// Add the name here when adding a builtin command to the CLI.
+var ReservedNames = []string{"help", "list", "cache", "modules", "completion", "__complete"}
 
 // hiddenReserved — зарезервированное слово, которое не подсказывается на корне.
 const hiddenReserved = "__complete"

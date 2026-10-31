@@ -146,8 +146,8 @@ func TestRunErrorShortWhenCoveredByWarning(t *testing.T) {
 		pa   *parsedArgs
 		want string
 	}{
-		{"a b", &parsedArgs{namespace: "a", command: "b"}, "run: cannot read namespace \"a.b\" (see warning above)\n"},
-		{"a", &parsedArgs{namespace: "a"}, "run: cannot read namespace \"a\" (see warning above)\n"},
+		{"a b", &parsedArgs{words: []string{"a", "b"}}, "run: cannot read namespace \"a.b\" (see warning above)\n"},
+		{"a", &parsedArgs{words: []string{"a"}}, "run: cannot read namespace \"a\" (see warning above)\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, mods := unreadableNamespace(t)
@@ -165,9 +165,9 @@ func TestRunErrorFullWhenNotFoundInReadableDir(t *testing.T) {
 	_, mods := unreadableNamespace(t)
 	rt := compositeRuntime(t, mods)
 	var stdout, stderr bytes.Buffer
-	code, _ := runParsed(t.Context(), nil, &stdout, &stderr, rt, &parsedArgs{namespace: "nope", command: "x"})
-	if code != 1 || !strings.HasPrefix(stderr.String(), "run: ") || strings.Contains(stderr.String(), "see warning above") {
-		t.Errorf("code=%d stderr=%q, want полное сообщение без сокращения", code, stderr.String())
+	code, _ := runParsed(t.Context(), nil, &stdout, &stderr, rt, &parsedArgs{words: []string{"nope", "x"}})
+	if want := "unknown command \"nope\" for \"futi\"\n"; code != 1 || stderr.String() != want {
+		t.Errorf("code=%d stderr=%q, want полное сообщение без сокращения %q", code, stderr.String(), want)
 	}
 }
 
@@ -199,7 +199,7 @@ func TestRunErrorFullWhenExecFailsUnderWarnedDir(t *testing.T) {
 	}
 	rt := compositeRuntime(t, mods)
 	var stdout, stderr bytes.Buffer
-	code, runErr := runParsed(t.Context(), nil, &stdout, &stderr, rt, &parsedArgs{command: "m"})
+	code, runErr := runParsed(t.Context(), nil, &stdout, &stderr, rt, &parsedArgs{words: []string{"m"}})
 	if runErr == nil || strings.Contains(stderr.String(), "see warning above") || !strings.Contains(stderr.String(), script) {
 		t.Errorf("code=%d runErr=%v stderr=%q, want полная ошибка exec с путём %s", code, runErr, stderr.String(), script)
 	}

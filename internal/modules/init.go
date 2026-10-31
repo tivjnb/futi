@@ -22,9 +22,8 @@ type InitOptions struct {
 }
 
 // ValidateInitPath checks the module path given to init: the name must be
-// valid and no segment may be a reserved word.
+// valid and its top-level segment may not be a reserved word.
 func ValidateInitPath(path string) error {
-	// F57: зарезервированное слово запрещено в любом сегменте пути.
 	trimmed := path
 	if strings.HasSuffix(trimmed, ".yaml") {
 		trimmed = strings.TrimSuffix(trimmed, ".yaml")

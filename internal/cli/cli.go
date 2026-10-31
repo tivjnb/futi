@@ -186,13 +186,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer, version stri
 				fmt.Fprintf(stderr, "source: %v\n", err)
 				return 1
 			}
-			helpReq.dryRun = dryRun
-			code, runErr := runHelp(context.Background(), stdin, stdout, stderr, rt, helpReq)
-			if runErr != nil {
-				raiseInterrupt(runErr)
-				return core.ExitCode(runErr)
-			}
-			return code
+			return runHelp(stdout, stderr, rt, helpReq.path)
 		case errors.Is(err, errHelp):
 			printUsage(stdout)
 			return 0

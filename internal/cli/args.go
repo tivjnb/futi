@@ -15,11 +15,10 @@ var (
 
 // parsedArgs — результат парсинга аргументов CLI.
 type parsedArgs struct {
-	namespace string
-	command   string
-	flags     []string // сырые флаги между путём и `--` (привязка — bindFlags)
-	argsList  []string // args после shlex-разбора
-	dryRun    bool     // глобальный --dry-run: напечатать команду, не исполняя
+	// words — the command path and its inputs as given; the path ends where
+	// core.Runtime.ResolveWords stops.
+	words  []string
+	dryRun bool // глобальный --dry-run: напечатать команду, не исполняя
 }
 
 // listRequest сигнализирует, что запрошен листинг namespace или модуля.
@@ -32,45 +31,30 @@ type listRequest struct {
 func (e *listRequest) Error() string { return "list command requested" }
 func (e *listRequest) Unwrap() error { return errListCommand }
 
-// helpRequest сигнализирует, что запрошена справка (последний аргумент "help").
-// positional — все сегменты до "help" (namespace + command path). Диспетчер
-// решает: если "<positional> help" резолвится как user-defined команда —
-// выполнить её (с flags/args/argsList, как обычную), иначе системная справка
-// (флаги и args при ней игнорируются). flags — сырые токены после пути, их
-// привязка к параметрам по схеме команды — в bindFlags.
-type helpRequest struct {
-	positional []string
-	flags      []string
-	argsList   []string
-	dryRun     bool // глобальный --dry-run (переносится в пользовательскую help)
-}
+// helpRequest is `futi help <path...>`: system help for the node at path.
+type helpRequest struct{ path []string }
 
 func (e *helpRequest) Error() string { return "help requested" }
 
-// parseArgs разбирает аргументы CLI в строгом порядке: путь → флаги → `-- args`.
-// Путь — подряд идущие слова от начала до первого флагового токена (начинается
-// с "-" и длиннее 1 символа; одиночный "-" — обычное слово). Последнее слово
-// пути = команда, остальные = namespace через ".". Токены после пути до `--` —
-// сырые флаги: привязка к параметрам по схеме команды — в bindFlags.
-// Всё после первого `--` = args команды.
-// "list" / "help" как последнее слово пути — системные запросы;
-// у list допустимы только свои флаги.
+// parseArgs parses CLI arguments. The first words list and help are builtin
+// commands (`futi list [path...] [-v] [-r]`, `futi help <path...>`).
+// Otherwise args are a command path and its inputs: the walk over the module
+// tree (core.Runtime.ResolveWords) finds where the path ends; tokens after it
+// up to `--` are raw flags (bound by bindFlags), everything after `--` is the
+// command args. A flag or `--` as the first token is a usage error (errHelp if
+// the flags contain -h/--help).
 func parseArgs(args []string) (*parsedArgs, error) {
-	var path, flags, argsList []string
-
-	i := 0
-	for ; i < len(args) && !isFlagToken(args[i]) && args[i] != "--"; i++ {
-		path = append(path, args[i])
-	}
-	for ; i < len(args); i++ {
-		if args[i] == "--" {
-			argsList = append(argsList, args[i+1:]...)
-			break
+	if len(args) > 0 {
+		switch args[0] {
+		case "list":
+			path, flags := splitPathFlags(args[1:])
+			return nil, parseListRequest(path, flags)
+		case "help":
+			return nil, &helpRequest{path: args[1:]}
 		}
-		flags = append(flags, args[i])
 	}
-
-	if len(path) == 0 {
+	if len(args) == 0 || isFlagToken(args[0]) || args[0] == "--" {
+		_, flags := splitPathFlags(args)
 		if hasHelpFlag(flags) {
 			return nil, errHelp
 		}
@@ -80,46 +64,31 @@ func parseArgs(args []string) (*parsedArgs, error) {
 		}
 		return nil, errors.New(usage)
 	}
+	return &parsedArgs{words: args}, nil
+}
 
-	switch path[len(path)-1] {
-	case "list":
-		return nil, parseListRequest(path[:len(path)-1], flags)
-	case "help":
-		// В отличие от list, help НЕ зарезервирован: диспетчер проверяет,
-		// нет ли user-defined команды "help" (см. runHelp). Сырые флаги и args
-		// сохраняются для неё; системная справка их игнорирует.
-		return nil, &helpRequest{
-			positional: splitDots(path[:len(path)-1]),
-			flags:      flags,
-			argsList:   argsList,
+// splitPathFlags splits args into the leading words (up to the first flag
+// token or `--`) and the flags after them up to `--`; tokens after `--` are
+// dropped.
+func splitPathFlags(args []string) (path, flags []string) {
+	i := 0
+	for ; i < len(args) && !isFlagToken(args[i]) && args[i] != "--"; i++ {
+		path = append(path, args[i])
+	}
+	flags, _ = splitInputs(args[i:])
+	return path, flags
+}
+
+// splitInputs splits the words after a command path into raw flags (before
+// the first `--`) and the command args (after it).
+func splitInputs(rest []string) (flags, argsList []string) {
+	for i, tok := range rest {
+		if tok == "--" {
+			return flags, append([]string(nil), rest[i+1:]...)
 		}
+		flags = append(flags, tok)
 	}
-
-	pa := &parsedArgs{
-		flags:    flags,
-		argsList: argsList,
-	}
-	pa.namespace, pa.command = splitPath(path)
-	return pa, nil
-}
-
-// splitDots делит каждый сегмент пути по ".", чтобы `docker.build help`
-// вёл себя как `docker build help`.
-func splitDots(path []string) []string {
-	var out []string
-	for _, seg := range path {
-		out = append(out, strings.Split(seg, ".")...)
-	}
-	return out
-}
-
-// splitPath делит позиционный путь на namespace и команду. Один сегмент —
-// namespace без команды (default cmd модуля); иначе последний сегмент — команда.
-func splitPath(path []string) (namespace, command string) {
-	if len(path) == 1 {
-		return path[0], ""
-	}
-	return strings.Join(path[:len(path)-1], "."), path[len(path)-1]
+	return flags, nil
 }
 
 // isFlagToken: токен — флаг, если начинается с "-" и длиннее одного символа.
@@ -177,16 +146,6 @@ func parseListRequest(namespace, flags []string) error {
 		}
 	}
 	return req
-}
-
-// commandPath восстанавливает позиционный путь (сегменты namespace + команда)
-// разобранной команды — тот же, что Run получает как positional.
-func commandPath(pa *parsedArgs) []string {
-	path := strings.Split(pa.namespace, ".")
-	if pa.command != "" {
-		path = append(path, pa.command)
-	}
-	return path
 }
 
 // errDryRunScope — текст ошибки: --dry-run применим только к командам модулей.

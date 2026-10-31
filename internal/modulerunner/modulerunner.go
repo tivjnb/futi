@@ -70,7 +70,7 @@ func (p *Prepared) Env() []string {
 }
 
 // Resolved — найденная команда модуля: сама команда, модуль и его расположение.
-// Модуль загружается один раз в Resolve; Validate и Prepare его не перечитывают.
+// Модуль загружается один раз в ResolveWords; Validate и Prepare его не перечитывают.
 type Resolved struct {
 	Command      *execmodule.Command
 	Module       *execmodule.Module
@@ -122,79 +122,8 @@ func (r *Resolved) Prepare(resolved map[string]string, argsList []string) (*Prep
 	return &Prepared{Argv: parts, ModuleName: moduleName, ModuleRoot: r.ModuleRoot}, nil
 }
 
-// ErrModuleNotFound — ни один префикс пути не резолвится в модуль.
+// ErrModuleNotFound is the class of an unknown first word of a command path.
 var ErrModuleNotFound = errors.New("module not found")
-
-// ErrNoDefaultCommand — модуль найден, но у него нет default cmd, а команда не указана.
-var ErrNoDefaultCommand = errors.New("has no default command; specify one")
-
-// Resolve — progressive resolution: пробует резолвить модуль от длиннейшего
-// namespace к коротчайшему, остаток = command path. command="" — default cmd
-// модуля. Модуль грузится через LoadModuleVerified (строгая проверка
-// свежести/аутентичности, как при исполнении).
-func Resolve(
-	source discovery.Source,
-	loader ModuleLoader,
-	namespace, command string,
-) (*Resolved, error) {
-	// Реконструкция positional args из namespace + command.
-	// Непустой namespace всегда делится по ".", в т.ч. при command=="":
-	// `futi docker.build` даёт namespace "docker.build" без команды.
-	var positional []string
-	if namespace != "" {
-		positional = strings.Split(namespace, ".")
-	}
-	if namespace == "" || command != "" {
-		positional = append(positional, command)
-	}
-
-	label := strings.TrimSpace(namespace + " " + command)
-
-	// i=len(positional) → ns=все, commandPath=[] (default cmd случай).
-	// i>=1: пустой namespace (i=0) модулем не является.
-	for i := len(positional); i >= 1; i-- {
-		ns := strings.Join(positional[:i], ".")
-		commandPath := positional[i:]
-
-		manifestPath, moduleRoot, err := source.Resolve(ns)
-		if err != nil {
-			if errors.Is(err, discovery.ErrNotFound) {
-				continue
-			}
-			return nil, fmt.Errorf("modulerunner: %w", err)
-		}
-
-		mod, err := LoadModuleVerified(loader, manifestPath, moduleRoot)
-		if err != nil {
-			return nil, fmt.Errorf("modulerunner: %w", err)
-		}
-
-		// commandPath пустой → default cmd модуля (со схемой: params/positional).
-		if len(commandPath) == 0 {
-			if mod.Cmd == "" {
-				return nil, fmt.Errorf("modulerunner: module %q %w", ns, ErrNoDefaultCommand)
-			}
-			return &Resolved{
-				Command: &execmodule.Command{
-					Cmd:        mod.Cmd,
-					Params:     mod.Params,
-					Positional: mod.Positional,
-				},
-				Module:       mod,
-				ModuleRoot:   moduleRoot,
-				ManifestPath: manifestPath,
-				label:        label,
-			}, nil
-		}
-		cmd, err := mod.ResolveCommand(commandPath)
-		if err != nil {
-			return nil, fmt.Errorf("modulerunner: %w", err)
-		}
-		return &Resolved{Command: cmd, Module: mod, ModuleRoot: moduleRoot, ManifestPath: manifestPath, label: label}, nil
-	}
-
-	return nil, fmt.Errorf("modulerunner: %w for %v", ErrModuleNotFound, positional)
-}
 
 // CommandInfo описывает команду модуля для листинга.
 type CommandInfo struct {
