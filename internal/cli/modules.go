@@ -7,6 +7,7 @@ import (
 
 	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/modulerunner"
 	"github.com/tivjnb/futi/internal/modules"
 )
 
@@ -64,7 +65,7 @@ func runModules(w, errw io.Writer, stdin io.Reader, rt *core.Runtime, args []str
 // runModulesValidate — `futi modules validate <namespace>`: отчёт валидации
 // схемы модуля (см. runValidate).
 func runModulesValidate(w io.Writer, source discovery.Source, args []string) error {
-	if len(args) != 1 || isFlagToken(args[0]) {
+	if len(args) != 1 || modulerunner.IsFlagToken(args[0]) {
 		return fmt.Errorf("usage: futi modules validate <namespace>")
 	}
 	if err := modules.ValidateResolveName(args[0]); err != nil {

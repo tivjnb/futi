@@ -111,6 +111,18 @@ func TestRunHelpRootPrintsUsageToStdout(t *testing.T) {
 	}
 }
 
+// The usage text names every place where the command path ends.
+func TestUsageDescribesPathEnd(t *testing.T) {
+	var buf bytes.Buffer
+	printUsage(&buf)
+	text := strings.Join(strings.Fields(buf.String()), " ")
+	for _, want := range []string{`at "--"`, "that is not a child"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("usage does not mention %q where the path ends", want)
+		}
+	}
+}
+
 // Модуль, который не загрузился, в list не теряет причину: описание
 // заменяется пометкой (error: ...), строка модуля остаётся.
 func TestPrintChildrenLoadError(t *testing.T) {

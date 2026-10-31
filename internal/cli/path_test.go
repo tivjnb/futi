@@ -137,6 +137,9 @@ func TestHelpFirstWord(t *testing.T) {
 		{"extra word", []string{"help", "docker", "build", "extra"}, 1, "", "unknown command \"extra\" for \"futi docker build\"\n"},
 		{"unknown module", []string{"help", "nope"}, 1, "", "unknown command \"nope\" for \"futi\"\n"},
 		{"usage", []string{"help"}, 0, "USAGE", ""},
+		{"-h after a help path", []string{"help", "docker", "build", "-h"}, 0, "Build an image", ""},
+		{"--help after a help module", []string{"help", "docker", "--help"}, 0, "build", ""},
+		{"help --help is futi help", []string{"help", "--help"}, 0, "USAGE", ""},
 		{"-h after path", []string{"docker", "build", "-h"}, 0, "Build an image", ""},
 		{"-h after a node without cmd", []string{"docker", "-h"}, 0, "build", ""},
 	}

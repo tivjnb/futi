@@ -735,7 +735,7 @@ CMD
   docker build -t {{.tag}} -f {{.file}} .
 ```
 
-Every word after `futi help` must be a path word: `futi help docker build extra` fails with `unknown command "extra" for "futi docker build"`. `help` is a builtin only as the first word: `futi demo help` calls the command `help` of the module `demo` as an ordinary command (flags, `-- args`, its stderr and exit code), and fails if there is no such command; `futi help demo help` shows the help of that command.
+A trailing `-h`/`--help` after the path is ignored (`futi help demo -h` = `futi help demo`); `futi help --help` shows the help of futi itself, like `futi -h`. Every word after `futi help` must be a path word: `futi help docker build extra` fails with `unknown command "extra" for "futi docker build"`. `help` is a builtin only as the first word: `futi demo help` calls the command `help` of the module `demo` as an ordinary command (flags, `-- args`, its stderr and exit code), and fails if there is no such command; `futi help demo help` shows the help of that command.
 
 ### `--dry-run`
 

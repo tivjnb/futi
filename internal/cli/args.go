@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/tivjnb/futi/internal/completion"
+	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
 var (
@@ -50,10 +51,10 @@ func parseArgs(args []string) (*parsedArgs, error) {
 			path, flags := splitPathFlags(args[1:])
 			return nil, parseListRequest(path, flags)
 		case "help":
-			return nil, &helpRequest{path: args[1:]}
+			return nil, newHelpRequest(args[1:])
 		}
 	}
-	if len(args) == 0 || isFlagToken(args[0]) || args[0] == "--" {
+	if len(args) == 0 || modulerunner.IsFlagToken(args[0]) || args[0] == "--" {
 		_, flags := splitPathFlags(args)
 		if hasHelpFlag(flags) {
 			return nil, errHelp
@@ -67,12 +68,28 @@ func parseArgs(args []string) (*parsedArgs, error) {
 	return &parsedArgs{words: args}, nil
 }
 
+// newHelpRequest builds the request for `futi help <path...>`. A trailing
+// -h/--help is ignored (the help of the path is what was asked for anyway);
+// when the first word is -h/--help it is a request for the help of futi
+// itself (errHelp), like `futi -h`.
+func newHelpRequest(path []string) error {
+	if len(path) > 0 && isHelpToken(path[0]) {
+		return errHelp
+	}
+	for len(path) > 0 && isHelpToken(path[len(path)-1]) {
+		path = path[:len(path)-1]
+	}
+	return &helpRequest{path: path}
+}
+
+func isHelpToken(tok string) bool { return tok == "-h" || tok == "--help" }
+
 // splitPathFlags splits args into the leading words (up to the first flag
 // token or `--`) and the flags after them up to `--`; tokens after `--` are
 // dropped.
 func splitPathFlags(args []string) (path, flags []string) {
 	i := 0
-	for ; i < len(args) && !isFlagToken(args[i]) && args[i] != "--"; i++ {
+	for ; i < len(args) && !modulerunner.IsFlagToken(args[i]) && args[i] != "--"; i++ {
 		path = append(path, args[i])
 	}
 	flags, _ = splitInputs(args[i:])
@@ -91,11 +108,6 @@ func splitInputs(rest []string) (flags, argsList []string) {
 	return flags, nil
 }
 
-// isFlagToken: токен — флаг, если начинается с "-" и длиннее одного символа.
-func isFlagToken(tok string) bool {
-	return len(tok) > 1 && tok[0] == '-'
-}
-
 // hasBareWord: среди сырых флагов есть слово без "-" (признак слова пути
 // после флага, например `futi k8s --follow logs`).
 // pathBeforeFlagsHint — подсказка про порядок: путь команды до флагов.
@@ -112,7 +124,7 @@ func withPathHint(msg string, flags []string) string {
 
 func hasBareWord(flags []string) bool {
 	for _, f := range flags {
-		if !isFlagToken(f) {
+		if !modulerunner.IsFlagToken(f) {
 			return true
 		}
 	}
@@ -121,7 +133,7 @@ func hasBareWord(flags []string) bool {
 
 func hasHelpFlag(flags []string) bool {
 	for _, f := range flags {
-		if f == "-h" || f == "--help" {
+		if isHelpToken(f) {
 			return true
 		}
 	}

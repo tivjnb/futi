@@ -34,8 +34,9 @@ separate words: "futi dev.deploy staging". A path that names two things at
 once (a module command and a module or namespace) is an error.
 
 The order is strict: path, then flags, then "-- args". The path ends at the
-first token starting with "-"; a word after a flag is only accepted as the
-value of the preceding string/int flag. "-h" / "--help" after the path shows
+first token starting with "-" (a lone "-" does not count), at "--", or at the
+first word that is not a child of the current node; a word after a flag is
+only accepted as the value of the preceding string/int flag. "-h" / "--help" after the path shows
 help for that path.
 
 Reserved words: "help", "list", "cache", "modules", "completion",

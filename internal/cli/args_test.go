@@ -128,12 +128,23 @@ func TestParseArgsHelpRequest(t *testing.T) {
 		{[]string{"help"}, []string{}},
 		{[]string{"help", "docker", "build"}, []string{"docker", "build"}},
 		{[]string{"help", "docker.build", "--x"}, []string{"docker.build", "--x"}},
+		{[]string{"help", "docker", "-h"}, []string{"docker"}},
+		{[]string{"help", "docker", "build", "--help"}, []string{"docker", "build"}},
+		{[]string{"help", "docker", "-h", "--help"}, []string{"docker"}},
 	} {
 		_, err := parseArgs(tt.args)
 		var req *helpRequest
 		if !errors.As(err, &req) || len(req.path) != len(tt.path) ||
 			(len(tt.path) > 0 && !reflect.DeepEqual(req.path, tt.path)) {
 			t.Errorf("parseArgs(%q) err = %v, want helpRequest{%q}", tt.args, err, tt.path)
+		}
+	}
+}
+
+func TestParseArgsHelpHelpIsFutiHelp(t *testing.T) {
+	for _, args := range [][]string{{"help", "-h"}, {"help", "--help"}, {"help", "--help", "-h"}} {
+		if _, err := parseArgs(args); !errors.Is(err, errHelp) {
+			t.Errorf("parseArgs(%q) err = %v, want errHelp", args, err)
 		}
 	}
 }
