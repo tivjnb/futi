@@ -212,7 +212,7 @@ futi docker logs -f web                # docker logs -f web
 |---|---|---|---|
 | `name` | оба | — | Обязательно. `[a-z][a-z0-9_]*`, уникально среди args и flags узла. В CLI `_` превращается в `-` (`ignore_case` — это `--ignore-case`); в шаблоне — `{{.ignore_case}}`. Имена `help`, `env`, `module_root`, `module_name` зарезервированы |
 | `type` | оба | `string` | `string`, `int` или `bool`; `bool` — только у flags |
-| `required` | оба, кроме bool | `false` | Вход обязателен. Вместе с непустым `default` — ошибка схемы. У variadic/rest — минимум одно значение |
+| `required` | оба, кроме bool | `false` | Вход обязателен. Вместе с любым `default` (даже пустым) — ошибка схемы. У variadic/rest — минимум одно значение |
 | `default` | оба, кроме variadic/rest | — | Строка; для `int` — целое, для `bool` — одно из `true/false/1/0/yes/no/on/off` |
 | `description` | оба | — | Показывается в help и completion |
 | `short` | flags | — | Одна латинская буква, регистр значим (`-f` ≠ `-F`), уникальна в узле; `h` зарезервирована. Допустима у variadic-флага |
