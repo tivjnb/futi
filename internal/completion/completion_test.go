@@ -816,9 +816,11 @@ func TestCompleteRootBuiltinNotDuplicatedByModule(t *testing.T) {
 
 func TestCompleteListFirstWordIgnoresModule(t *testing.T) {
 	src := newReservedSource(t, "list")
+	// The first word is the builtin: the commands of the module (modcmd) are
+	// not offered; the module itself is a path word like any other.
 	matches, directive := Complete(src, nil, []string{"list"}, "")
-	if len(matches) != 0 {
-		t.Fatalf("Complete([list]) = %v, want empty", text(matches))
+	if got := text(matches); !reflect.DeepEqual(got, []string{"list"}) {
+		t.Fatalf("Complete([list]) = %v, want [list]", got)
 	}
 	if directive != ShellCompDirectiveNoFileComp {
 		t.Fatalf("directive = %v, want NoFileComp", directive)
@@ -1152,5 +1154,52 @@ func TestCompleteBrokenModuleGivesNothing(t *testing.T) {
 	matches, dir2 := Complete(discovery.NewGlobalSource(dir), nil, []string{"bad"}, "")
 	if len(matches) != 0 || dir2 != ShellCompDirectiveNoFileComp {
 		t.Errorf("Complete over a broken module = %v/%v, want none/NoFileComp", text(matches), dir2)
+	}
+}
+
+// The reserved-name filter belongs to the first word only (builtins win
+// there); `futi help <TAB>` and `futi list <TAB>` offer a module of any name.
+func TestCompleteHelpAndListOfferReservedModuleNames(t *testing.T) {
+	src := newReservedSource(t, "cache", "list", "dev")
+	for _, kw := range []string{"help", "list"} {
+		matches, dir := Complete(src, nil, []string{kw}, "")
+		want := []string{"cache", "dev", "list"}
+		if got := text(matches); !reflect.DeepEqual(got, want) || dir != ShellCompDirectiveNoFileComp {
+			t.Errorf("Complete([%s]) = %v/%v, want %v/NoFileComp", kw, got, dir, want)
+		}
+	}
+	// The first word is still not a module of a reserved name.
+	matches, _ := Complete(src, nil, nil, "")
+	want := []string{"cache", "completion", "dev", "help", "list", "modules"}
+	if got := text(matches); !reflect.DeepEqual(got, want) {
+		t.Errorf("root = %v, want %v", got, want)
+	}
+}
+
+// A node whose first positional is the rest arg and that has no subcommands
+// hands the first word to the shell (files); with subcommands it suggests them.
+func TestCompleteRestOnlyNodeUsesShellFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "run.yaml"), "name: run\ncmd: \"go run {{.go_args}}\"\nargs:\n  - {name: go_args, rest: true}\n")
+	writeFile(t, filepath.Join(dir, "sh.yaml"), "name: sh\ncmd: \"x {{.a}}\"\nargs:\n  - {name: a, rest: true}\ncommands:\n  up: {cmd: \"x up\"}\n")
+	writeFile(t, filepath.Join(dir, "img.yaml"), "name: img\ncmd: \"x {{.image}} {{.a}}\"\nargs:\n  - {name: image, required: true}\n  - {name: a, rest: true}\n")
+	src := discovery.NewGlobalSource(dir)
+	cases := []struct {
+		name string
+		args []string
+		want []string
+		dir  Directive
+	}{
+		{"rest-only module", []string{"run"}, nil, ShellCompDirectiveDefault},
+		{"with subcommands", []string{"sh"}, []string{"up"}, ShellCompDirectiveNoFileComp},
+		{"image comes first", []string{"img"}, nil, ShellCompDirectiveNoFileComp},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			matches, d := Complete(src, nil, c.args, "")
+			if got := text(matches); (!reflect.DeepEqual(got, c.want) && (len(got) != 0 || len(c.want) != 0)) || d != c.dir {
+				t.Errorf("Complete(%v) = %v/%v, want %v/%v", c.args, got, d, c.want, c.dir)
+			}
+		})
 	}
 }

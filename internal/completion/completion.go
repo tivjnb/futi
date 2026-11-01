@@ -207,7 +207,13 @@ func pathMatches(source discovery.Source, loader modulerunner.ModuleLoader, args
 		if dryRun && n == 0 {
 			matches = slices.DeleteFunc(matches, func(m Match) bool { return IsReservedName(m.Text) })
 		}
-		return filterMatches(matches, toComplete), ShellCompDirectiveNoFileComp
+		matches = filterMatches(matches, toComplete)
+		// A node that takes the rest arg first and has no subcommands: the
+		// word is the first token of the rest, so let the shell complete files.
+		if len(matches) == 0 && len(argSpecs) > 0 && argSpecs[0].Rest {
+			return nil, ShellCompDirectiveDefault
+		}
+		return matches, ShellCompDirectiveNoFileComp
 	}
 	return nil, ShellCompDirectiveNoFileComp
 }
@@ -223,7 +229,8 @@ func helpPathMatches(source discovery.Source, loader modulerunner.ModuleLoader, 
 
 // childMatches lists the children of node: the subcommands of its command and
 // the modules and namespaces below it. At the root a builtin wins over a
-// module of the same name; builtins adds them to the list.
+// module of the same name; builtins adds them to the list (it is set only
+// for the first word of the command line).
 func childMatches(source discovery.Source, loader modulerunner.ModuleLoader, node *modulerunner.Node, builtins bool) []Match {
 	var matches []Match
 	root := len(node.Path) == 0
@@ -246,7 +253,7 @@ func childMatches(source discovery.Source, loader modulerunner.ModuleLoader, nod
 		return matches
 	}
 	for _, c := range children {
-		if root && IsReservedName(c.Name) {
+		if root && builtins && IsReservedName(c.Name) {
 			continue
 		}
 		m := Match{Text: c.Name}
