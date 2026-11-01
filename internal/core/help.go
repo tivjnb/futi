@@ -80,14 +80,7 @@ func helpIn(src discovery.Source, loader modulerunner.ModuleLoader, path []strin
 	// Ветка с subcommands — справка ветки (как модульная, по subcommands).
 	cmd := node.Command
 	if len(cmd.Commands) > 0 {
-		branch := &execmodule.Module{
-			Name:        node.Module.Name,
-			Description: cmd.Description,
-			Cmd:         cmd.Cmd,
-			Params:      cmd.Params,
-			Positional:  cmd.Positional,
-			Commands:    cmd.Commands,
-		}
+		branch := &execmodule.Module{Name: node.Module.Name, Command: *cmd}
 		return HelpDoc{Kind: HelpModule, Path: node.Path, Module: branch}, nil
 	}
 

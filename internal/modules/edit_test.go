@@ -164,7 +164,7 @@ func TestRunModulesAddCommandDefaultCmd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadModule: %v", err)
 	}
-	if got := mod.Commands["scan"].Cmd; got != "echo scan" {
+	if got := mod.Commands["scan"].Cmd.Text; got != "echo scan" {
 		t.Fatalf("default cmd must be \"echo scan\", got %q", got)
 	}
 }

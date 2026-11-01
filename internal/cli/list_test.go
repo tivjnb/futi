@@ -284,9 +284,9 @@ commands:
 		mod: &execmodule.Module{
 			Name: "stub",
 			Root: dir,
-			Commands: map[string]*execmodule.Command{
+			Command: execmodule.Command{Commands: map[string]*execmodule.Command{
 				"spy_cmd": {Description: "from spy"},
-			},
+			}},
 		},
 	}
 
@@ -319,9 +319,9 @@ func TestRenderChildrenUsesLoader(t *testing.T) {
 
 	spy := &stubLoader{
 		mod: &execmodule.Module{
-			Name:        "stub",
-			Description: "SPY_DESCRIPTION",
-			Root:        dir,
+			Name:    "stub",
+			Root:    dir,
+			Command: execmodule.Command{Description: "SPY_DESCRIPTION"},
 		},
 	}
 
@@ -359,13 +359,13 @@ commands:
 		mod: &execmodule.Module{
 			Name: "db",
 			Root: dir,
-			Commands: map[string]*execmodule.Command{
+			Command: execmodule.Command{Commands: map[string]*execmodule.Command{
 				"migrate": {
 					Commands: map[string]*execmodule.Command{
 						"spy_sub": {Description: "from spy"},
 					},
 				},
-			},
+			}},
 		},
 	}
 
@@ -394,10 +394,13 @@ func TestPrintCommandsShowsDefaultCmd(t *testing.T) {
 	manifestPath := filepath.Join(dir, "echo_mod.yaml")
 	writeMainTestFile(t, manifestPath, `
 name: echo_mod
-cmd: "echo {{.args}}"
+cmd: "echo {{.words}}"
+args:
+  - name: words
+    variadic: true
 commands:
   upper:
-    cmd: "echo {{.args}} | tr a-z A-Z"
+    cmd: "tr a-z A-Z"
 `)
 	var buf bytes.Buffer
 	if err := printCommands(&buf, manifestPath, dir, false, nil); err != nil {

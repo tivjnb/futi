@@ -24,7 +24,7 @@ func writeFile(t *testing.T, path, content string) {
 
 // newTestSource создаёт GlobalSource над временной директорией с демо-модулями:
 //
-//	docker.yaml   — команды ps, build (params tag: string, force: bool), subcmds
+//	docker.yaml   — команды ps, build (flags tag: string, force: bool), subcmds
 //	git.yaml      — команда commit
 //	dev/deploy.yaml — вложенный namespace
 func newTestSource(t *testing.T) discovery.Source {
@@ -40,14 +40,14 @@ commands:
     cmd: "docker ps"
   build:
     description: Build image
-    params:
+    flags:
       - name: tag
         type: string
         required: true
       - name: force
         type: bool
         default: false
-    cmd: "docker build -t {{.tag}}"
+    cmd: "docker build -t {{.tag}} {{if .force}}-f{{end}}"
   migrate:
     description: Migrations
     commands:
@@ -60,13 +60,15 @@ commands:
 	writeFile(t, filepath.Join(dir, "meta.yaml"), `
 name: meta
 description: Image stats
-cmd: "meta.py --files {{quote .args}}{{if .json}} --json{{end}}"
-params:
+cmd: "meta.py --files {{.files}}{{if .json}} --json{{end}}"
+args:
+  - name: files
+    required: true
+    variadic: true
+flags:
   - name: json
     type: bool
     default: "false"
-positional:
-  min: 1
 `)
 
 	writeFile(t, filepath.Join(dir, "git.yaml"), `
@@ -546,7 +548,7 @@ func TestCompleteLeafDefaultParamHasDescription(t *testing.T) {
 }
 
 func TestCompleteModuleDefaultCmdParams(t *testing.T) {
-	// Модуль-однокоманда (cmd + params, без commands): на пустом
+	// Модуль-однокоманда (cmd + flags, без commands): на пустом
 	// commandPath подсказываем параметры default-команды.
 	src := newTestSource(t)
 	matches, directive := Complete(src, nil, []string{"meta"}, "")
@@ -1004,7 +1006,7 @@ func TestCompleteParamsReloadsChangedManifest(t *testing.T) {
 name: stale
 commands:
   run:
-    params:
+    flags:
       - name: old
         type: string
     cmd: "echo {{.old}}"
@@ -1022,7 +1024,7 @@ commands:
 name: stale
 commands:
   run:
-    params:
+    flags:
       - name: fresh
         type: string
     cmd: "echo {{.fresh}}"

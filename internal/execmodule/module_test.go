@@ -3,10 +3,15 @@ package execmodule
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/tivjnb/futi/internal/argvtmpl"
+	"github.com/tivjnb/futi/internal/inputs"
+	"gopkg.in/yaml.v3"
 )
 
 func TestLoadModuleParsesCommands(t *testing.T) {
@@ -21,10 +26,11 @@ commands:
     cmd: "docker ps"
   build:
     description: Build image
-    params:
+    flags:
       - name: tag
         type: string
         required: true
+        short: t
       - name: file
         type: string
         default: Dockerfile
@@ -52,8 +58,8 @@ commands:
 	if !ok {
 		t.Fatal("command 'ps' not found")
 	}
-	if ps.Cmd != "docker ps" {
-		t.Fatalf("unexpected ps cmd: %q", ps.Cmd)
+	if !reflect.DeepEqual(ps.Cmd, CmdSpec{Text: "docker ps"}) {
+		t.Fatalf("unexpected ps cmd: %+v", ps.Cmd)
 	}
 	if ps.Description != "List containers" {
 		t.Fatalf("unexpected ps description: %q", ps.Description)
@@ -63,14 +69,14 @@ commands:
 	if !ok {
 		t.Fatal("command 'build' not found")
 	}
-	if len(build.Params) != 2 {
-		t.Fatalf("expected 2 params, got %d", len(build.Params))
+	if len(build.Flags) != 2 {
+		t.Fatalf("expected 2 flags, got %d", len(build.Flags))
 	}
-	if build.Params[0].Name != "tag" || !build.Params[0].Required {
-		t.Fatalf("unexpected param 0: %+v", build.Params[0])
+	if f := build.Flags[0]; f.Name != "tag" || !f.Required || f.Short != "t" || !f.Flag {
+		t.Fatalf("unexpected flag 0: %+v", f)
 	}
-	if build.Params[1].Name != "file" || build.Params[1].Default != "Dockerfile" {
-		t.Fatalf("unexpected param 1: %+v", build.Params[1])
+	if f := build.Flags[1]; f.Name != "file" || f.Default == nil || *f.Default != "Dockerfile" || !f.Flag {
+		t.Fatalf("unexpected flag 1: %+v", f)
 	}
 }
 
@@ -105,18 +111,21 @@ func TestLoadModuleWithDefaultCmd(t *testing.T) {
 	writeFile(t, manifestPath, `
 name: echo_mod
 description: Echo utilities
-cmd: "echo {{.args}}"
+cmd: "echo {{.words}}"
+args:
+  - name: words
+    variadic: true
 commands:
   upper:
-    cmd: "echo {{.args}} | tr a-z A-Z"
+    cmd: "tr a-z A-Z"
 `)
 
 	mod, err := LoadModule(manifestPath, dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if mod.Cmd != "echo {{.args}}" {
-		t.Fatalf("unexpected default cmd: %q", mod.Cmd)
+	if !reflect.DeepEqual(mod.Cmd, CmdSpec{Text: "echo {{.words}}"}) {
+		t.Fatalf("unexpected default cmd: %+v", mod.Cmd)
 	}
 	if mod.Description != "Echo utilities" {
 		t.Fatalf("unexpected description: %q", mod.Description)
@@ -140,8 +149,8 @@ commands:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if mod.Cmd != "" {
-		t.Fatalf("expected empty default cmd, got %q", mod.Cmd)
+	if !mod.Cmd.IsZero() {
+		t.Fatalf("expected empty default cmd, got %+v", mod.Cmd)
 	}
 }
 
@@ -162,9 +171,8 @@ commands:
         cmd: "echo migrating down"
       create:
         description: Create a new migration
-        params:
+        args:
           - name: name
-            type: string
             required: true
         cmd: "echo create {{.name}}"
   status:
@@ -191,8 +199,8 @@ commands:
 	if !ok {
 		t.Fatal("subcommand 'up' not found")
 	}
-	if up.Cmd != "echo migrating up" {
-		t.Fatalf("unexpected up cmd: %q", up.Cmd)
+	if up.Cmd.Text != "echo migrating up" {
+		t.Fatalf("unexpected up cmd: %+v", up.Cmd)
 	}
 	if up.Description != "Run migrations up" {
 		t.Fatalf("unexpected up description: %q", up.Description)
@@ -202,19 +210,19 @@ commands:
 	if !ok {
 		t.Fatal("subcommand 'create' not found")
 	}
-	if len(create.Params) != 1 {
-		t.Fatalf("expected 1 param, got %d", len(create.Params))
+	if len(create.Args) != 1 {
+		t.Fatalf("expected 1 arg, got %d", len(create.Args))
 	}
-	if create.Params[0].Name != "name" || !create.Params[0].Required {
-		t.Fatalf("unexpected param: %+v", create.Params[0])
+	if create.Args[0].Name != "name" || !create.Args[0].Required || create.Args[0].Flag {
+		t.Fatalf("unexpected arg: %+v", create.Args[0])
 	}
 
 	status, ok := mod.Commands["status"]
 	if !ok {
 		t.Fatal("command 'status' not found")
 	}
-	if status.Cmd != "echo status" {
-		t.Fatalf("unexpected status cmd: %q", status.Cmd)
+	if status.Cmd.Text != "echo status" {
+		t.Fatalf("unexpected status cmd: %+v", status.Cmd)
 	}
 	if len(status.Commands) != 0 {
 		t.Fatalf("expected 0 subcommands, got %d", len(status.Commands))
@@ -247,10 +255,10 @@ commands:
 	if len(up.Commands) != 2 {
 		t.Fatalf("expected 2 nested subcommands, got %d", len(up.Commands))
 	}
-	if up.Commands["force"].Cmd != "echo force" {
+	if up.Commands["force"].Cmd.Text != "echo force" {
 		t.Fatal("nested subcommand 'force' not parsed correctly")
 	}
-	if up.Commands["safe"].Cmd != "echo safe" {
+	if up.Commands["safe"].Cmd.Text != "echo safe" {
 		t.Fatal("nested subcommand 'safe' not parsed correctly")
 	}
 }
@@ -262,61 +270,15 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
-func TestLoadModuleParsesPositional(t *testing.T) {
-	dir := t.TempDir()
-	manifestPath := filepath.Join(dir, "greet.yaml")
-	writeFile(t, manifestPath, `
-name: greet
-commands:
-  hello:
-    cmd: "echo {{index .args_list 0}}"
-    positional:
-      min: 1
-`)
-
-	mod, err := LoadModule(manifestPath, dir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	hello := mod.Commands["hello"]
-	if hello == nil {
-		t.Fatal("command 'hello' not found")
-	}
-	if hello.Positional.Min != 1 {
-		t.Fatalf("unexpected positional min: %d, want 1", hello.Positional.Min)
-	}
-}
-
-func TestLoadModulePositionalDefaultZero(t *testing.T) {
-	// Если positional не задан — min должен быть 0 (по умолчанию).
+func TestLoadModuleParsesInputDescription(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "mod.yaml")
 	writeFile(t, manifestPath, `
 name: mod
 commands:
   run:
-    cmd: "echo hi"
-`)
-
-	mod, err := LoadModule(manifestPath, dir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got := mod.Commands["run"].Positional.Min; got != 0 {
-		t.Fatalf("unexpected positional min: %d, want 0", got)
-	}
-}
-
-func TestLoadModuleParsesParamDescription(t *testing.T) {
-	dir := t.TempDir()
-	manifestPath := filepath.Join(dir, "mod.yaml")
-	writeFile(t, manifestPath, `
-name: mod
-commands:
-  run:
-    params:
+    args:
       - name: tag
-        type: string
         required: true
         description: Image tag
     cmd: "echo {{.tag}}"
@@ -327,26 +289,24 @@ commands:
 		t.Fatalf("unexpected error: %v", err)
 	}
 	run := mod.Commands["run"]
-	if run.Params[0].Description != "Image tag" {
-		t.Fatalf("unexpected param description: %q", run.Params[0].Description)
+	if run.Args[0].Description != "Image tag" {
+		t.Fatalf("unexpected arg description: %q", run.Args[0].Description)
 	}
 }
 
-func TestLoadModuleDefaultCmdParams(t *testing.T) {
+func TestLoadModuleDefaultCmdInputs(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "meta.yaml")
 	writeFile(t, manifestPath, `
 name: meta
-cmd: "echo {{.sep}} {{.args}}"
-params:
+cmd: "echo {{.sep}} {{.words}}"
+args:
+  - name: words
+    required: true
+    variadic: true
+flags:
   - name: sep
-    type: string
     default: "|"
-  - name: upper
-    type: bool
-    default: "false"
-positional:
-  min: 1
 commands:
   show:
     cmd: "echo show"
@@ -356,17 +316,11 @@ commands:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(mod.Params) != 2 {
-		t.Fatalf("expected 2 default cmd params, got %d", len(mod.Params))
+	if len(mod.Args) != 1 || mod.Args[0].Name != "words" || !mod.Args[0].Variadic {
+		t.Fatalf("unexpected module args: %+v", mod.Args)
 	}
-	if mod.Params[0].Name != "sep" || mod.Params[0].Default != "|" {
-		t.Fatalf("unexpected first param: %+v", mod.Params[0])
-	}
-	if mod.Params[1].Name != "upper" || mod.Params[1].Type != "bool" {
-		t.Fatalf("unexpected second param: %+v", mod.Params[1])
-	}
-	if mod.Positional.Min != 1 {
-		t.Fatalf("unexpected default positional min: %d", mod.Positional.Min)
+	if len(mod.Flags) != 1 || mod.Flags[0].Name != "sep" || *mod.Flags[0].Default != "|" {
+		t.Fatalf("unexpected module flags: %+v", mod.Flags)
 	}
 }
 
@@ -498,13 +452,13 @@ comands:
 commands:
   build:
     cmd: echo
-    params:
+    args:
       - name: tag
         requird: true
 `)
 	want := []string{
 		`line 2: unknown key "comands"`,
-		`line 9: unknown key "requird" in commands.build.params[0]`,
+		`line 9: unknown key "requird" in commands.build.args[0]`,
 	}
 	if len(got) < 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("errors = %q, want prefix %q", got, want)
@@ -541,5 +495,269 @@ func TestParseModuleEmptyManifestIsEmptyModule(t *testing.T) {
 	got := parseAndValidate(t, "")
 	if len(got) != 1 || got[0] != "module has no cmd and no commands" {
 		t.Fatalf("errors = %q, want [module has no cmd and no commands]", got)
+	}
+}
+
+// scenarioModules are the modules of the scenario corpus (k8s, files, docker,
+// echo, git, db); every one must load without errors and warnings.
+var scenarioModules = map[string]string{
+	"k8s": `
+name: k8s
+commands:
+  logs:
+    description: Show pod logs
+    args:
+      - name: pod
+        required: true
+        description: Pod name
+    flags:
+      - name: follow
+        type: bool
+        short: f
+      - name: tail
+        type: int
+        default: "100"
+    cmd: "kubectl logs {{if .follow}}-f{{end}} --tail={{.tail}} -- {{.pod}}"
+`,
+	"files": `
+name: files
+commands:
+  copy:
+    args:
+      - {name: src, required: true, variadic: true}
+      - {name: dst, required: true}
+    flags:
+      - {name: force, type: bool}
+    cmd: "cp {{if .force}}-f{{end}} -- {{.src}} {{.dst}}"
+  grep:
+    args:
+      - {name: pattern, required: true}
+      - {name: paths, variadic: true}
+    flags:
+      - {name: ignore_case, type: bool, short: i}
+    cmd: "grep {{if .ignore_case}}-i{{end}} -- {{.pattern}} {{.paths}}"
+`,
+	"docker": `
+name: docker
+cmd: docker ps
+commands:
+  build:
+    args:
+      - {name: context, default: "."}
+    flags:
+      - {name: tag, required: true, short: t}
+      - {name: file, default: Dockerfile}
+    cmd: [docker, build, -t, "{{.tag}}", -f, "{{.file}}", "{{.context}}"]
+  run:
+    args:
+      - {name: image, required: true}
+      - {name: docker_args, rest: true}
+    cmd: "docker run {{.image}} {{.docker_args}}"
+`,
+	"echo": `
+name: echo
+cmd: "echo {{.words}}"
+args:
+  - {name: words, variadic: true}
+`,
+	"git": `
+name: git
+cmd: git status
+commands:
+  commit:
+    flags:
+      - {name: message, required: true, short: m}
+      - {name: amend, type: bool}
+    cmd: "git commit -m {{.message}} {{if .amend}}--amend{{end}}"
+  help:
+    args:
+      - {name: topic}
+    cmd: "git help {{.topic}}"
+`,
+	"db": `
+name: db
+commands:
+  migrate:
+    args:
+      - {name: steps, type: int}
+    cmd: migrate {{.steps}}
+    commands:
+      up:
+        cmd: migrate up
+      down:
+        cmd: migrate down
+`,
+}
+
+func TestParseManifestInputs(t *testing.T) {
+	load := func(t *testing.T, name string) *Module {
+		t.Helper()
+		mod, err := ParseManifest([]byte(scenarioModules[name]), name+".yaml", "/m")
+		if err != nil {
+			t.Fatalf("ParseManifest(%s): %v", name, err)
+		}
+		errs, warns := mod.Validate()
+		if len(errs) != 0 || len(warns) != 0 {
+			t.Fatalf("%s: errors=%v warnings=%q", name, errs, warns)
+		}
+		return mod
+	}
+
+	t.Run("k8s", func(t *testing.T) {
+		logs := load(t, "k8s").Commands["logs"]
+		if logs.Description != "Show pod logs" || logs.Cmd.IsList {
+			t.Errorf("logs = %+v", logs)
+		}
+		wantArgs := []inputs.Spec{{Name: "pod", Required: true, Description: "Pod name"}}
+		if !reflect.DeepEqual(logs.Args, wantArgs) {
+			t.Errorf("Args = %+v, want %+v", logs.Args, wantArgs)
+		}
+		hundred := "100"
+		wantFlags := []inputs.Spec{
+			{Name: "follow", Type: "bool", Short: "f", Flag: true},
+			{Name: "tail", Type: "int", Default: &hundred, Flag: true},
+		}
+		if !reflect.DeepEqual(logs.Flags, wantFlags) {
+			t.Errorf("Flags = %+v, want %+v", logs.Flags, wantFlags)
+		}
+	})
+
+	t.Run("files", func(t *testing.T) {
+		mod := load(t, "files")
+		copyArgs := mod.Commands["copy"].Args
+		if !copyArgs[0].Variadic || !copyArgs[0].Required || copyArgs[1].Variadic {
+			t.Errorf("copy args = %+v", copyArgs)
+		}
+		if f := mod.Commands["grep"].Flags[0]; f.Name != "ignore_case" || f.Short != "i" || f.Type != "bool" {
+			t.Errorf("grep flag = %+v", f)
+		}
+	})
+
+	t.Run("docker", func(t *testing.T) {
+		mod := load(t, "docker")
+		if mod.Cmd.Text != "docker ps" || mod.Cmd.IsList {
+			t.Errorf("module cmd = %+v", mod.Cmd)
+		}
+		build := mod.Commands["build"]
+		wantCmd := CmdSpec{List: []string{"docker", "build", "-t", "{{.tag}}", "-f", "{{.file}}", "{{.context}}"}, IsList: true}
+		if !reflect.DeepEqual(build.Cmd, wantCmd) {
+			t.Errorf("build cmd = %+v, want %+v", build.Cmd, wantCmd)
+		}
+		if d := build.Args[0].Default; d == nil || *d != "." {
+			t.Errorf("context default = %v", d)
+		}
+		run := mod.Commands["run"]
+		if !run.Args[1].Rest || run.Args[1].Name != "docker_args" {
+			t.Errorf("run args = %+v", run.Args)
+		}
+	})
+
+	t.Run("echo", func(t *testing.T) {
+		mod := load(t, "echo")
+		if len(mod.Args) != 1 || !mod.Args[0].Variadic || len(mod.Commands) != 0 {
+			t.Errorf("echo = %+v", mod.Command)
+		}
+	})
+
+	t.Run("git", func(t *testing.T) {
+		mod := load(t, "git")
+		if f := mod.Commands["commit"].Flags[0]; f.Name != "message" || !f.Required || f.Short != "m" {
+			t.Errorf("commit flag = %+v", f)
+		}
+		if _, ok := mod.Commands["help"]; !ok {
+			t.Error("user command help is missing")
+		}
+	})
+
+	t.Run("db", func(t *testing.T) {
+		migrate := load(t, "db").Commands["migrate"]
+		if migrate.Args[0].Type != "int" || len(migrate.Commands) != 2 || migrate.Cmd.Text != "migrate {{.steps}}" {
+			t.Errorf("migrate = %+v", migrate)
+		}
+	})
+}
+
+func TestCmdSpecUnmarshal(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want CmdSpec
+		err  string
+	}{
+		{"string", `cmd: echo hi`, CmdSpec{Text: "echo hi"}, ""},
+		{"list", `cmd: [echo, "a b", ""]`, CmdSpec{List: []string{"echo", "a b", ""}, IsList: true}, ""},
+		{"empty list", `cmd: []`, CmdSpec{List: []string{}, IsList: true}, ""},
+		{"number", `cmd: 5`, CmdSpec{Text: "5"}, ""},
+		{"mapping", "cmd:\n  a: b\n", CmdSpec{}, "cmd must be a string or a list of strings"},
+		{"nested list", "cmd:\n  - [a, b]\n", CmdSpec{}, "cmd must be a string or a list of strings"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var doc struct {
+				Cmd CmdSpec `yaml:"cmd"`
+			}
+			err := yaml.Unmarshal([]byte(tt.yaml), &doc)
+			if tt.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.err) {
+					t.Fatalf("err = %v, want containing %q", err, tt.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if !reflect.DeepEqual(doc.Cmd, tt.want) {
+				t.Fatalf("Cmd = %+v, want %+v", doc.Cmd, tt.want)
+			}
+		})
+	}
+}
+
+func TestCmdSpecIsZeroAndDisplay(t *testing.T) {
+	zero := []CmdSpec{{}, {Text: "  \t"}, {IsList: true}, {List: []string{}, IsList: true}}
+	for _, c := range zero {
+		if !c.IsZero() {
+			t.Errorf("%+v.IsZero() = false, want true", c)
+		}
+	}
+	nonZero := []CmdSpec{{Text: "echo"}, {List: []string{""}, IsList: true}}
+	for _, c := range nonZero {
+		if c.IsZero() {
+			t.Errorf("%+v.IsZero() = true, want false", c)
+		}
+	}
+
+	display := []struct {
+		c    CmdSpec
+		want string
+	}{
+		{CmdSpec{Text: "echo {{.x}}"}, "echo {{.x}}"},
+		{CmdSpec{List: []string{"a", "b c"}, IsList: true}, `[a, "b c"]`},
+		{CmdSpec{List: []string{"x", "", "y,z"}, IsList: true}, `[x, "", "y,z"]`},
+	}
+	for _, tt := range display {
+		if got := tt.c.Display(); got != tt.want {
+			t.Errorf("Display(%+v) = %q, want %q", tt.c, got, tt.want)
+		}
+	}
+}
+
+func TestCmdSpecTemplateForms(t *testing.T) {
+	str, err := CmdSpec{Text: `echo "a b"`}.Template()
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, err := str.Eval(nil, argvtmpl.Values{})
+	if err != nil || !reflect.DeepEqual(argvtmpl.Argv(args), []string{"echo", "a b"}) {
+		t.Fatalf("string form: argv = %q, err = %v", argvtmpl.Argv(args), err)
+	}
+
+	list, err := CmdSpec{List: []string{"echo", `"a b"`}, IsList: true}.Template()
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, err = list.Eval(nil, argvtmpl.Values{})
+	if err != nil || !reflect.DeepEqual(argvtmpl.Argv(args), []string{"echo", `"a b"`}) {
+		t.Fatalf("list form: argv = %q, err = %v (quotes are literal in a list)", argvtmpl.Argv(args), err)
 	}
 }

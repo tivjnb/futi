@@ -13,6 +13,7 @@ import (
 
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
+	"github.com/tivjnb/futi/internal/inputs"
 	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
@@ -328,8 +329,8 @@ func isBoolFlag(loader modulerunner.ModuleLoader, manifest, root string, command
 	if err != nil {
 		return false
 	}
-	for _, p := range cmd.Params {
-		if p.Name == name && p.Type == "bool" {
+	for _, p := range cmd.Flags {
+		if cliName(p.Name) == name && p.Type == "bool" {
 			return true
 		}
 	}
@@ -382,14 +383,10 @@ func currentCommand(loader modulerunner.ModuleLoader, manifest, root string, com
 	}
 	commandPath = trimCommandPath(mod, commandPath)
 	if len(commandPath) == 0 {
-		if mod.Cmd == "" {
+		if mod.Cmd.IsZero() {
 			return nil, &notFoundError{"module has no default command"}
 		}
-		return &execmodule.Command{
-			Cmd:        mod.Cmd,
-			Params:     mod.Params,
-			Positional: mod.Positional,
-		}, nil
+		return &mod.Command, nil
 	}
 	return mod.ResolveCommandPath(commandPath)
 }
@@ -416,8 +413,8 @@ func moduleMatches(loader modulerunner.ModuleLoader, manifest, root string, comm
 	// Модуль-однокоманда (без commands, с default cmd) — листовая:
 	// подсказываем параметры default-команды.
 	if len(commandPath) == 0 {
-		if len(mod.Commands) == 0 && mod.Cmd != "" {
-			return filterMatches(withList(withHelp(paramMatches(&execmodule.Command{Params: mod.Params}, ""))), toComplete), ShellCompDirectiveNoFileComp
+		if len(mod.Commands) == 0 && !mod.Cmd.IsZero() {
+			return filterMatches(withList(withHelp(paramMatches(&mod.Command, ""))), toComplete), ShellCompDirectiveNoFileComp
 		}
 		return filterMatches(withList(withHelp(commandMatches(mod.Commands))), toComplete), ShellCompDirectiveNoFileComp
 	}
@@ -565,27 +562,30 @@ func flagMatches(flags []string, toComplete string) []Match {
 	return matches
 }
 
-// paramMatches отбирает параметры команды по префиксу toComplete (с "--").
+// cliName is the spelling of an input name on the command line.
+func cliName(name string) string { return strings.ReplaceAll(name, "_", "-") }
+
+// paramMatches отбирает флаги команды по префиксу toComplete (с "--").
 // Каждый параметр несёт пометку: "(required)" или "(default: X)" —
 // zsh показывает её рядом с флагом, bash/fish отрезают при выводе.
 func paramMatches(cmd *execmodule.Command, toComplete string) []Match {
 	prefix := strings.TrimPrefix(toComplete, "--")
 	matches := make([]Match, 0)
-	for _, p := range cmd.Params {
-		if strings.HasPrefix(p.Name, prefix) {
-			matches = append(matches, Match{Text: "--" + p.Name, Description: paramHint(p)})
+	for _, p := range cmd.Flags {
+		if name := cliName(p.Name); strings.HasPrefix(name, prefix) {
+			matches = append(matches, Match{Text: "--" + name, Description: paramHint(p)})
 		}
 	}
 	return matches
 }
 
 // paramHint формирует компактную пометку параметра для подсказки.
-func paramHint(p execmodule.Param) string {
+func paramHint(p inputs.Spec) string {
 	if p.Required {
 		return "(required)"
 	}
-	if p.Default != "" {
-		return "(default: " + p.Default + ")"
+	if p.Default != nil && *p.Default != "" {
+		return "(default: " + *p.Default + ")"
 	}
 	return ""
 }

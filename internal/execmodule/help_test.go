@@ -3,172 +3,198 @@ package execmodule
 import (
 	"strings"
 	"testing"
+
+	"github.com/tivjnb/futi/internal/inputs"
 )
 
-func TestFormatCommandHelpBasic(t *testing.T) {
-	cmd := &Command{
-		Description: "Build image",
-		Params: []Param{
-			{Name: "tag", Type: "string", Required: true},
-			{Name: "file", Type: "string", Default: "Dockerfile"},
+func TestFormatCommandHelpGolden(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		cmd  *Command
+		want string
+	}{
+		{
+			name: "docker build",
+			path: "docker build",
+			cmd: &Command{
+				Description: "Build an image",
+				Cmd:         cmdText("docker build"),
+				Args:        []inputs.Spec{{Name: "context", Description: "Build context directory", Default: strPtr(".")}},
+				Flags: []inputs.Spec{
+					{Name: "tag", Required: true, Short: "t", Flag: true},
+					{Name: "file", Default: strPtr("Dockerfile"), Flag: true},
+				},
+			},
+			want: `Build an image
+
+usage: futi docker build [flags] [context]
+  context  Build context directory (default ".")
+flags:
+  -t, --tag string   (required)
+      --file string  (default "Dockerfile")
+  -h, --help
+`,
 		},
-		Cmd: "docker build -t {{.tag}}",
-	}
-	out := FormatCommandHelp("demo build", cmd)
-
-	if !strings.Contains(out, "Build image") {
-		t.Fatalf("expected description, got:\n%s", out)
-	}
-	if !strings.Contains(out, "futi demo build") {
-		t.Fatalf("expected usage line, got:\n%s", out)
-	}
-	if !strings.Contains(out, "--tag") || !strings.Contains(out, "required") {
-		t.Fatalf("expected --tag required param, got:\n%s", out)
-	}
-	if !strings.Contains(out, "--file") || !strings.Contains(out, "Dockerfile") {
-		t.Fatalf("expected --file with default, got:\n%s", out)
-	}
-	if !strings.Contains(out, "docker build -t {{.tag}}") {
-		t.Fatalf("expected cmd section, got:\n%s", out)
-	}
-}
-
-func TestFormatCommandHelpPositional(t *testing.T) {
-	cmd := &Command{
-		Description: "Greet",
-		Positional:  Positional{Min: 1},
-		Cmd:         "echo {{index .args_list 0}}",
-	}
-	out := FormatCommandHelp("demo greet", cmd)
-	if !strings.Contains(out, "at least 1 argument after") {
-		t.Fatalf("expected positional section, got:\n%s", out)
-	}
-}
-
-func TestFormatCommandHelpNoParamsNoPositional(t *testing.T) {
-	cmd := &Command{
-		Description: "List",
-		Cmd:         "docker ps",
-	}
-	out := FormatCommandHelp("docker ps", cmd)
-	if strings.Contains(out, "PARAMETERS") {
-		t.Fatalf("expected no PARAMETERS section, got:\n%s", out)
-	}
-	if strings.Contains(out, "POSITIONAL") {
-		t.Fatalf("expected no POSITIONAL section, got:\n%s", out)
-	}
-	if !strings.Contains(out, "docker ps") {
-		t.Fatalf("expected cmd, got:\n%s", out)
-	}
-}
-
-func TestFormatCommandHelpBoolDefault(t *testing.T) {
-	cmd := &Command{
-		Params: []Param{
-			{Name: "excited", Type: "bool", Default: "false"},
+		{
+			name: "docker run",
+			path: "docker run",
+			cmd: &Command{
+				Cmd: cmdText("docker run"),
+				Args: []inputs.Spec{
+					{Name: "image", Required: true, Description: "Image to run"},
+					{Name: "docker_args", Rest: true, Description: "Options of docker run"},
+				},
+			},
+			want: `usage: futi docker run <image> [docker_args...]
+  image           Image to run (required)
+  docker_args...  Options of docker run (passed verbatim)
+flags:
+  -h, --help
+`,
 		},
-		Cmd: "echo hi",
-	}
-	out := FormatCommandHelp("demo greet", cmd)
-	if !strings.Contains(out, "--excited") || !strings.Contains(out, "bool") || !strings.Contains(out, "false") {
-		t.Fatalf("expected bool param with default, got:\n%s", out)
-	}
-}
+		{
+			name: "k8s logs",
+			path: "k8s logs",
+			cmd: &Command{
+				Description: "Show pod logs",
+				Cmd:         cmdText("kubectl logs"),
+				Args:        []inputs.Spec{{Name: "pod", Required: true, Description: "Pod name"}},
+				Flags: []inputs.Spec{
+					{Name: "follow", Type: "bool", Short: "f", Description: "Stream logs", Flag: true},
+					{Name: "tail", Type: "int", Default: strPtr("100"), Flag: true},
+				},
+			},
+			want: `Show pod logs
 
-func TestFormatModuleHelp(t *testing.T) {
-	mod := &Module{
-		Name:        "demo",
-		Description: "Feature showcase",
-		Cmd:         "echo default",
-		Commands: map[string]*Command{
-			"count": {Description: "Count up to N", Cmd: "seq 1 {{.n}}"},
-			"greet": {Description: "Greet someone", Cmd: "echo hi"},
+usage: futi k8s logs [flags] <pod>
+  pod  Pod name (required)
+flags:
+  -f, --follow    Stream logs
+      --tail int  (default 100)
+  -h, --help
+`,
 		},
 	}
-	out := FormatModuleHelp(mod, "demo")
-
-	if !strings.Contains(out, "Feature showcase") {
-		t.Fatalf("expected module description, got:\n%s", out)
-	}
-	if !strings.Contains(out, "echo default") {
-		t.Fatalf("expected default cmd, got:\n%s", out)
-	}
-	if !strings.Contains(out, "count") || !strings.Contains(out, "greet") {
-		t.Fatalf("expected commands listed, got:\n%s", out)
-	}
-	if !strings.Contains(out, "Count up to N") {
-		t.Fatalf("expected command description, got:\n%s", out)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := FormatCommandHelp(tt.path, tt.cmd); got != tt.want {
+				t.Errorf("FormatCommandHelp:\ngot:\n%s\nwant:\n%s", got, tt.want)
+			}
+		})
 	}
 }
 
-func TestFormatModuleHelpNoDefaultNoDesc(t *testing.T) {
-	mod := &Module{
-		Name: "demo",
-		Commands: map[string]*Command{
-			"run": {Cmd: "echo hi"},
+func TestFormatCommandHelpShapes(t *testing.T) {
+	tests := []struct {
+		name string
+		cmd  *Command
+		want string
+	}{
+		{
+			name: "variadic args and flag, flag name with underscore",
+			cmd: &Command{
+				Cmd: cmdText("x"),
+				Args: []inputs.Spec{
+					{Name: "src", Required: true, Variadic: true},
+					{Name: "dst", Required: true},
+				},
+				Flags: []inputs.Spec{{Name: "ignore_case", Type: "bool", Flag: true}, {Name: "env", Variadic: true, Flag: true}},
+			},
+			want: `usage: futi m c [flags] <src>... <dst>
+  src...  (required)
+  dst     (required)
+flags:
+      --ignore-case
+      --env string...
+  -h, --help
+`,
+		},
+		{
+			name: "optional variadic",
+			cmd:  &Command{Cmd: cmdText("echo"), Args: []inputs.Spec{{Name: "words", Variadic: true}}},
+			want: `usage: futi m c [words...]
+  words...
+flags:
+  -h, --help
+`,
+		},
+		{
+			name: "list-form cmd and no inputs",
+			cmd:  &Command{Cmd: CmdSpec{List: []string{"echo", "a b"}, IsList: true}},
+			want: `usage: futi m c
+flags:
+  -h, --help
+`,
+		},
+		{
+			name: "branch without cmd",
+			cmd: &Command{Commands: map[string]*Command{
+				"up":   {Description: "Apply", Cmd: cmdText("x")},
+				"down": {Cmd: cmdText("x")},
+			}},
+			want: `usage: futi m c <subcommand>
+subcommands:
+  down
+  up    Apply
+`,
+		},
+		{
+			name: "subcommands with a string arg warn",
+			cmd: &Command{
+				Cmd:      cmdText("x"),
+				Args:     []inputs.Spec{{Name: "steps"}},
+				Commands: map[string]*Command{"up": {Cmd: cmdText("x")}},
+			},
+			want: `usage: futi m c [steps]
+  steps
+flags:
+  -h, --help
+subcommands:
+  up
+warning: command "m c": words up are subcommands; pass such a value after --
+`,
+		},
+		{
+			name: "subcommands with an int arg do not warn",
+			cmd: &Command{
+				Cmd:      cmdText("x"),
+				Args:     []inputs.Spec{{Name: "steps", Type: "int"}},
+				Commands: map[string]*Command{"up": {Cmd: cmdText("x")}},
+			},
+			want: `usage: futi m c [steps]
+  steps
+flags:
+  -h, --help
+subcommands:
+  up
+`,
 		},
 	}
-	out := FormatModuleHelp(mod, "demo")
-	if strings.Contains(out, "echo default") {
-		t.Fatalf("expected no default cmd, got:\n%s", out)
-	}
-	if !strings.Contains(out, "run") {
-		t.Fatalf("expected command run, got:\n%s", out)
-	}
-}
-
-func TestFormatModuleHelpDefaultParams(t *testing.T) {
-	mod := &Module{
-		Name:        "meta",
-		Description: "Image stats",
-		Cmd:         "echo {{.json}}",
-		Params: []Param{
-			{Name: "json", Type: "bool", Description: "JSON output"},
-		},
-		Positional: Positional{Min: 1},
-	}
-	out := FormatModuleHelp(mod, "images meta")
-
-	if !strings.Contains(out, "default params:") {
-		t.Fatalf("expected default params section, got:\n%s", out)
-	}
-	if !strings.Contains(out, "--json") || !strings.Contains(out, "JSON output") {
-		t.Fatalf("expected --json with description, got:\n%s", out)
-	}
-	if !strings.Contains(out, "at least 1 argument") {
-		t.Fatalf("expected positional hint, got:\n%s", out)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := FormatCommandHelp("m c", tt.cmd); got != tt.want {
+				t.Errorf("FormatCommandHelp:\ngot:\n%s\nwant:\n%s", got, tt.want)
+			}
+		})
 	}
 }
 
-// TestFormatModuleHelpStripsControlChars: ESC/OSC из YAML не доходят до терминала,
+// TestFormatCommandHelpStripsControlChars: ESC/OSC из YAML не доходят до терминала,
 // а многострочный description сохраняет переводы строк (audit F18).
-func TestFormatModuleHelpStripsControlChars(t *testing.T) {
-	mod := &Module{
+func TestFormatCommandHelpStripsControlChars(t *testing.T) {
+	cmd := &Command{
 		Description: "line1\nline2\x1b]0;pwned\x07",
-		Commands: map[string]*Command{
-			"run": {Description: "d\x1b[2J", Cmd: "echo"},
-		},
+		Cmd:         cmdText("echo"),
+		Args:        []inputs.Spec{{Name: "x", Default: strPtr("d\x1b[31m"), Description: "pd\x1b[0m"}},
+		Flags:       []inputs.Spec{{Name: "f\x1b[1m", Short: "s\x1b[1m", Flag: true}},
+		Commands:    map[string]*Command{"run": {Description: "d\x1b[2J", Cmd: cmdText("echo")}},
 	}
-	out := FormatModuleHelp(mod, "demo")
+	out := FormatCommandHelp("demo\x1b[1m run", cmd)
 	if strings.Contains(out, "\x1b") || strings.Contains(out, "\x07") {
 		t.Fatalf("output contains control chars: %q", out)
 	}
-	if !strings.Contains(out, "demo — line1\nline2]0;pwned\n") {
-		t.Fatalf("multiline description not preserved: %q", out)
-	}
-}
-
-func TestFormatCommandHelpStripsControlChars(t *testing.T) {
-	cmd := &Command{
-		Description: "a\nb\x1b[2J",
-		Params:      []Param{{Name: "x", Default: "d\x1b[31m", Description: "pd\x1b[0m"}},
-		Cmd:         "echo\x1b[1m",
-	}
-	out := FormatCommandHelp("demo run", cmd)
-	if strings.Contains(out, "\x1b") {
-		t.Fatalf("output contains ESC: %q", out)
-	}
-	if !strings.Contains(out, "demo run — a\nb[2J\n") {
+	if !strings.HasPrefix(out, "line1\nline2]0;pwned\n\nusage: futi demo[1m run") {
 		t.Fatalf("multiline description not preserved: %q", out)
 	}
 }
@@ -176,33 +202,29 @@ func TestFormatCommandHelpStripsControlChars(t *testing.T) {
 // TestFormatHelpAlignmentUsesSanitizedWidth: ширина колонки считается по
 // очищенным именам (audit F18, review).
 func TestFormatHelpAlignmentUsesSanitizedWidth(t *testing.T) {
-	mod := &Module{Commands: map[string]*Command{
+	cmd := &Command{Commands: map[string]*Command{
 		"a\x1b[2Jbcdef": {Description: "d1"},
 		"x":             {Description: "d2"},
 	}}
-	out := FormatModuleHelp(mod, "m")
+	out := FormatCommandHelp("m", cmd)
 	if !strings.Contains(out, "  x          d2\n") || !strings.Contains(out, "  a[2Jbcdef  d1\n") {
 		t.Fatalf("misaligned: %q", out)
 	}
 }
 
-// TestFormatHelpParamAlignmentUsesSanitizedWidth: ESC в имени параметра не
-// сдвигает колонку описания ни в справке команды, ни в справке модуля.
-func TestFormatHelpParamAlignmentUsesSanitizedWidth(t *testing.T) {
-	params := []Param{
-		{Name: "a\x1b[2Jbcdef", Type: "string", Description: "d1"},
-		{Name: "x", Type: "string", Description: "d2"},
+// TestFormatHelpInputAlignmentUsesSanitizedWidth: ESC в имени входа не
+// сдвигает колонку описания.
+func TestFormatHelpInputAlignmentUsesSanitizedWidth(t *testing.T) {
+	cmd := &Command{
+		Cmd: cmdText("echo"),
+		Args: []inputs.Spec{
+			{Name: "a\x1b[2Jbcdef", Description: "d1"},
+			{Name: "x", Description: "d2"},
+		},
 	}
 	// Очищенное имя "a[2Jbcdef" — 9 символов, "x" дополняется 8 пробелами.
-	wantLong := "  --a[2Jbcdef  (string)  d1\n"
-	wantShort := "  --x          (string)  d2\n"
-
-	out := FormatCommandHelp("m c", &Command{Params: params, Cmd: "echo"})
-	if !strings.Contains(out, wantLong) || !strings.Contains(out, wantShort) {
-		t.Errorf("FormatCommandHelp misaligned: %q", out)
-	}
-	out = FormatModuleHelp(&Module{Params: params}, "m")
-	if !strings.Contains(out, wantLong) || !strings.Contains(out, wantShort) {
-		t.Errorf("FormatModuleHelp misaligned: %q", out)
+	out := FormatCommandHelp("m c", cmd)
+	if !strings.Contains(out, "  a[2Jbcdef  d1\n") || !strings.Contains(out, "  x          d2\n") {
+		t.Errorf("misaligned: %q", out)
 	}
 }

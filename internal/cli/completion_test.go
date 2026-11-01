@@ -38,14 +38,14 @@ commands:
     cmd: "docker ps"
   build:
     description: Build image
-    params:
+    flags:
       - name: tag
         type: string
         required: true
       - name: force
         type: bool
         default: false
-    cmd: "docker build -t {{.tag}}"
+    cmd: "docker build -t {{.tag}} {{if .force}}-f{{end}}"
 `)
 	writeFile(t, filepath.Join(dir, "git.yaml"), `
 name: git

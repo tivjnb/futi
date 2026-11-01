@@ -34,7 +34,7 @@ func runSystemHelp(w io.Writer, source discovery.Source, loader modulerunner.Mod
 	case core.HelpUsage:
 		printUsage(w)
 	case core.HelpModule:
-		fmt.Fprint(w, execmodule.FormatModuleHelp(doc.Module, name))
+		fmt.Fprint(w, execmodule.FormatCommandHelp(name, &doc.Module.Command))
 	case core.HelpCommand:
 		fmt.Fprint(w, execmodule.FormatCommandHelp(name, doc.Command))
 	case core.HelpNamespace:

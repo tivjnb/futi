@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tivjnb/futi/internal/argvtmpl"
 	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/modulerunner"
@@ -65,8 +66,9 @@ func (r *Runtime) ResolveWords(words []string) (*Target, []string, error) {
 
 // ExecuteRequest describes one command run.
 type ExecuteRequest struct {
-	Params map[string]string
-	Args   []string
+	// Inputs holds the given args and flags by name: string, bool, []string
+	// or []any of strings (see inputs.Bind).
+	Inputs map[string]any
 	// Stdin is the child's stdin; nil means empty.
 	Stdin io.Reader
 	// Stdout and Stderr receive the output; nil discards it.
@@ -102,12 +104,16 @@ type ExecuteResult struct {
 // output, and ctx cancellation (wrapping ctx.Err(), which takes priority).
 func (r *Runtime) Execute(ctx context.Context, t *Target, req ExecuteRequest) (ExecuteResult, error) {
 	var res ExecuteResult
-	resolved, err := t.r.Validate(req.Params, req.Args)
+	vals, err := t.r.Validate(req.Inputs)
 	if err != nil {
 		return res, invalidInput(err)
 	}
-	p, err := t.r.Prepare(resolved, req.Args)
+	p, err := t.r.Prepare(vals)
 	if err != nil {
+		var dash *argvtmpl.DashError
+		if errors.As(err, &dash) {
+			return res, invalidInput(err)
+		}
 		return res, err
 	}
 	res.Argv = p.Argv

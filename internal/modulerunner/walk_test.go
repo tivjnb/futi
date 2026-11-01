@@ -85,7 +85,7 @@ func TestWalk(t *testing.T) {
 			}
 			var cmd string
 			if node.Command != nil {
-				cmd = node.Command.Cmd
+				cmd = node.Command.Cmd.Text
 			}
 			if cmd != tt.wantCmd {
 				t.Errorf("Command.Cmd = %q, want %q", cmd, tt.wantCmd)
@@ -213,8 +213,8 @@ func TestWalkLayeredOverrideIsNotCollision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
 	}
-	if n != 2 || node.Command.Cmd != "echo local" {
-		t.Errorf("n = %d, cmd = %q, want 2, %q", n, node.Command.Cmd, "echo local")
+	if n != 2 || node.Command.Cmd.Text != "echo local" {
+		t.Errorf("n = %d, cmd = %q, want 2, %q", n, node.Command.Cmd.Text, "echo local")
 	}
 }
 
@@ -317,9 +317,9 @@ func TestResolveWordsRest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Command.Cmd != "echo build" || r.ModuleName() != "docker" ||
+	if r.Command.Cmd.Text != "echo build" || r.ModuleName() != "docker" ||
 		!slices.Equal(rest, []string{"--tag", "x", "--", "a"}) {
-		t.Errorf("cmd = %q, module = %q, rest = %q", r.Command.Cmd, r.ModuleName(), rest)
+		t.Errorf("cmd = %q, module = %q, rest = %q", r.Command.Cmd.Text, r.ModuleName(), rest)
 	}
 }
 

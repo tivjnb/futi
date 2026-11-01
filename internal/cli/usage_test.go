@@ -74,24 +74,27 @@ func TestUsageStreams(t *testing.T) {
 	}
 }
 
-// Примеры в usage не должны учить небезопасным шаблонам: значение без quote
-// и пайп (исполнение идёт без shell).
+// The usage text describes the current module format: no removed constructs
+// (quote, {{.args}}, shlex, --param), no pipes (execution is
+// without a shell), and the template variables of the module.
 func TestUsageExamplesAreSafe(t *testing.T) {
 	var buf bytes.Buffer
 	printUsage(&buf)
 	usage := buf.String()
-	if !strings.Contains(usage, "{{quote .msg}}") {
-		t.Errorf("usage не показывает {{quote .msg}}")
+	if !strings.Contains(usage, "{{.msg}}") {
+		t.Errorf("usage does not show {{.msg}}")
 	}
-	if strings.Contains(usage, "| tr") {
-		t.Errorf("usage содержит пример с пайпом (без shell он не работает)")
+	for _, removed := range []string{"{{quote", "{{.args", "shlex", "| tr", "--param"} {
+		if strings.Contains(usage, removed) {
+			t.Errorf("usage still mentions %q", removed)
+		}
 	}
 	if strings.Contains(usage, `"{{.msg}}"`) {
-		t.Errorf("usage советует оборачивать значение в кавычки вместо quote")
+		t.Errorf("usage advises wrapping a value in quotes")
 	}
-	for _, name := range []string{"{{.module_root}}", "{{.module_name}}"} {
+	for _, name := range []string{"{{.module_root}}", "{{.module_name}}", "args:", "flags:"} {
 		if !strings.Contains(usage, name) {
-			t.Errorf("usage не упоминает %s", name)
+			t.Errorf("usage does not mention %s", name)
 		}
 	}
 }

@@ -91,7 +91,7 @@ func listIn(src discovery.Source, loader modulerunner.ModuleLoader, namespace st
 			}
 
 			if len(cmd.Commands) > 0 {
-				return commandsResult(ListSubcommands, cmd.Commands, manifestPath, cmd.Cmd), nil
+				return commandsResult(ListSubcommands, cmd.Commands, manifestPath, !cmd.Cmd.IsZero()), nil
 			}
 
 			return ListResult{}, fmt.Errorf("list: command %q has no subcommands", strings.Join(commandPath, " "))
@@ -124,11 +124,11 @@ func ModuleCommands(loader modulerunner.ModuleLoader, manifestPath, moduleRoot s
 	if err != nil {
 		return ListResult{}, fmt.Errorf("list: %w", err)
 	}
-	return commandsResult(ListModule, mod.Commands, manifestPath, mod.Cmd), nil
+	return commandsResult(ListModule, mod.Commands, manifestPath, !mod.Cmd.IsZero()), nil
 }
 
-func commandsResult(kind ListKind, commands map[string]*execmodule.Command, manifestPath, defaultCmd string) ListResult {
-	res := ListResult{Kind: kind, Manifest: manifestPath, HasDefault: defaultCmd != ""}
+func commandsResult(kind ListKind, commands map[string]*execmodule.Command, manifestPath string, hasDefault bool) ListResult {
+	res := ListResult{Kind: kind, Manifest: manifestPath, HasDefault: hasDefault}
 	for name, cmd := range commands {
 		res.Commands = append(res.Commands, CommandEntry{Name: name, Description: cmd.Description})
 	}

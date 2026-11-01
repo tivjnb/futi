@@ -25,19 +25,18 @@ func resolveForTest(source discovery.Source, loader ModuleLoader, namespace, com
 func prepareForTest(
 	source discovery.Source,
 	namespace, command string,
-	params map[string]string,
-	argsList []string,
+	inputs map[string]any,
 	loader ModuleLoader,
 ) (*Prepared, error) {
 	r, err := resolveForTest(source, loader, namespace, command)
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := r.Validate(params, argsList)
+	vals, err := r.Validate(inputs)
 	if err != nil {
 		return nil, err
 	}
-	return r.Prepare(resolved, argsList)
+	return r.Prepare(vals)
 }
 
 // runForTest prepares a command and runs it with the same executor binding
@@ -46,12 +45,11 @@ func runForTest(
 	ctx context.Context,
 	source discovery.Source,
 	namespace, command string,
-	params map[string]string,
-	argsList []string,
+	inputs map[string]any,
 	stdout, stderr io.Writer,
 	loader ModuleLoader,
 ) error {
-	p, err := prepareForTest(source, namespace, command, params, argsList, loader)
+	p, err := prepareForTest(source, namespace, command, inputs, loader)
 	if err != nil {
 		return err
 	}

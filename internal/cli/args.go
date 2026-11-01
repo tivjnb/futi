@@ -59,7 +59,7 @@ func parseArgs(args []string) (*parsedArgs, error) {
 		if hasHelpFlag(flags) {
 			return nil, errHelp
 		}
-		usage := "usage: futi <namespace...> <command> [--param value] [-- args]"
+		usage := "usage: futi <namespace...> <command> [flags] [args]"
 		if len(flags) > 0 {
 			usage += " (" + pathBeforeFlagsHint + ")"
 		}
@@ -108,28 +108,8 @@ func splitInputs(rest []string) (flags, argsList []string) {
 	return flags, nil
 }
 
-// hasBareWord: среди сырых флагов есть слово без "-" (признак слова пути
-// после флага, например `futi k8s --follow logs`).
 // pathBeforeFlagsHint — подсказка про порядок: путь команды до флагов.
 const pathBeforeFlagsHint = "the command path goes before flags"
-
-// withPathHint дописывает подсказку о порядке пути и флагов, если среди флагов
-// есть «голое» слово (путь после флага); повторно не добавляет.
-func withPathHint(msg string, flags []string) string {
-	if hasBareWord(flags) && !strings.Contains(msg, pathBeforeFlagsHint) {
-		return msg + " (" + pathBeforeFlagsHint + ")"
-	}
-	return msg
-}
-
-func hasBareWord(flags []string) bool {
-	for _, f := range flags {
-		if !modulerunner.IsFlagToken(f) {
-			return true
-		}
-	}
-	return false
-}
 
 func hasHelpFlag(flags []string) bool {
 	for _, f := range flags {

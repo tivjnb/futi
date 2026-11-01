@@ -65,7 +65,7 @@ func (m *Module) ResolveCommand(path []string) (*Command, error) {
 		return nil, err
 	}
 
-	if cmd.Cmd == "" && len(cmd.Commands) > 0 {
+	if cmd.Cmd.IsZero() && len(cmd.Commands) > 0 {
 		return nil, fmt.Errorf("execmodule: command %q %w", strings.Join(path, " "), ErrRequiresSubcommand)
 	}
 

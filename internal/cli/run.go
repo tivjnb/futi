@@ -13,6 +13,7 @@ import (
 	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/executor"
+	"github.com/tivjnb/futi/internal/inputs"
 	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
@@ -71,7 +72,7 @@ func resolveErrorText(err error, path []string) string {
 	return runErrorText(err, path)
 }
 
-// runParsed — общий путь исполнения команды (rt.ResolveWords → bindFlags
+// runParsed — общий путь исполнения команды (rt.ResolveWords → inputs.Parse
 // (-h/--help → справка) → rt.Execute → formatRunError). Пишет в переданные
 // stdout/stderr и возвращает код выхода. Второе значение — ошибка запуска
 // (уже напечатанная в stderr): её возвращаем наружу, чтобы вызывающий через
@@ -91,25 +92,40 @@ func runParsed(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, r
 		return core.ExitCode(err), err
 	}
 	path := pa.words[:len(pa.words)-len(rest)]
-	flags, argsList := splitInputs(rest)
-	return runTarget(ctx, stdin, stdout, stderr, rt, t, path, flags, argsList, pa.dryRun)
+	return runTarget(ctx, stdin, stdout, stderr, rt, t, path, rest, pa.dryRun)
 }
 
-// runTarget runs an already resolved target reached by path: flag binding,
-// -h, execution, dry-run output and the wait error.
-func runTarget(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt *core.Runtime, t *core.Target, path, flags, argsList []string, dryRun bool) (int, error) {
+// withSubcommandHint appends the path hint to a parse error when a token
+// before "--" names a subcommand of cmd: the user put flags before the path
+// (futi db --verbose migrate).
+func withSubcommandHint(msg string, cmd *execmodule.Command, rest []string) string {
+	for _, tok := range rest {
+		if tok == "--" {
+			break
+		}
+		if _, ok := cmd.Commands[tok]; ok {
+			return msg + " (put the full command path before flags)"
+		}
+	}
+	return msg
+}
+
+// runTarget runs an already resolved target reached by path: parsing of the
+// inputs (-h shows the help), execution, dry-run output and the wait error.
+func runTarget(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt *core.Runtime, t *core.Target, path, rest []string, dryRun bool) (int, error) {
 	source, _ := rt.Source() // main has already checked the error
-	params, help, err := bindFlags(t.Command(), flags)
+	cmd := t.Command()
+	res, err := inputs.Parse(cmd.Args, cmd.Flags, rest, "futi "+strings.Join(path, " "))
 	if err != nil {
-		fmt.Fprintf(stderr, "%s\n", withPathHint(err.Error(), flags))
+		fmt.Fprintf(stderr, "%s\n", withSubcommandHint(err.Error(), cmd, rest))
 		return 1, nil
 	}
-	if help {
+	if res.Help {
 		return systemHelpCode(stdout, stderr, source, rt.Cache(), path), nil
 	}
-	res, err := rt.Execute(ctx, t, core.ExecuteRequest{
-		Params: params, Args: argsList,
-		Stdin: stdin, Stdout: stdout, Stderr: stderr,
+	exec, err := rt.Execute(ctx, t, core.ExecuteRequest{
+		Inputs: res.Values,
+		Stdin:  stdin, Stdout: stdout, Stderr: stderr,
 		DryRun: dryRun,
 	})
 	if err != nil {
@@ -117,12 +133,12 @@ func runTarget(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, r
 		return core.ExitCode(err), err
 	}
 	if dryRun {
-		fmt.Fprintln(stdout, shellJoin(res.Argv))
+		fmt.Fprintln(stdout, shellJoin(exec.Argv))
 		return 0, nil
 	}
-	if res.WaitErr != nil {
-		fmt.Fprintf(stderr, "%s\n", formatRunError(res.WaitErr))
-		return res.ExitCode, res.WaitErr
+	if exec.WaitErr != nil {
+		fmt.Fprintf(stderr, "%s\n", formatRunError(exec.WaitErr))
+		return exec.ExitCode, exec.WaitErr
 	}
 	return 0, nil
 }

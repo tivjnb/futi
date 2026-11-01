@@ -121,7 +121,7 @@ commands:
   ps:
     cmd: "docker ps"
   build:
-    params:
+    flags:
       - name: tag
         type: string
         required: true
@@ -151,12 +151,12 @@ name: bad
 commands:
   empty: {}
   build:
-    params:
+    flags:
       - name: tag
         type: float
       - name: tag
         type: string
-    cmd: "docker build"
+    cmd: "docker build {{.tag}}"
 `)
 
 	source := discovery.NewGlobalSource(dir)
@@ -222,4 +222,4 @@ func TestRunValidateModuleNotFound(t *testing.T) {
 	}
 }
 
-// --- #39: -v/-r flags don't pollute params for regular commands ---
+// --- #39: -v/-r flags don't pollute inputs for regular commands ---

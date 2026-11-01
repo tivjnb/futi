@@ -185,7 +185,7 @@ func (n *Node) step(source discovery.Source, loader ModuleLoader, seg string, op
 
 // runnable reports whether the node has its own cmd.
 func (n *Node) runnable() bool {
-	return n.Command != nil && n.Command.Cmd != ""
+	return n.Command != nil && !n.Command.Cmd.IsZero()
 }
 
 // collision builds the error for segment path[len-1], which is a command of
@@ -206,13 +206,7 @@ func (n *Node) collision(source discovery.Source, path []string, ns string, isMo
 
 // moduleCommand is the module's own command: its cmd, schema and commands.
 func moduleCommand(mod *execmodule.Module) *execmodule.Command {
-	return &execmodule.Command{
-		Description: mod.Description,
-		Params:      mod.Params,
-		Positional:  mod.Positional,
-		Cmd:         mod.Cmd,
-		Commands:    mod.Commands,
-	}
+	return &mod.Command
 }
 
 // Children returns the sorted names of the node's children: discovery children
@@ -263,7 +257,6 @@ func ResolveWords(source discovery.Source, loader ModuleLoader, words []string) 
 		Module:       node.Module,
 		ModuleRoot:   node.ModuleRoot,
 		ManifestPath: node.ManifestPath,
-		label:        strings.Join(node.Path, " "),
 	}, rest, nil
 }
 

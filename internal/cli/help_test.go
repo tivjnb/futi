@@ -15,7 +15,7 @@ import (
 
 // helpTestSource создаёт GlobalSource с модулями для тестов help:
 //
-//	demo.yaml    — команды greet (leaf с params), db (ветка up/down), help (user-defined)
+//	demo.yaml    — команды greet (leaf с flags), db (ветка up/down), help (user-defined)
 //	plain.yaml   — модуль без user-defined help
 func helpTestSource(t *testing.T) *core.Runtime {
 	t.Helper()
@@ -26,7 +26,7 @@ description: Feature showcase
 commands:
   greet:
     description: Greet someone
-    params:
+    flags:
       - name: name
         type: string
         required: true
@@ -106,7 +106,7 @@ func TestRunHelpLeafCommand(t *testing.T) {
 	}
 	s := stdout
 	if !strings.Contains(s, "Greet someone") || !strings.Contains(s, "--name") || !strings.Contains(s, "required") {
-		t.Fatalf("expected command help with params, got:\n%s", s)
+		t.Fatalf("expected command help with flags, got:\n%s", s)
 	}
 }
 
@@ -174,7 +174,7 @@ func TestUsageListsAllReservedWords(t *testing.T) {
 
 // userHelpSource — модули с пользовательской командой help:
 //
-//	m    — required-параметр x, печатает x и args в stdout, "ERRTEXT" в stderr
+//	m    — required-флаг x, печатает x и args в stdout, "ERRTEXT" в stderr
 //	bad  — help завершается с кодом 3
 //	plain — без пользовательской help
 func userHelpSource(t *testing.T) *core.Runtime {
@@ -185,11 +185,14 @@ name: m
 commands:
   help:
     description: Custom help text
-    params:
+    args:
+      - name: words
+        variadic: true
+    flags:
       - name: x
         type: string
         required: true
-    cmd: "sh -c 'echo x=$1 args=$2; echo ERRTEXT >&2' sh {{quote .x}} {{quote .args}}"
+    cmd: ["sh", "-c", "echo x=$1 args=$2 $3; echo ERRTEXT >&2", "sh", "{{.x}}", "{{.words}}"]
 `)
 	writeFile(t, filepath.Join(dir, "bad.yaml"), `
 name: bad
@@ -269,7 +272,7 @@ func TestRunHelpDottedPath(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code = %d, stderr: %s", code, stderr)
 	}
-	if !strings.HasPrefix(stdout, "demo greet — Greet someone\n") || !strings.Contains(stdout, "--name") {
+	if !strings.HasPrefix(stdout, "Greet someone\n\nusage: futi demo greet [flags]\n") || !strings.Contains(stdout, "--name") {
 		t.Fatalf("expected help of command demo greet, got:\n%s", stdout)
 	}
 }
@@ -355,8 +358,8 @@ cmd: "echo b"
 		wantStdout string
 		wantStderr string
 	}{
-		{"module", helpArgs("branch"), 0, "branch — Branch module\ncommands:\n  help\n", ""},
-		{"module without help command", helpArgs("plain"), 0, "plain — Plain module\ncommands:\n  run\n", ""},
+		{"module", helpArgs("branch"), 0, "Branch module\n\nusage: futi branch <subcommand>\nsubcommands:\n  help\n", ""},
+		{"module without help command", helpArgs("plain"), 0, "Plain module\n\nusage: futi plain <subcommand>\nsubcommands:\n  run\n", ""},
 		{"broken yaml", helpArgs("bad"), 1, "", "help: execmodule: parse manifest \"" + filepath.Join(dir, "bad.yaml") + "\": yaml: line 1: did not find expected node content\n"},
 		{"unknown path", helpArgs("nope"), 1, "", "unknown command \"nope\" for \"futi\"\n"},
 		{"unknown command", helpArgs("plain", "nope"), 1, "", "unknown command \"nope\" for \"futi plain\" (available: run)\n"},

@@ -14,7 +14,7 @@ Turns scattered commands, scripts and tools into YAML modules with a single
 CLI interface. Install a module once — use it everywhere.
 
 USAGE
-  futi <namespace...> <command> [--param value] [--bool-flag] [-- args]
+  futi <namespace...> <command> [flags] [args...]
   futi <namespace>                    Invoke module's default command (if defined)
   futi help <path...>                 Show help for a module, command or namespace
   futi list [<path...>] [flags]       List modules, namespaces or commands
@@ -33,20 +33,20 @@ of module "dev.deploy" (dev/deploy.yaml). A dotted word is the same as
 separate words: "futi dev.deploy staging". A path that names two things at
 once (a module command and a module or namespace) is an error.
 
-The order is strict: path, then flags, then "-- args". The path ends at the
-first token starting with "-" (a lone "-" does not count), at "--", or at the
-first word that is not a child of the current node; a word after a flag is
-only accepted as the value of the preceding string/int flag. "-h" / "--help" after the path shows
-help for that path.
+The path ends at the first token starting with "-" (a lone "-" does not
+count), at "--", or at the first word that is not a child of the current node.
+After the path, flags and arguments may be mixed. "--" makes every following
+token an argument (a value starting with "-", or one equal to a subcommand
+name). "-h" / "--help" after the path shows help for that path.
 
 Reserved words: "help", "list", "cache", "modules", "completion",
 "__complete". They are builtin commands only as the first word, so they cannot
 be top-level module or namespace names; deeper in the path they are ordinary
 names ("futi git help" runs command "help" of module "git").
 
-Arguments after "--" are passed to the command's template as {{.args}}
-(space-joined string) and {{.args_list}} (array). Example:
-  futi echo_mod echo -- hello world  →  cmd: "echo {{.args}}"  → echo hello world
+A command declares its inputs as "args" (positional) and "flags" (--name);
+see MODULE SCHEMA. Example:
+  futi k8s logs mypod --tail 50      →  kubectl logs --tail=50 -- mypod
 
 MODULES
   Modules live in ~/.config/futi/modules/ by default (override with
@@ -106,23 +106,28 @@ COMPLETION
                                      zsh:   futi completion zsh > "${fpath[1]}/_futi"
                                      fish:  futi completion fish > ~/.config/fish/completions/futi.fish
                                    Completion suggests modules, namespaces,
-                                   commands, subcommands, parameter names and
+                                   commands, subcommands, flag names and
                                    boolean values (true/false).
 
 VALIDATION
   futi modules validate <ns>       Validate module schema (all commands and
-                                   params, recursively). Prints a report with
+                                   inputs, recursively). Prints a report with
                                    ERROR and WARNING lines, or "OK" if clean.
                                    Exit code: 0 if no errors, 1 otherwise.
 
                                    Errors (block module loading):
                                      - command without cmd and commands
-                                     - duplicate param names in a command
-                                     - invalid param type (not string/bool/int)
+                                     - invalid args/flags schema (names,
+                                       types, the form of args)
+                                     - cmd template errors (unknown or unused
+                                       inputs, unsupported constructs)
+                                     - params/positional (old format)
 
                                    Warnings (do not block):
                                      - command with subcommands but no cmd
                                        (calling without subcommand fails)
+                                     - a subcommand name could be meant as a
+                                       value of a string arg
 
 MODULES
   futi modules init <name>         Create a new module in ./.futi/<name>.yaml
@@ -182,13 +187,15 @@ MODULES
   --skip-detach                    Skip the detach: hook
   --strict-detach                  Abort (do not delete) if detach: fails
 
-PARAMETERS
-  --param value                    Pass a string/int parameter
-  --param=value                    Alternative syntax (required for values
-                                   starting with "--")
-  --bool-flag                      Boolean flag (true when bare; never takes
-                                   the next word as its value)
-  --bool-flag=false                Explicit false
+INPUTS OF A COMMAND
+  <arg>                            Positional arguments, in declaration order
+  --flag value, --flag=value       Flag with a string or int value (the value
+                                   is the next token unless it is a flag of
+                                   the command or "--")
+  -f value                         Short form, set by "short" in the module
+  --bool-flag                      Boolean flag: true when bare, never takes
+                                   the next word; --bool-flag=false for false
+  --                               Everything after it is an argument
 
   Boolean values: true/false, 1/0, yes/no, on/off (case-insensitive); anything
   else is an error. Use {{if .flag}}...{{end}} in templates.
@@ -201,12 +208,18 @@ MODULE SCHEMA (YAML)
   commands:
     build:
       description: Build image      Optional
-      params:
+      args:
+        - name: context            a-z, 0-9 and _ ("_" is "-" in flags)
+          default: "."
+          description: Build context directory
+      flags:
         - name: tag
-          type: string              string (default), bool, or int
+          type: string              string (default), int, or bool (flags only)
           required: true
+          short: t                  -t, one letter
+        - name: file
           default: Dockerfile
-      cmd: "docker build -t {{.tag}} ."
+      cmd: "docker build -t {{.tag}} -f {{.file}} {{.context}}"
 
     # Nested commands: a command can have "commands" alongside or instead
     # of "cmd". When both are present, "cmd" is a fallback (invoked when
@@ -220,36 +233,39 @@ MODULE SCHEMA (YAML)
         down:
           cmd: "migrate down"
         create:
-          params:
+          args:
             - name: name
-              type: string
               required: true
           cmd: "migrate create {{.name}}"
 
   # Module with default command + args (echo-like):
   #   name: echo_mod
-  #   cmd: "echo {{.args}}"
-  #   commands:
-  #     shout:
-  #       cmd: "echo {{quote .args}}"
+  #   cmd: "echo {{.words}}"
+  #   args:
+  #     - name: words
+  #       variadic: true            several words in a row; "rest: true"
+  #                                 takes all remaining tokens verbatim
 
 TEMPLATING
-  Commands use Go text/template syntax:
-    {{.name}}                       Substitute a parameter value
-    {{.args}}                       All args after "--" (space-joined string)
-    {{index .args_list 0}}          Nth arg after "--" (array access)
+  cmd is a string (split into arguments at whitespace; quotes group) or a
+  list (every item is exactly one argument):
+    cmd: "docker build -t {{.tag}} ."
+    cmd: [docker, build, -t, "{{.tag}}", .]
+  Inside cmd:
+    {{.name}}                       Value of an arg or flag
     {{.env.FOO}}                    Environment variable FOO (error if unset)
-    {{if index .env "FOO"}}...{{end}}  Conditional on env var presence
-    {{if .follow}}...{{end}}        Conditional block (for bool params)
-
-    {{.module_root}}                Directory of the module (use {{quote .module_root}})
+    {{if .follow}}...{{end}}        Conditional: a bool flag is true, any
+                                    other input is set (also .env.FOO)
+    {{range .files}}...{{.}}...{{end}}  Repeat for each value of a variadic input
+    {{.module_root}}                Directory of the module
     {{.module_name}}                Name of the module
 
-  Commands run without a shell: the rendered "cmd" is split into words (like
-  shlex), so a substituted value is split again. Always wrap user input in
-  quote, otherwise spaces split it into several arguments and a value starting
-  with "-" becomes a flag:
-    cmd: "echo {{quote .msg}}"      --msg "hello world" is passed as one argument
+  Commands run without a shell, and a value is never split again: it is
+  exactly one argument, whatever it contains:
+    cmd: "echo {{.msg}}"            --msg "hello world" is passed as one argument
+  An argument that starts with a value beginning with "-" is refused (the
+  program would read it as an option), unless it comes after a literal "--"
+  in cmd or the input has "allow_dash: true".
   Shell features (pipes, redirects, globs) are not available in "cmd".
 
 FLAGS
@@ -259,7 +275,7 @@ FLAGS
   -r, --recurse                     Recursively list namespace subtree
                                     (flag of "list" only)
 
-  Other short flags (-x) are not accepted: pass parameters as --name value.
+  Short flags of a command are only those its module declares ("short").
 
 EXAMPLES
   futi docker build -h             Show help for "docker build"
@@ -269,8 +285,9 @@ EXAMPLES
   futi k8s logs --follow            Bool flag --follow
   futi db migrate up                Nested command: "migrate up" in "db" module
   futi list db migrate              List subcommands of "migrate"
-  futi echo_mod echo -- hello world Pass args to command (via {{.args}})
-  futi echo_mod -- hello world      Invoke module's default command with args
+  futi echo_mod echo hello world    Pass arguments to command "echo"
+  futi echo_mod hello world         Invoke module's default command with args
+  futi echo_mod -- build            "--": "build" is an argument, not a command
   futi list images -r               Recursively list all image modules
   futi list docker -v               Show docker commands with manifest path
 

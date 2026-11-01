@@ -158,12 +158,12 @@ type verifiedSpy struct{ verified, plain int }
 
 func (s *verifiedSpy) LoadModule(string, string) (*execmodule.Module, error) {
 	s.plain++
-	return &execmodule.Module{Name: "db", Description: "PLAIN"}, nil
+	return &execmodule.Module{Name: "db", Command: execmodule.Command{Description: "PLAIN"}}, nil
 }
 
 func (s *verifiedSpy) LoadModuleVerified(string, string) (*execmodule.Module, error) {
 	s.verified++
-	return &execmodule.Module{Name: "db", Description: "VERIFIED"}, nil
+	return &execmodule.Module{Name: "db", Command: execmodule.Command{Description: "VERIFIED"}}, nil
 }
 
 func TestHelpInModuleUsesVerifiedLoad(t *testing.T) {

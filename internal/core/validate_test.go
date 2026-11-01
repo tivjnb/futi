@@ -17,12 +17,11 @@ name: bad
 commands:
   empty: {}
   build:
-    params:
+    args:
       - name: tag
         type: float
       - name: tag
-        type: string
-    cmd: "docker build"
+    cmd: "docker build {{.tag}}"
 `)
 	rep, err := core.ValidateIn(discovery.NewGlobalSource(dir), "bad")
 	if err != nil {

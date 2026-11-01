@@ -75,8 +75,8 @@ func TestRunNoSubcommandMessages(t *testing.T) {
 
 func TestRunParentFlagNotInherited(t *testing.T) {
 	mods := t.TempDir()
-	writeMainTestFile(t, filepath.Join(mods, "db.yaml"), `cmd: echo db
-params:
+	writeMainTestFile(t, filepath.Join(mods, "db.yaml"), `cmd: echo db {{if .verbose}}v{{end}}
+flags:
   - name: verbose
     type: bool
 commands:
@@ -84,8 +84,8 @@ commands:
     cmd: echo migrate
 `)
 	_, stderr, code := runMainIn(t, mods, "db", "migrate", "--verbose")
-	if code != 1 || stderr != "unknown param \"verbose\"\n" {
-		t.Errorf("code=%d stderr=%q, want 1 and unknown param \"verbose\"", code, stderr)
+	if code != 1 || stderr != "unknown flag --verbose for \"futi db migrate\"\n" {
+		t.Errorf("code=%d stderr=%q, want 1 and unknown flag --verbose for \"futi db migrate\"", code, stderr)
 	}
 }
 
@@ -133,7 +133,7 @@ func TestHelpFirstWord(t *testing.T) {
 		{"command help", []string{"help", "docker", "build"}, 0, "Build an image", ""},
 		{"dotted path", []string{"help", "docker.build"}, 0, "Build an image", ""},
 		{"module help", []string{"help", "docker"}, 0, "build", ""},
-		{"user command named help is still described", []string{"help", "git", "help"}, 0, "echo user-help", ""},
+		{"user command named help is still described", []string{"help", "git", "help"}, 0, "usage: futi git help", ""},
 		{"extra word", []string{"help", "docker", "build", "extra"}, 1, "", "unknown command \"extra\" for \"futi docker build\"\n"},
 		{"unknown module", []string{"help", "nope"}, 1, "", "unknown command \"nope\" for \"futi\"\n"},
 		{"usage", []string{"help"}, 0, "USAGE", ""},

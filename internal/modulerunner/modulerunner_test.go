@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tivjnb/futi/internal/argvtmpl"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/modulecache"
@@ -49,11 +50,11 @@ func TestRunExecutesCommand(t *testing.T) {
 name: testmod
 commands:
   greet:
-    params:
+    flags:
       - name: name
         type: string
         required: true
-    cmd: "{{quote .module_root}}/greet.sh {{.name}}"
+    cmd: "{{.module_root}}/greet.sh {{.name}}"
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -62,7 +63,7 @@ commands:
 	source := discovery.NewGlobalSource(dir)
 
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "testmod", "greet", map[string]string{"name": "world"}, nil, &stdout, nil, nil)
+	err := runForTest(context.Background(), source, "testmod", "greet", map[string]any{"name": "world"}, &stdout, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -76,7 +77,7 @@ func TestRunModuleNotFoundReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	source := discovery.NewGlobalSource(dir)
 
-	err := runForTest(context.Background(), source, "nonexistent", "cmd", map[string]string{}, nil, nil, nil, nil)
+	err := runForTest(context.Background(), source, "nonexistent", "cmd", nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for missing module")
 	}
@@ -97,7 +98,7 @@ commands:
 
 	source := discovery.NewGlobalSource(dir)
 
-	err := runForTest(context.Background(), source, "testmod", "nonexistent", map[string]string{}, nil, nil, nil, nil)
+	err := runForTest(context.Background(), source, "testmod", "nonexistent", nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for missing command")
 	}
@@ -113,7 +114,7 @@ func TestRunMissingRequiredParamReturnsError(t *testing.T) {
 name: testmod
 commands:
   build:
-    params:
+    flags:
       - name: tag
         type: string
         required: true
@@ -125,7 +126,7 @@ commands:
 
 	source := discovery.NewGlobalSource(dir)
 
-	err := runForTest(context.Background(), source, "testmod", "build", map[string]string{}, nil, nil, nil, nil)
+	err := runForTest(context.Background(), source, "testmod", "build", nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for missing required param")
 	}
@@ -204,7 +205,7 @@ commands:
 
 	source := discovery.NewGlobalSource(dir)
 
-	err := runForTest(context.Background(), source, "testmod", "fail", map[string]string{}, nil, nil, nil, nil)
+	err := runForTest(context.Background(), source, "testmod", "fail", nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for non-zero exit")
 	}
@@ -238,9 +239,9 @@ commands:
   migrate:
     commands:
       up:
-        cmd: "{{quote .module_root}}/migrate.sh up"
+        cmd: "{{.module_root}}/migrate.sh up"
       down:
-        cmd: "{{quote .module_root}}/migrate.sh down"
+        cmd: "{{.module_root}}/migrate.sh down"
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -249,7 +250,7 @@ commands:
 	source := discovery.NewGlobalSource(dir)
 
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "db.migrate", "up", map[string]string{}, nil, &stdout, nil, nil)
+	err := runForTest(context.Background(), source, "db.migrate", "up", nil, &stdout, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -281,9 +282,9 @@ commands:
       up:
         commands:
           force:
-            cmd: "{{quote .module_root}}/migrate.sh up force"
+            cmd: "{{.module_root}}/migrate.sh up force"
           safe:
-            cmd: "{{quote .module_root}}/migrate.sh up safe"
+            cmd: "{{.module_root}}/migrate.sh up safe"
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -292,7 +293,7 @@ commands:
 	source := discovery.NewGlobalSource(dir)
 
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "db.migrate.up", "force", map[string]string{}, nil, &stdout, nil, nil)
+	err := runForTest(context.Background(), source, "db.migrate.up", "force", nil, &stdout, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -322,11 +323,11 @@ commands:
   migrate:
     commands:
       create:
-        params:
+        flags:
           - name: name
             type: string
             required: true
-        cmd: "{{quote .module_root}}/migrate.sh {{quote .name}}"
+        cmd: "{{.module_root}}/migrate.sh {{.name}}"
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -335,7 +336,7 @@ commands:
 	source := discovery.NewGlobalSource(dir)
 
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "db.migrate", "create", map[string]string{"name": "initial"}, nil, &stdout, nil, nil)
+	err := runForTest(context.Background(), source, "db.migrate", "create", map[string]any{"name": "initial"}, &stdout, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -362,7 +363,7 @@ commands:
 
 	source := discovery.NewGlobalSource(dir)
 
-	err := runForTest(context.Background(), source, "db", "migrate", map[string]string{}, nil, nil, nil, nil)
+	err := runForTest(context.Background(), source, "db", "migrate", nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error: 'migrate' requires a subcommand")
 	}
@@ -377,10 +378,13 @@ func TestRunDefaultCmdWithArgs(t *testing.T) {
 	manifestPath := filepath.Join(dir, "echo_mod.yaml")
 	manifest := []byte(`
 name: echo_mod
-cmd: "echo {{.args}}"
+cmd: "echo {{.words}}"
+args:
+  - name: words
+    variadic: true
 commands:
   upper:
-    cmd: "echo {{.args}} | tr a-z A-Z"
+    cmd: "echo upper"
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -389,7 +393,7 @@ commands:
 	source := discovery.NewGlobalSource(dir)
 
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "echo_mod", "", map[string]string{}, []string{"hello", "world"}, &stdout, nil, nil)
+	err := runForTest(context.Background(), source, "echo_mod", "", map[string]any{"words": []string{"hello", "world"}}, &stdout, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -410,7 +414,10 @@ func TestRunCommandWithArgsViaDoubleDash(t *testing.T) {
 name: echo_mod
 commands:
   echo:
-    cmd: "echo {{.args}}"
+    args:
+      - name: words
+        variadic: true
+    cmd: "echo {{.words}}"
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -419,7 +426,7 @@ commands:
 	source := discovery.NewGlobalSource(dir)
 
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "echo_mod", "echo", map[string]string{}, []string{"hello", "world"}, &stdout, nil, nil)
+	err := runForTest(context.Background(), source, "echo_mod", "echo", map[string]any{"words": []string{"hello", "world"}}, &stdout, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -429,7 +436,7 @@ commands:
 	}
 }
 
-func TestRunCommandWithArgsList(t *testing.T) {
+func TestRunCommandWithNamedArgs(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell scripts not supported in this test on Windows")
 	}
@@ -439,8 +446,11 @@ func TestRunCommandWithArgsList(t *testing.T) {
 	manifest := []byte(`
 name: echo_mod
 commands:
-  first:
-    cmd: "echo {{index .args_list 0}}"
+  swap:
+    args:
+      - name: first
+      - name: second
+    cmd: "echo {{.second}} {{.first}}"
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -449,13 +459,13 @@ commands:
 	source := discovery.NewGlobalSource(dir)
 
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "echo_mod", "first", map[string]string{}, []string{"hello", "world"}, &stdout, nil, nil)
+	err := runForTest(context.Background(), source, "echo_mod", "swap", map[string]any{"first": "hello", "second": "world"}, &stdout, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if got := stdout.String(); got != "hello\n" {
-		t.Fatalf("unexpected output: %q, want %q", got, "hello\n")
+	if got := stdout.String(); got != "world hello\n" {
+		t.Fatalf("unexpected output: %q, want %q", got, "world hello\n")
 	}
 }
 
@@ -474,7 +484,7 @@ commands:
 
 	source := discovery.NewGlobalSource(dir)
 
-	err := runForTest(context.Background(), source, "db", "", map[string]string{}, nil, nil, nil, nil)
+	err := runForTest(context.Background(), source, "db", "", nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error: module has no default command")
 	}
@@ -504,7 +514,7 @@ commands:
 
 	// migrate без subcommand → выполняется migrate.cmd (fallback)
 	var stdout1 bytes.Buffer
-	err := runForTest(context.Background(), source, "db", "migrate", map[string]string{}, nil, &stdout1, nil, nil)
+	err := runForTest(context.Background(), source, "db", "migrate", nil, &stdout1, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -514,7 +524,7 @@ commands:
 
 	// migrate up → выполняется up.cmd
 	var stdout2 bytes.Buffer
-	err = runForTest(context.Background(), source, "db.migrate", "up", map[string]string{}, nil, &stdout2, nil, nil)
+	err = runForTest(context.Background(), source, "db.migrate", "up", nil, &stdout2, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -550,14 +560,14 @@ commands:
 		mod: &execmodule.Module{
 			Name: "stub",
 			Root: dir,
-			Commands: map[string]*execmodule.Command{
-				"go": {Cmd: "echo SPY"},
-			},
+			Command: execmodule.Command{Commands: map[string]*execmodule.Command{
+				"go": {Cmd: execmodule.CmdSpec{Text: "echo SPY"}},
+			}},
 		},
 	}
 
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "stub", "go", map[string]string{}, nil, &stdout, nil, spy)
+	err := runForTest(context.Background(), source, "stub", "go", nil, &stdout, nil, spy)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -580,14 +590,17 @@ func TestRunWithNilLoaderBackwardsCompat(t *testing.T) {
 	manifestPath := filepath.Join(dir, "echo_mod.yaml")
 	if err := os.WriteFile(manifestPath, []byte(`
 name: echo_mod
-cmd: "echo {{.args}}"
+cmd: "echo {{.words}}"
+args:
+  - name: words
+    variadic: true
 `), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 	source := discovery.NewGlobalSource(dir)
 
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "echo_mod", "", map[string]string{}, []string{"works"}, &stdout, nil, nil)
+	err := runForTest(context.Background(), source, "echo_mod", "", map[string]any{"words": []string{"works"}}, &stdout, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -607,7 +620,10 @@ func TestRunWithCacheLoader(t *testing.T) {
 	manifestPath := filepath.Join(dir, "echo_mod.yaml")
 	if err := os.WriteFile(manifestPath, []byte(`
 name: echo_mod
-cmd: "echo {{.args}}"
+cmd: "echo {{.words}}"
+args:
+  - name: words
+    variadic: true
 `), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
@@ -615,7 +631,7 @@ cmd: "echo {{.args}}"
 	cache := modulecache.New(modulecache.MemoryStorage{}, modulecache.AlwaysPolicy{})
 
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "echo_mod", "", map[string]string{}, []string{"cached"}, &stdout, nil, cache)
+	err := runForTest(context.Background(), source, "echo_mod", "", map[string]any{"words": []string{"cached"}}, &stdout, nil, cache)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -642,10 +658,10 @@ commands:
 	spy := &stubLoader{
 		mod: &execmodule.Module{
 			Name: "stub",
-			Commands: map[string]*execmodule.Command{
+			Command: execmodule.Command{Commands: map[string]*execmodule.Command{
 				"spy":   {Description: "from spy"},
 				"extra": {Description: "extra from spy"},
-			},
+			}},
 		},
 	}
 
@@ -702,7 +718,7 @@ cmd: "echo hi"`), 0644); err != nil {
 	}
 }
 
-func TestRunPositionalMinEnforced(t *testing.T) {
+func TestRunRequiredVariadicEnforced(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell scripts not supported in this test on Windows")
 	}
@@ -713,9 +729,11 @@ func TestRunPositionalMinEnforced(t *testing.T) {
 name: pos
 commands:
   greet:
-    cmd: "echo {{index .args_list 0}}"
-    positional:
-      min: 1
+    args:
+      - name: names
+        required: true
+        variadic: true
+    cmd: "echo {{.names}}"
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -725,7 +743,7 @@ commands:
 
 	// Достаточно аргументов → выполняется.
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "pos", "greet", map[string]string{}, []string{"hello"}, &stdout, nil, nil)
+	err := runForTest(context.Background(), source, "pos", "greet", map[string]any{"names": []string{"hello"}}, &stdout, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -733,31 +751,32 @@ commands:
 		t.Fatalf("unexpected output: %q", got)
 	}
 
-	// Мало аргументов → ошибка про required positional.
-	err = runForTest(context.Background(), source, "pos", "greet", map[string]string{}, []string{}, &stdout, nil, nil)
+	// Нет значений → ошибка про обязательный аргумент.
+	err = runForTest(context.Background(), source, "pos", "greet", map[string]any{"names": []string{}}, &stdout, nil, nil)
 	if err == nil {
-		t.Fatal("expected error for missing positional arg")
+		t.Fatal("expected error for missing argument")
 	}
-	if !strings.Contains(err.Error(), "at least 1") {
-		t.Fatalf("expected 'at least 1' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "missing argument <names>") {
+		t.Fatalf("expected 'missing argument <names>' in error, got: %v", err)
 	}
 }
 
-func TestRunDefaultCmdParams(t *testing.T) {
+func TestRunDefaultCmdInputs(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "meta.yaml")
 	manifest := []byte(`
 name: meta
-cmd: "echo {{.sep}}{{if .upper}} UP{{end}} {{.args}}"
-params:
+cmd: "echo {{.sep}} {{if .upper}}UP{{end}} {{.words}}"
+args:
+  - name: words
+    required: true
+    variadic: true
+flags:
   - name: sep
     type: string
     default: "|"
   - name: upper
     type: bool
-    default: "false"
-positional:
-  min: 1
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -766,7 +785,7 @@ positional:
 	source := discovery.NewGlobalSource(dir)
 
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "meta", "", map[string]string{}, []string{"hello"}, &stdout, nil, nil)
+	err := runForTest(context.Background(), source, "meta", "", map[string]any{"words": []string{"hello"}}, &stdout, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -775,7 +794,7 @@ positional:
 	}
 
 	stdout.Reset()
-	err = runForTest(context.Background(), source, "meta", "", map[string]string{"upper": "true"}, []string{"hello"}, &stdout, nil, nil)
+	err = runForTest(context.Background(), source, "meta", "", map[string]any{"words": []string{"hello"}, "upper": "true"}, &stdout, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -784,16 +803,15 @@ positional:
 	}
 }
 
-func TestRunDefaultCmdUnknownParamRejected(t *testing.T) {
+func TestRunDefaultCmdUnknownInputRejected(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "meta.yaml")
 	manifest := []byte(`
 name: meta
-cmd: "echo {{.args}}"
-params:
+cmd: "echo {{if .json}}j{{end}}"
+flags:
   - name: json
     type: bool
-    default: "false"
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -801,23 +819,25 @@ params:
 
 	source := discovery.NewGlobalSource(dir)
 
-	err := runForTest(context.Background(), source, "meta", "", map[string]string{"bad": "1"}, nil, nil, nil, nil)
+	err := runForTest(context.Background(), source, "meta", "", map[string]any{"bad": "1"}, nil, nil, nil)
 	if err == nil {
-		t.Fatal("expected error: unknown param on default cmd")
+		t.Fatal("expected error: unknown input on default cmd")
 	}
-	if !strings.Contains(err.Error(), "unknown param") {
+	if !strings.Contains(err.Error(), `unknown input "bad"`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestRunDefaultCmdPositionalMin(t *testing.T) {
+func TestRunDefaultCmdRequiredArg(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "meta.yaml")
 	manifest := []byte(`
 name: meta
-cmd: "echo {{.args}}"
-positional:
-  min: 1
+cmd: "echo {{.words}}"
+args:
+  - name: words
+    required: true
+    variadic: true
 `)
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -825,11 +845,11 @@ positional:
 
 	source := discovery.NewGlobalSource(dir)
 
-	err := runForTest(context.Background(), source, "meta", "", map[string]string{}, nil, nil, nil, nil)
+	err := runForTest(context.Background(), source, "meta", "", nil, nil, nil, nil)
 	if err == nil {
-		t.Fatal("expected error: default cmd requires positional args")
+		t.Fatal("expected error: default cmd requires args")
 	}
-	if !strings.Contains(err.Error(), "at least 1 positional") {
+	if !strings.Contains(err.Error(), "missing argument <words>") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -860,7 +880,7 @@ cmd: "pwd"
 	source := discovery.NewGlobalSource(dir)
 
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "probe", "", map[string]string{}, nil, &stdout, nil, nil)
+	err := runForTest(context.Background(), source, "probe", "", nil, &stdout, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -898,7 +918,7 @@ cmd: "printenv FUTI_MODULE_ROOT"
 	source := discovery.NewGlobalSource(dir)
 
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "probe", "", map[string]string{}, nil, &stdout, nil, nil)
+	err := runForTest(context.Background(), source, "probe", "", nil, &stdout, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -936,7 +956,7 @@ cmd: "sh -c 'if [ -n \"$FUTI_CWD\" ]; then echo HAS_FUTI_CWD; else echo NO_FUTI_
 	source := discovery.NewGlobalSource(dir)
 
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "probe", "", map[string]string{}, nil, &stdout, nil, nil)
+	err := runForTest(context.Background(), source, "probe", "", nil, &stdout, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -954,7 +974,7 @@ func TestRunRootConfigNotUsedAsModule(t *testing.T) {
 	source := discovery.NewGlobalSource(dir)
 
 	var stdout bytes.Buffer
-	err := runForTest(context.Background(), source, "zzz", "x", map[string]string{}, nil, &stdout, nil, nil)
+	err := runForTest(context.Background(), source, "zzz", "x", nil, &stdout, nil, nil)
 	if err == nil {
 		t.Fatal("ожидалась ошибка для неизвестного модуля")
 	}
@@ -963,7 +983,7 @@ func TestRunRootConfigNotUsedAsModule(t *testing.T) {
 	}
 
 	stdout.Reset()
-	err = runForTest(context.Background(), source, "", "", map[string]string{}, nil, &stdout, nil, nil)
+	err = runForTest(context.Background(), source, "", "", nil, &stdout, nil, nil)
 	if err == nil {
 		t.Errorf("Run(\"\", \"\") без ошибки, stdout=%q", stdout.String())
 	}
@@ -986,7 +1006,7 @@ func TestRunConflictInSubnamespaceReturnsError(t *testing.T) {
 	write("a/b/config.yaml", "name: b\n")
 
 	source := discovery.NewGlobalSource(dir)
-	err := runForTest(context.Background(), source, "a", "b", map[string]string{}, nil, nil, nil, nil)
+	err := runForTest(context.Background(), source, "a", "b", nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected conflict error")
 	}
@@ -1021,7 +1041,7 @@ func TestRunStatErrorDoesNotFallBack(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dir, "a"), 0o755) })
 
 	source := discovery.NewGlobalSource(dir)
-	err := runForTest(context.Background(), source, "a", "b", map[string]string{}, nil, nil, nil, nil)
+	err := runForTest(context.Background(), source, "a", "b", nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected stat error")
 	}
@@ -1037,16 +1057,16 @@ func writeResolveFixture(t *testing.T) discovery.Source {
 	dir := t.TempDir()
 	m := `
 name: m
-cmd: "echo default"
-params:
+cmd: "echo default{{if .flag1}} 1{{end}}"
+flags:
   - name: flag1
     type: bool
 commands:
   leaf:
-    params:
+    flags:
       - name: msg
         type: string
-    cmd: "echo leaf"
+    cmd: "echo leaf {{.msg}}"
   grp:
     commands:
       inner:
@@ -1076,9 +1096,9 @@ func TestResolveCommand(t *testing.T) {
 		wantCmd   string
 		wantParam string
 	}{
-		{"leaf", "m", "leaf", "echo leaf", "msg"},
+		{"leaf", "m", "leaf", "echo leaf {{.msg}}", "msg"},
 		{"nested", "m.grp", "inner", "echo inner", ""},
-		{"default cmd", "m", "", "echo default", "flag1"},
+		{"default cmd", "m", "", "echo default{{if .flag1}} 1{{end}}", "flag1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1087,11 +1107,11 @@ func TestResolveCommand(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			cmd := res.Command
-			if cmd.Cmd != tt.wantCmd {
-				t.Fatalf("Cmd = %q, want %q", cmd.Cmd, tt.wantCmd)
+			if cmd.Cmd.Text != tt.wantCmd {
+				t.Fatalf("Cmd = %q, want %q", cmd.Cmd.Text, tt.wantCmd)
 			}
-			if tt.wantParam != "" && (len(cmd.Params) != 1 || cmd.Params[0].Name != tt.wantParam) {
-				t.Fatalf("Params = %+v, want single %q", cmd.Params, tt.wantParam)
+			if tt.wantParam != "" && (len(cmd.Flags) != 1 || cmd.Flags[0].Name != tt.wantParam) {
+				t.Fatalf("Flags = %+v, want single %q", cmd.Flags, tt.wantParam)
 			}
 		})
 	}
@@ -1104,7 +1124,7 @@ func TestResolveCommandNoDefaultCmdSameErrorAsRun(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `"futi nodef" requires a subcommand`) {
 		t.Fatalf("err = %v, want '\"futi nodef\" requires a subcommand'", err)
 	}
-	runErr := runForTest(context.Background(), source, "nodef", "", nil, nil, nil, nil, nil)
+	runErr := runForTest(context.Background(), source, "nodef", "", nil, nil, nil, nil)
 	if runErr == nil || runErr.Error() != err.Error() {
 		t.Fatalf("Run err = %v, want identical to %v", runErr, err)
 	}
@@ -1124,7 +1144,7 @@ func TestResolveCommandUsesVerifiedLoad(t *testing.T) {
 	dir := t.TempDir()
 	manifest := filepath.Join(dir, "m.yaml")
 	v1 := "name: m\ncommands:\n  c:\n    cmd: \"echo c\"\n"
-	v2 := "name: m\ncommands:\n  c:\n    params:\n      - name: dry\n        type: bool\n    cmd: \"echo c\"\n"
+	v2 := "name: m\ncommands:\n  c:\n    flags:\n      - name: dry\n        type: bool\n    cmd: \"echo c {{if .dry}}d{{end}}\"\n"
 	if err := os.WriteFile(manifest, []byte(v1), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1143,45 +1163,47 @@ func TestResolveCommandUsesVerifiedLoad(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	cmd := res.Command
-	if len(cmd.Params) != 1 || cmd.Params[0].Name != "dry" {
-		t.Fatalf("Params = %+v, want fresh schema with param dry", cmd.Params)
+	if len(cmd.Flags) != 1 || cmd.Flags[0].Name != "dry" {
+		t.Fatalf("Flags = %+v, want fresh schema with flag dry", cmd.Flags)
 	}
 }
 
-// Ошибка shlex не должна раскрывать отрендеренную команду (в ней могут быть секреты из env).
-func TestRunSplitErrorDoesNotLeakRenderedCommand(t *testing.T) {
+// Ошибка исполнения шаблона не раскрывает ни отрендеренную команду, ни значения
+// входов (в них могут быть секреты).
+func TestRunEvalErrorDoesNotLeakValues(t *testing.T) {
 	t.Setenv("FUTI_T_SECRET", "s3cr3t")
+	if err := os.Unsetenv("FUTI_T_MISSING"); err != nil {
+		t.Fatal(err)
+	}
 
 	dir := t.TempDir()
 	manifest := []byte(`
 name: leak_mod
 commands:
   deploy:
-    params:
+    flags:
       - name: msg
         type: string
         required: true
-    cmd: "echo SECRET-{{.env.FUTI_T_SECRET}} {{.msg}}"
+    cmd: "echo SECRET-{{.env.FUTI_T_SECRET}} {{.env.FUTI_T_MISSING}} {{.msg}}"
 `)
 	if err := os.WriteFile(filepath.Join(dir, "leak_mod.yaml"), manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 
 	source := discovery.NewGlobalSource(dir)
-	err := runForTest(context.Background(), source, "leak_mod", "deploy", map[string]string{"msg": "it's"}, nil, nil, nil, nil)
+	err := runForTest(context.Background(), source, "leak_mod", "deploy", map[string]any{"msg": "hunter2"}, nil, nil, nil)
 	if err == nil {
-		t.Fatal("expected split error, got nil")
+		t.Fatal("expected eval error, got nil")
 	}
 	msg := err.Error()
-	for _, leaked := range []string{"s3cr3t", "SECRET-", "echo"} {
+	for _, leaked := range []string{"s3cr3t", "SECRET-", "hunter2", "echo"} {
 		if strings.Contains(msg, leaked) {
 			t.Errorf("error leaks %q: %v", leaked, err)
 		}
 	}
-	for _, want := range []string{"leak_mod", "deploy", "EOF found when expecting closing quote"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("error %q does not contain %q", msg, want)
-		}
+	if !strings.Contains(msg, "FUTI_T_MISSING") {
+		t.Errorf("error %q does not name the missing variable", msg)
 	}
 }
 
@@ -1214,7 +1236,7 @@ func TestRunModuleNameDefaultsToPath(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out bytes.Buffer
-			err := runForTest(context.Background(), discovery.NewGlobalSource(dir), "deploy", "", nil, nil, &out, nil, nil)
+			err := runForTest(context.Background(), discovery.NewGlobalSource(dir), "deploy", "", nil, &out, nil, nil)
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}
@@ -1262,8 +1284,8 @@ func TestResolveCommandDotNamespaceWithoutCommand(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			cmd := res.Command
-			if cmd.Cmd != tt.wantCmd {
-				t.Fatalf("Cmd = %q, want %q", cmd.Cmd, tt.wantCmd)
+			if cmd.Cmd.Text != tt.wantCmd {
+				t.Fatalf("Cmd = %q, want %q", cmd.Cmd.Text, tt.wantCmd)
 			}
 		})
 	}
@@ -1277,7 +1299,7 @@ func TestRunDotNamespaceWithoutCommand(t *testing.T) {
 		"docker.yaml": "name: docker\ncommands:\n  build:\n    cmd: \"echo built\"\n",
 	})
 	var out bytes.Buffer
-	if err := runForTest(context.Background(), source, "docker.build", "", nil, nil, &out, nil, nil); err != nil {
+	if err := runForTest(context.Background(), source, "docker.build", "", nil, &out, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := out.String(); got != "built\n" {
@@ -1312,11 +1334,11 @@ func writePrepFixture(t *testing.T, dir string) discovery.Source {
 name: prep
 commands:
   mk:
-    params:
+    flags:
       - name: file
         type: string
         required: true
-    cmd: "touch {{quote .file}}"
+    cmd: "touch {{.file}}"
 `)
 	if err := os.WriteFile(filepath.Join(dir, "prep.yaml"), manifest, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -1332,7 +1354,7 @@ func TestPrepareReturnsArgvWithoutExec(t *testing.T) {
 	target := filepath.Join(work, "a b'c")
 	source := writePrepFixture(t, dir)
 
-	p, err := prepareForTest(source, "prep", "mk", map[string]string{"file": target}, nil, nil)
+	p, err := prepareForTest(source, "prep", "mk", map[string]any{"file": target}, nil)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -1357,12 +1379,12 @@ func TestPrepareValidationError(t *testing.T) {
 	dir := t.TempDir()
 	source := writePrepFixture(t, dir)
 
-	p, err := prepareForTest(source, "prep", "mk", map[string]string{}, nil, nil)
+	p, err := prepareForTest(source, "prep", "mk", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for missing required param")
 	}
-	if !strings.Contains(err.Error(), `required param "file" missing`) {
-		t.Errorf("err = %v, want mention of missing required param \"file\"", err)
+	if !strings.Contains(err.Error(), `missing required flag --file`) {
+		t.Errorf("err = %v, want missing required flag --file", err)
 	}
 	if p != nil {
 		t.Errorf("Prepared = %+v, want nil", p)
@@ -1383,12 +1405,15 @@ func writeValueFixture(t *testing.T) (discovery.Source, string) {
 	m := `name: mod
 commands:
   c:
-    params:
+    flags:
       - name: x
         type: string
     cmd: "echo {{.x}}"
   a:
-    cmd: "echo {{.args}} {{len .args_list}}"
+    args:
+      - name: words
+        variadic: true
+    cmd: "echo {{.words}}"
 `
 	if err := os.WriteFile(filepath.Join(dir, "m.yaml"), []byte(m), 0o644); err != nil {
 		t.Fatal(err)
@@ -1404,11 +1429,11 @@ func TestResolveLoadsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	resolved, err := r.Validate(map[string]string{"x": "hi"}, nil)
+	vals, err := r.Validate(map[string]any{"x": "hi"})
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	p, err := r.Prepare(resolved, nil)
+	p, err := r.Prepare(vals)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -1420,19 +1445,26 @@ func TestResolveLoadsOnce(t *testing.T) {
 	}
 }
 
-func TestResolvedPrepareArgsJoin(t *testing.T) {
+func TestResolvedPrepareVariadicElements(t *testing.T) {
 	src, _ := writeValueFixture(t)
 	r, err := resolveForTest(src, nil, "m", "a")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	p, err := r.Prepare(nil, []string{"a b", "c"})
+	vals, err := r.Validate(map[string]any{"words": []string{"a b", "c"}})
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	p, err := r.Prepare(vals)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	want := []string{"echo", "a", "b", "c", "2"}
+	want := []string{"echo", "a b", "c"}
 	if !slices.Equal(p.Argv, want) {
 		t.Errorf("Argv = %q, want %q", p.Argv, want)
+	}
+	if len(p.Args) != 3 || p.Args[1].First != "words" {
+		t.Errorf("Args = %+v, want 3 elements with origin words for the values", p.Args)
 	}
 }
 
@@ -1478,5 +1510,75 @@ func TestResolveInvalidNamespaceSentinel(t *testing.T) {
 	want := `discovery: invalid namespace "a..b": empty segment`
 	if err.Error() != want {
 		t.Errorf("err text = %q, want %q", err.Error(), want)
+	}
+}
+
+// writeDashFixture writes module dash with commands cp (dash-guarded values),
+// abs (program given by absolute path) and empty (cmd that evaluates to nothing).
+func writeDashFixture(t *testing.T) discovery.Source {
+	t.Helper()
+	return writeModules(t, map[string]string{"dash.yaml": `
+name: dash
+commands:
+  cp:
+    args:
+      - {name: src, required: true}
+      - {name: dst, required: true}
+    cmd: "cp {{.src}} {{.dst}}"
+  abs:
+    args:
+      - {name: src, required: true}
+    cmd: ["/usr/bin/cp", "{{.src}}"]
+  after:
+    args:
+      - {name: src, required: true}
+    cmd: "cp -- {{.src}}"
+  empty:
+    args:
+      - {name: x}
+    cmd: "{{.x}}"
+`})
+}
+
+func TestPrepareDashGuard(t *testing.T) {
+	source := writeDashFixture(t)
+	tests := []struct {
+		name    string
+		command string
+		inputs  map[string]any
+		want    string // text of the DashError; empty: no error
+	}{
+		{"value starting with dash", "cp", map[string]any{"src": "-rf", "dst": "d"},
+			`value "-rf" for <src> starts with "-" and would be read as an option by cp; use --opt={{.src}}, put a literal -- before it, or set allow_dash`},
+		{"program is the base name", "abs", map[string]any{"src": "-x"},
+			`value "-x" for <src> starts with "-" and would be read as an option by cp; use --opt={{.src}}, put a literal -- before it, or set allow_dash`},
+		{"after a literal --", "after", map[string]any{"src": "-rf"}, ""},
+		{"plain value", "cp", map[string]any{"src": "a", "dst": "d"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := prepareForTest(source, "dash", tt.command, tt.inputs, nil)
+			var dash *argvtmpl.DashError
+			if tt.want == "" {
+				if err != nil {
+					t.Fatalf("Prepare: %v", err)
+				}
+				return
+			}
+			if !errors.As(err, &dash) {
+				t.Fatalf("err = %v, want *argvtmpl.DashError", err)
+			}
+			if dash.Error() != tt.want {
+				t.Errorf("DashError = %q, want %q", dash.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestPrepareEmptyArgv(t *testing.T) {
+	source := writeDashFixture(t)
+	_, err := prepareForTest(source, "dash", "empty", nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "command rendered to empty argv") {
+		t.Fatalf("err = %v, want 'command rendered to empty argv'", err)
 	}
 }

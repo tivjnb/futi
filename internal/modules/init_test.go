@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/shlex"
 	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
@@ -619,9 +618,10 @@ func TestModulesInitRejectsInvalidName(t *testing.T) {
 	}
 }
 
-// F62: cmd сгенерированной команды разбирается shlex в [echo, <имя>].
+// F62: cmd сгенерированной команды — список [echo, <имя>]: имя остаётся одним
+// элементом argv, что бы в нём ни было.
 func TestGenerateModuleYAMLQuotesCommand(t *testing.T) {
-	for _, name := range []string{`a"b`, `it's`, `x\y`, `$HOME`, "plain"} {
+	for _, name := range []string{`a"b`, `it's`, `x\y`, `$HOME`, "plain", "two words"} {
 		t.Run(name, func(t *testing.T) {
 			yaml := generateModuleYAML("m", "d", "", []string{name})
 			mod, err := execmodule.ParseManifest([]byte(yaml), "/x/m.yaml", "/x")
@@ -629,15 +629,36 @@ func TestGenerateModuleYAMLQuotesCommand(t *testing.T) {
 				t.Fatalf("ParseManifest: %v\n%s", err, yaml)
 			}
 			cmd := mod.Commands[name].Cmd
-			got, err := shlex.Split(cmd)
-			if err != nil {
-				t.Fatalf("shlex.Split(%q): %v", cmd, err)
-			}
-			want := []string{"echo", name}
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("argv = %q, want %q", got, want)
+			want := execmodule.CmdSpec{List: []string{"echo", name}, IsList: true}
+			if !reflect.DeepEqual(cmd, want) {
+				t.Fatalf("cmd = %+v, want %+v", cmd, want)
 			}
 		})
+	}
+}
+
+// TestInitSkeletonListForm: the generated module uses the list form of cmd
+// and none of the removed constructs, and loads without errors.
+func TestInitSkeletonListForm(t *testing.T) {
+	for _, commands := range [][]string{nil, {"greet", "build"}} {
+		yaml := generateModuleYAML("m", "d", "", commands)
+		for _, banned := range []string{"quote", "params", "positional", "{{"} {
+			if strings.Contains(yaml, banned) {
+				t.Errorf("skeleton %q contains %q:\n%s", commands, banned, yaml)
+			}
+		}
+		mod, err := execmodule.LoadManifest([]byte(yaml), "/x/m.yaml", "/x")
+		if err != nil {
+			t.Fatalf("LoadManifest(%q): %v\n%s", commands, err, yaml)
+		}
+		if len(mod.Commands) == 0 {
+			t.Fatalf("no commands in\n%s", yaml)
+		}
+		for name, c := range mod.Commands {
+			if !c.Cmd.IsList || len(c.Cmd.List) != 2 || c.Cmd.List[0] != "echo" {
+				t.Errorf("command %q: cmd = %+v, want the list [echo, <name>]", name, c.Cmd)
+			}
+		}
 	}
 }
 

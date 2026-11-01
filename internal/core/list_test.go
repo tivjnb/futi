@@ -128,7 +128,7 @@ func TestListInPartialNotClassified(t *testing.T) {
 }
 
 func TestDescribeChildrenSkipsConflicts(t *testing.T) {
-	spy := &stubLoader{mod: &execmodule.Module{Description: "never"}}
+	spy := &stubLoader{mod: &execmodule.Module{Command: execmodule.Command{Description: "never"}}}
 	got := core.DescribeChildren([]discovery.Child{
 		{Name: "x", Type: "module", Conflict: true, ManifestPath: "/d/x.yaml"},
 	}, spy)
@@ -143,9 +143,9 @@ func TestDescribeChildrenSkipsConflicts(t *testing.T) {
 func TestRuntimeListUsesRuntimeLoader(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "db.yaml"), "name: db\ncmd: echo\n")
-	spy := &stubLoader{mod: &execmodule.Module{Name: "db", Commands: map[string]*execmodule.Command{
+	spy := &stubLoader{mod: &execmodule.Module{Name: "db", Command: execmodule.Command{Commands: map[string]*execmodule.Command{
 		"spied": {Description: "from spy"},
-	}}}
+	}}}}
 	opts := core.Options{ModulesDir: dir}
 	core.SetLoader(&opts, spy)
 	rt, err := core.NewRuntime(opts)
@@ -169,7 +169,7 @@ func TestListInConflictSources(t *testing.T) {
 	writeFile(t, filepath.Join(dirA, "x.yaml"), "name: x\ncmd: echo a\n")
 	writeFile(t, filepath.Join(dirB, "x.yaml"), "name: x\ncmd: echo b\n")
 	cfg := &config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: dirB}}}
-	spy := &stubLoader{mod: &execmodule.Module{Description: "never"}}
+	spy := &stubLoader{mod: &execmodule.Module{Command: execmodule.Command{Description: "never"}}}
 
 	res, err := core.ListIn(discovery.NewCompositeSource(cfg), spy, "", false)
 	if err != nil {
@@ -191,7 +191,7 @@ func TestListInConflictFileVsConfigYaml(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "x.yaml"), "name: x\ncmd: echo a\n")
 	writeFile(t, filepath.Join(dir, "x", "config.yaml"), "name: x\ncmd: echo b\n")
-	spy := &stubLoader{mod: &execmodule.Module{Description: "never"}}
+	spy := &stubLoader{mod: &execmodule.Module{Command: execmodule.Command{Description: "never"}}}
 
 	res, err := core.ListIn(discovery.NewGlobalSource(dir), spy, "", false)
 	if err != nil {
