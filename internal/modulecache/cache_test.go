@@ -2001,3 +2001,25 @@ func TestCacheRefreshRereadsWhenModuleRootChanged(t *testing.T) {
 		t.Fatalf("Root в кэше = %q, want %q", got, rootB)
 	}
 }
+
+// TestCacheRefreshWarnSink: storage problems go to the warn sink, a module
+// that does not load stays silent (it is listed in SkippedModules and reports
+// its own error when run).
+func TestCacheRefreshWarnSink(t *testing.T) {
+	defer suppressLog(t)()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "bad.yaml"), "name: bad\ncommands:\n  empty: {}\n")
+	cache := New(&fakeStorage{saveErr: errSaveForTest}, AlwaysPolicy{})
+	var got []string
+	cache.SetWarn(func(m string) { got = append(got, m) })
+	res, err := cache.Refresh(discovery.NewGlobalSource(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Skipped != 1 {
+		t.Fatalf("Skipped = %d, want 1", res.Skipped)
+	}
+	if len(got) != 1 || !strings.HasPrefix(got[0], "modulecache: refresh: save: ") {
+		t.Errorf("warnings = %q, want only the save failure", got)
+	}
+}

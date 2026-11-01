@@ -107,6 +107,7 @@ func (r *Runtime) Cache() *modulecache.Cache {
 			}
 		}
 		r.cache = modulecache.New(storage, policy)
+		r.cache.SetWarn(func(msg string) { r.warn("warning: " + msg) })
 	})
 	return r.cache
 }
