@@ -1050,3 +1050,20 @@ func TestUpdateDeclineDoesNotWarnAboutShadowing(t *testing.T) {
 		t.Errorf("stderr = %q, want no shadowing warning", stderr)
 	}
 }
+
+// A module without name: gets its name from its directory; the warning the
+// installed manifest already had must not be printed again as new.
+func TestUpdateNamelessModuleKeepsOldShadowWarningQuiet(t *testing.T) {
+	src, dest := installForUpdate(t)
+	noName := strings.TrimPrefix(shadowV2, "name: qr\n")
+	writeFile(t, filepath.Join(dest, "config.yaml"), noName)
+	writeFile(t, filepath.Join(src, "config.yaml"), noName+"# changed\n")
+
+	_, stderr, err := runUpdateQR(t, nil, "--yes")
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if strings.Contains(stderr, "Warning: module") {
+		t.Errorf("stderr = %q, want no shadowing warning", stderr)
+	}
+}

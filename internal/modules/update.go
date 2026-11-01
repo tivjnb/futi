@@ -247,6 +247,9 @@ func (m *Manager) updateAt(ctx context.Context, gate attachGate, name, label, mo
 	// manifest that does not load (e.g. the old params/positional format) counts
 	// as having none, so every new warning is shown; its error is not reported.
 	oldWarnings := shadowWarnings(manifestPath, moduleRoot)
+	// Name path for old and new warnings and for the hook: the manifest the
+	// module is loaded from after the update.
+	namePath := filepath.Join(moduleRoot, "config.yaml")
 
 	// Замена дерева: dest → backup, new → dest; при провале — восстановление.
 	if err := os.Rename(moduleRoot, backup); err != nil {
@@ -283,7 +286,7 @@ func (m *Manager) updateAt(ctx context.Context, gate attachGate, name, label, mo
 	}
 
 	// Subcommand warnings the update introduced (spec 4.3), in the new order.
-	rootPath := execmodule.EffectiveName(mod.Name, filepath.Join(moduleRoot, "config.yaml"))
+	rootPath := execmodule.EffectiveName(mod.Name, namePath)
 	for _, w := range execmodule.ShadowWarnings(rootPath, &mod.Command) {
 		if !slices.Contains(oldWarnings, w) {
 			_, _ = fmt.Fprintf(s.Err, "Warning: module %s: %s\n", termtext.Line(label), termtext.Line(w))
@@ -294,7 +297,7 @@ func (m *Manager) updateAt(ctx context.Context, gate attachGate, name, label, mo
 	// Прерывание сигналом возвращаем после Invalidate: дерево уже заменено.
 	var interruptErr error
 	if runAttach {
-		if err := modulerunner.RunHook(ctx, mod.Attach, moduleRoot, execmodule.EffectiveName(mod.Name, filepath.Join(moduleRoot, "config.yaml")), s.Stdin, s.Out, s.Err, m.rt.Exec().HookGroup, m.rt.Exec().ForwardSignals); err != nil {
+		if err := modulerunner.RunHook(ctx, mod.Attach, moduleRoot, execmodule.EffectiveName(mod.Name, namePath), s.Stdin, s.Out, s.Err, m.rt.Exec().HookGroup, m.rt.Exec().ForwardSignals); err != nil {
 			if _, interrupted := executor.InterruptSignal(err); interrupted {
 				interruptErr = fmt.Errorf("attach interrupted: %w", err)
 			} else {
@@ -315,13 +318,14 @@ func (m *Manager) updateAt(ctx context.Context, gate attachGate, name, label, mo
 }
 
 // shadowWarnings returns the shadowing warnings of the manifest at
-// manifestPath, or nil when it cannot be loaded.
+// manifestPath, or nil when it cannot be loaded. The module name comes from
+// moduleRoot/config.yaml, the same path the new warnings use.
 func shadowWarnings(manifestPath, moduleRoot string) []string {
 	old, err := execmodule.LoadModule(manifestPath, moduleRoot)
 	if err != nil {
 		return nil
 	}
-	return execmodule.ShadowWarnings(execmodule.EffectiveName(old.Name, manifestPath), &old.Command)
+	return execmodule.ShadowWarnings(execmodule.EffectiveName(old.Name, filepath.Join(moduleRoot, "config.yaml")), &old.Command)
 }
 
 // restoreBackup возвращает старое дерево из backup на место moduleRoot,
