@@ -106,8 +106,7 @@ COMPLETION
                                      zsh:   futi completion zsh > "${fpath[1]}/_futi"
                                      fish:  futi completion fish > ~/.config/fish/completions/futi.fish
                                    Completion suggests modules, namespaces,
-                                   commands, subcommands, flag names and
-                                   boolean values (true/false).
+                                   commands, subcommands and flag names.
 
 VALIDATION
   futi modules validate <ns>       Validate module schema (all commands and

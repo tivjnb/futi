@@ -127,6 +127,20 @@ func TestUsageDescribesPathEnd(t *testing.T) {
 	}
 }
 
+// The usage text must describe the current format only: no old-format
+// template syntax, and no claim that completion offers values of bool flags
+// (a bool flag takes no separate value, so nothing is suggested after it).
+func TestUsageHasNoStaleClaims(t *testing.T) {
+	var buf bytes.Buffer
+	printUsage(&buf)
+	text := strings.Join(strings.Fields(buf.String()), " ")
+	for _, bad := range []string{"{{quote", "{{.args", "args_list", "boolean values (true/false)"} {
+		if strings.Contains(text, bad) {
+			t.Errorf("usage still mentions %q", bad)
+		}
+	}
+}
+
 // Модуль, который не загрузился, в list не теряет причину: описание
 // заменяется пометкой (error: ...), строка модуля остаётся.
 func TestPrintChildrenLoadError(t *testing.T) {
