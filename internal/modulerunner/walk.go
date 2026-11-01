@@ -27,8 +27,10 @@ type Node struct {
 
 // WalkOptions configures Walk.
 type WalkOptions struct {
-	// Verified loads modules with LoadModuleVerified (execution); otherwise
-	// with LoadModule (help, list, completion).
+	// Verified loads modules with LoadModuleVerified (execution, help and
+	// completion: the loaded schema is trusted for what is shown or run);
+	// otherwise with LoadModule (no caller uses it today; list does not call
+	// Walk).
 	Verified bool
 }
 
