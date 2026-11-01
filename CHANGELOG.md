@@ -41,7 +41,7 @@ Breaking relative to 0.1.0:
 
 ### Migration from 0.1.0
 
-Rewrite modules as follows (details: [Module structure](#module-structure), [Inputs and templating](#inputs-and-templating), [A command that needs a shell](#a-command-that-needs-a-shell)):
+Rewrite modules as follows (details: [Module structure](README.md#module-structure), [Inputs and templating](README.md#inputs-and-templating), [A command that needs a shell](README.md#a-command-that-needs-a-shell)):
 
 - `params` become `flags`; `positional` become `args`.
 - `{{quote .x}}` becomes `{{.x}}`.
