@@ -379,9 +379,8 @@ commands:
 	if !strings.Contains(output, "spy_sub") {
 		t.Fatalf("expected spy_sub in output (loader used), got:\n%s", output)
 	}
-	// One load for the listing, one for the collision check (cached in production).
-	if spy.calls != 2 {
-		t.Fatalf("expected 2 loader calls, got %d", spy.calls)
+	if spy.calls != 1 {
+		t.Fatalf("expected exactly 1 loader call, got %d", spy.calls)
 	}
 }
 

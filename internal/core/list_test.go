@@ -159,9 +159,8 @@ func TestRuntimeListUsesRuntimeLoader(t *testing.T) {
 	if got := names(res.Commands); !reflect.DeepEqual(got, []string{"spied"}) {
 		t.Errorf("names = %v", got)
 	}
-	// The listing and the collision check both load through the runtime loader.
-	if spy.calls == 0 {
-		t.Errorf("calls = 0, want the runtime loader to be used")
+	if spy.calls != 1 {
+		t.Errorf("calls = %d, want 1", spy.calls)
 	}
 }
 
@@ -237,5 +236,40 @@ func TestListNoCollisionNoWarnings(t *testing.T) {
 	res, err := core.ListIn(discovery.NewGlobalSource(dir), nil, "", false)
 	if err != nil || len(res.Warnings) != 0 {
 		t.Errorf("Warnings = %q, err = %v, want none", res.Warnings, err)
+	}
+}
+
+type failingListSource struct{ discovery.Source }
+
+func (failingListSource) List() ([]discovery.ModuleInfo, error) { return nil, errors.New("boom") }
+
+func TestListCollisionCheckFailureIsWarning(t *testing.T) {
+	src, _, _ := collisionSource(t)
+	res, err := core.ListIn(failingListSource{src}, nil, "dev", false)
+	if err != nil {
+		t.Fatalf("ListIn err = %v, want nil", err)
+	}
+	want := []string{"cannot check path collisions: boom"}
+	if !reflect.DeepEqual(res.Warnings, want) {
+		t.Errorf("Warnings = %q, want %q", res.Warnings, want)
+	}
+	if got := names(res.Commands); !reflect.DeepEqual(got, []string{"deploy"}) {
+		t.Errorf("Commands = %v, want [deploy]", got)
+	}
+}
+
+func TestListCollisionWithPartialListing(t *testing.T) {
+	dirA := t.TempDir()
+	dirB := filepath.Join(t.TempDir(), "missing")
+	writeFile(t, filepath.Join(dirA, "dev.yaml"), "name: dev\ncommands:\n  deploy:\n    cmd: echo\n")
+	writeFile(t, filepath.Join(dirA, "dev", "deploy.yaml"), "name: deploy\ncmd: echo\n")
+	cfg := &config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: dirB}}}
+	res, err := core.ListIn(discovery.NewCompositeSource(cfg), nil, "", false)
+	var pe *discovery.PartialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("err = %v, want *discovery.PartialError", err)
+	}
+	if len(res.Children) != 2 || len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], `path "dev deploy" is ambiguous`) {
+		t.Errorf("Children = %+v, Warnings = %q, want the namespace and module children and the collision", res.Children, res.Warnings)
 	}
 }

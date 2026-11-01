@@ -30,7 +30,9 @@ func ValidateIn(src discovery.Source, namespace string) (ValidateReport, error) 
 	}
 
 	errs, warnings := mod.Validate()
-	collisions, err := PathCollisions(src, nil, namespace)
+	// Modules are parsed without validation: a schema error of one module
+	// must not hide a collision.
+	collisions, err := pathCollisions(src, namespace, execmodule.ParseModule)
 	if err != nil {
 		return ValidateReport{}, classify(fmt.Errorf("validate: %w", err))
 	}

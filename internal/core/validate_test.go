@@ -189,3 +189,32 @@ commands:
 		t.Errorf("shadow warnings = %d in %q, want 1", n, rep.Warnings)
 	}
 }
+
+func TestValidateCollisionWithOtherModuleError(t *testing.T) {
+	global, local := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(global, "dev.yaml"), "name: dev\ncommands:\n  empty: {}\n  deploy:\n    cmd: echo\n")
+	writeFile(t, filepath.Join(local, "dev", "deploy.yaml"), "name: deploy\ncmd: echo\n")
+	src := discovery.NewLayeredSource(discovery.NewGlobalSource(local), discovery.NewGlobalSource(global))
+	rep, err := core.ValidateIn(src, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var joined string
+	for _, e := range rep.Errors {
+		joined += e.Error() + "\n"
+	}
+	if len(rep.Errors) != 2 || !strings.Contains(joined, "empty") || !strings.Contains(joined, `path "dev deploy" is ambiguous`) {
+		t.Errorf("Errors = %q, want the schema error and the collision", joined)
+	}
+}
+
+func TestValidateCollisionFromAncestorModule(t *testing.T) {
+	src, _, _ := collisionSource(t)
+	rep, err := core.ValidateIn(src, "dev.deploy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Errors) != 1 || !strings.Contains(rep.Errors[0].Error(), `path "dev deploy" is ambiguous`) {
+		t.Errorf("Errors = %v, want the collision with the command of module dev", rep.Errors)
+	}
+}
