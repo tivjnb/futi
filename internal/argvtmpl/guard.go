@@ -65,7 +65,8 @@ const batchUnsafe = "\"%!&|<>^\r\n"
 // is a .bat or .cmd file and an element containing an input value contains a
 // character unsafe for cmd.exe. It does not check the OS: the caller does.
 func CheckBatch(exe string, args []Arg) error {
-	if ext := strings.ToLower(filepath.Ext(exe)); ext != ".bat" && ext != ".cmd" {
+	// Windows drops trailing dots and spaces from a file name.
+	if ext := strings.ToLower(filepath.Ext(strings.TrimRight(exe, ". "))); ext != ".bat" && ext != ".cmd" {
 		return nil
 	}
 	for _, a := range args {
