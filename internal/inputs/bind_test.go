@@ -71,7 +71,7 @@ func TestBind(t *testing.T) {
 		{"fractional float64 for int", k8sLogs, map[string]any{"pod": "p", "tail": 1.5}, nil, `invalid int value "1.5" for --tail`},
 		{"number for string", k8sLogs, map[string]any{"pod": float64(1)}, nil, `input "pod" must be a string`},
 		{"number for bool", k8sLogs, map[string]any{"pod": "p", "follow": float64(1)}, nil, `input "follow" must be a string`},
-		{"required with default takes the default", node{args: []Spec{{Name: "a", Required: true, Default: str("x")}}}, map[string]any{},
+		{"required with default takes the default", node{args: []Spec{{Name: "a", Required: true, Default: "x", HasDefault: true}}}, map[string]any{},
 			map[string]argvtmpl.Value{"a": sc("x")}, ""},
 		{"unknown key wins over missing", k8sLogs, map[string]any{"nope": "1"}, nil, `unknown input "nope"`},
 	}

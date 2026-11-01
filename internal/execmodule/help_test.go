@@ -20,10 +20,10 @@ func TestFormatCommandHelpGolden(t *testing.T) {
 			cmd: &Command{
 				Description: "Build an image",
 				Cmd:         cmdText("docker build"),
-				Args:        []inputs.Spec{{Name: "context", Description: "Build context directory", Default: strPtr(".")}},
+				Args:        []inputs.Spec{{Name: "context", Description: "Build context directory", Default: ".", HasDefault: true}},
 				Flags: []inputs.Spec{
 					{Name: "tag", Required: true, Short: "t", Flag: true},
-					{Name: "file", Default: strPtr("Dockerfile"), Flag: true},
+					{Name: "file", Default: "Dockerfile", HasDefault: true, Flag: true},
 				},
 			},
 			want: `Build an image
@@ -62,7 +62,7 @@ flags:
 				Args:        []inputs.Spec{{Name: "pod", Required: true, Description: "Pod name"}},
 				Flags: []inputs.Spec{
 					{Name: "follow", Type: "bool", Short: "f", Description: "Stream logs", Flag: true},
-					{Name: "tail", Type: "int", Default: strPtr("100"), Flag: true},
+					{Name: "tail", Type: "int", Default: "100", HasDefault: true, Flag: true},
 				},
 			},
 			want: `Show pod logs
@@ -186,7 +186,7 @@ func TestFormatCommandHelpStripsControlChars(t *testing.T) {
 	cmd := &Command{
 		Description: "line1\nline2\x1b]0;pwned\x07",
 		Cmd:         cmdText("echo"),
-		Args:        []inputs.Spec{{Name: "x", Default: strPtr("d\x1b[31m"), Description: "pd\x1b[0m"}},
+		Args:        []inputs.Spec{{Name: "x", Default: "d\x1b[31m", HasDefault: true, Description: "pd\x1b[0m"}},
 		Flags:       []inputs.Spec{{Name: "f\x1b[1m", Short: "s\x1b[1m", Flag: true}},
 		Commands:    map[string]*Command{"run": {Description: "d\x1b[2J", Cmd: cmdText("echo")}},
 	}

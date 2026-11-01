@@ -22,7 +22,7 @@ func TestValidate(t *testing.T) {
 		{
 			name:  "k8s logs",
 			args:  []Spec{{Name: "pod", Required: true}},
-			flags: []Spec{{Name: "follow", Type: "bool", Short: "f", Flag: true}, {Name: "tail", Type: "int", Default: str("100"), Flag: true}},
+			flags: []Spec{{Name: "follow", Type: "bool", Short: "f", Flag: true}, {Name: "tail", Type: "int", Default: "100", HasDefault: true, Flag: true}},
 		},
 		{
 			name:  "files copy: variadic then required",
@@ -36,8 +36,8 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name:  "docker build: required flag, optional arg with default",
-			args:  []Spec{{Name: "context", Default: str(".")}},
-			flags: []Spec{{Name: "tag", Required: true, Flag: true}, {Name: "file", Default: str("Dockerfile"), Flag: true}},
+			args:  []Spec{{Name: "context", Default: ".", HasDefault: true}},
+			flags: []Spec{{Name: "tag", Required: true, Flag: true}, {Name: "file", Default: "Dockerfile", HasDefault: true, Flag: true}},
 		},
 		{
 			name: "docker run: required then rest",
@@ -106,35 +106,35 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name: "required and default",
-			args: []Spec{{Name: "x", Required: true, Default: str("a")}},
+			args: []Spec{{Name: "x", Required: true, Default: "a", HasDefault: true}},
 			want: []string{`arg "x": required and default are mutually exclusive`},
 		},
 		{
 			name: "required with empty default is fine",
-			args: []Spec{{Name: "x", Required: true, Default: str("")}},
+			args: []Spec{{Name: "x", Required: true, Default: "", HasDefault: true}},
 		},
 		{
 			name: "int default not a number",
-			args: []Spec{{Name: "x", Type: "int", Default: str("1.5")}},
+			args: []Spec{{Name: "x", Type: "int", Default: "1.5", HasDefault: true}},
 			want: []string{`arg "x": default is not an integer`},
 		},
 		{
 			name:  "bool default invalid",
-			flags: []Spec{{Name: "x", Type: "bool", Default: str("maybe"), Flag: true}},
+			flags: []Spec{{Name: "x", Type: "bool", Default: "maybe", HasDefault: true, Flag: true}},
 			want:  []string{`flag "x": default is not a boolean (true/false/1/0/yes/no/on/off)`},
 		},
 		{
 			name:  "bool default case-insensitive",
-			flags: []Spec{{Name: "x", Type: "bool", Default: str("YES"), Flag: true}},
+			flags: []Spec{{Name: "x", Type: "bool", Default: "YES", HasDefault: true, Flag: true}},
 		},
 		{
 			name: "variadic default",
-			args: []Spec{{Name: "x", Variadic: true, Default: str("a")}},
+			args: []Spec{{Name: "x", Variadic: true, Default: "a", HasDefault: true}},
 			want: []string{`arg "x": variadic and rest inputs cannot have a default`},
 		},
 		{
 			name: "rest default",
-			args: []Spec{{Name: "x", Rest: true, Default: str("a")}},
+			args: []Spec{{Name: "x", Rest: true, Default: "a", HasDefault: true}},
 			want: []string{`arg "x": variadic and rest inputs cannot have a default`},
 		},
 		{
@@ -270,7 +270,7 @@ func TestSpecAccessors(t *testing.T) {
 	}{
 		{Spec{Name: "pod", Required: true}, argvtmpl.String, "<pod>", false},
 		{Spec{Name: "ignore_case", Type: "bool", Flag: true}, argvtmpl.Bool, "--ignore-case", true},
-		{Spec{Name: "tail", Type: "int", Default: str("1"), Flag: true}, argvtmpl.Int, "--tail", false},
+		{Spec{Name: "tail", Type: "int", Default: "1", HasDefault: true, Flag: true}, argvtmpl.Int, "--tail", false},
 		{Spec{Name: "x", Type: "string"}, argvtmpl.String, "<x>", true},
 	}
 	for _, tc := range tests {
@@ -305,7 +305,7 @@ func TestTemplateInputs(t *testing.T) {
 }
 
 func TestValidateErrorsHaveNoValues(t *testing.T) {
-	errs := Validate([]Spec{{Name: "x", Type: "int", Default: str("secret")}}, nil)
+	errs := Validate([]Spec{{Name: "x", Type: "int", Default: "secret", HasDefault: true}}, nil)
 	for _, err := range errs {
 		if strings.Contains(err.Error(), "secret") {
 			t.Fatalf("error leaks default value: %v", err)

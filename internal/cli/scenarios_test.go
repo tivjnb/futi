@@ -248,11 +248,10 @@ func TestScenarioS25Completion(t *testing.T) {
 // S26: an MCP-style call binds JSON inputs to the template; the schema
 // guards the pod name.
 func TestScenarioS26JSONInputs(t *testing.T) {
-	str := func(s string) *string { return &s }
 	logsArgs := []inputs.Spec{{Name: "pod", Required: true}}
 	logsFlags := []inputs.Spec{
 		{Name: "follow", Type: "bool", Short: "f", Flag: true},
-		{Name: "tail", Type: "int", Default: str("100"), Flag: true},
+		{Name: "tail", Type: "int", Default: "100", HasDefault: true, Flag: true},
 	}
 	runArgs := []inputs.Spec{{Name: "image", Required: true}, {Name: "docker_args", Rest: true}}
 

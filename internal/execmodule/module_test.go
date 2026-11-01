@@ -75,7 +75,7 @@ commands:
 	if f := build.Flags[0]; f.Name != "tag" || !f.Required || f.Short != "t" || !f.Flag {
 		t.Fatalf("unexpected flag 0: %+v", f)
 	}
-	if f := build.Flags[1]; f.Name != "file" || f.Default == nil || *f.Default != "Dockerfile" || !f.Flag {
+	if f := build.Flags[1]; f.Name != "file" || !f.HasDefault || f.Default != "Dockerfile" || !f.Flag {
 		t.Fatalf("unexpected flag 1: %+v", f)
 	}
 }
@@ -319,7 +319,7 @@ commands:
 	if len(mod.Args) != 1 || mod.Args[0].Name != "words" || !mod.Args[0].Variadic {
 		t.Fatalf("unexpected module args: %+v", mod.Args)
 	}
-	if len(mod.Flags) != 1 || mod.Flags[0].Name != "sep" || *mod.Flags[0].Default != "|" {
+	if len(mod.Flags) != 1 || mod.Flags[0].Name != "sep" || mod.Flags[0].Default != "|" {
 		t.Fatalf("unexpected module flags: %+v", mod.Flags)
 	}
 }
@@ -612,10 +612,9 @@ func TestParseManifestInputs(t *testing.T) {
 		if !reflect.DeepEqual(logs.Args, wantArgs) {
 			t.Errorf("Args = %+v, want %+v", logs.Args, wantArgs)
 		}
-		hundred := "100"
 		wantFlags := []inputs.Spec{
 			{Name: "follow", Type: "bool", Short: "f", Flag: true},
-			{Name: "tail", Type: "int", Default: &hundred, Flag: true},
+			{Name: "tail", Type: "int", Default: "100", HasDefault: true, Flag: true},
 		}
 		if !reflect.DeepEqual(logs.Flags, wantFlags) {
 			t.Errorf("Flags = %+v, want %+v", logs.Flags, wantFlags)
@@ -643,8 +642,8 @@ func TestParseManifestInputs(t *testing.T) {
 		if !reflect.DeepEqual(build.Cmd, wantCmd) {
 			t.Errorf("build cmd = %+v, want %+v", build.Cmd, wantCmd)
 		}
-		if d := build.Args[0].Default; d == nil || *d != "." {
-			t.Errorf("context default = %v", d)
+		if a := build.Args[0]; !a.HasDefault || a.Default != "." {
+			t.Errorf("context default = %q (set %v)", a.Default, a.HasDefault)
 		}
 		run := mod.Commands["run"]
 		if !run.Args[1].Rest || run.Args[1].Name != "docker_args" {

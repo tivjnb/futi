@@ -68,7 +68,7 @@ func propertySchema(s Spec, guard bool) map[string]any {
 	if desc != "" {
 		prop["description"] = desc
 	}
-	if s.Default != nil {
+	if s.HasDefault {
 		prop["default"] = defaultValue(s)
 	}
 	return prop
@@ -79,13 +79,13 @@ func propertySchema(s Spec, guard bool) map[string]any {
 func defaultValue(s Spec) any {
 	switch s.Kind() {
 	case argvtmpl.Int:
-		if n, err := strconv.Atoi(*s.Default); err == nil {
+		if n, err := strconv.Atoi(s.Default); err == nil {
 			return n
 		}
 	case argvtmpl.Bool:
-		if b, ok := parseBool(*s.Default); ok {
+		if b, ok := parseBool(s.Default); ok {
 			return b
 		}
 	}
-	return *s.Default
+	return s.Default
 }

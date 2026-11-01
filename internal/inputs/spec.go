@@ -3,8 +3,6 @@
 package inputs
 
 import (
-	"bytes"
-	"encoding/gob"
 	"strings"
 
 	"github.com/tivjnb/futi/internal/argvtmpl"
@@ -15,8 +13,9 @@ type Spec struct {
 	Name, Type, Description, Short string // Type: "", "string", "int", "bool" ("" = string)
 	Required, Variadic, Rest       bool
 	AllowDash                      bool
-	Default                        *string // nil: no default
-	Flag                           bool    // true: an element of flags
+	Default                        string // meaningful only if HasDefault
+	HasDefault                     bool   // false: no default (a default may be the empty string)
+	Flag                           bool   // true: an element of flags
 }
 
 // Kind returns the value type of the input; an unknown type counts as string.
@@ -42,7 +41,7 @@ func (s Spec) CLIName() string {
 
 // Optional reports whether the input may be unset: it is not required and has
 // no default.
-func (s Spec) Optional() bool { return !s.Required && s.Default == nil }
+func (s Spec) Optional() bool { return !s.Required && !s.HasDefault }
 
 // TemplateInputs converts the schema to the inputs used by the static checks
 // of a command template. A bool flag is never optional: binding always sets
@@ -66,50 +65,4 @@ func TemplateInputs(args, flags []Spec) []argvtmpl.Input {
 	add(args, false)
 	add(flags, true)
 	return out
-}
-
-// specGob is the gob form of Spec. gob omits a zero value behind a pointer,
-// so a default that is the empty string would decode as nil (no default);
-// HasDefault keeps the difference.
-type specGob struct {
-	Name, Type, Description, Short string
-	Required, Variadic, Rest       bool
-	AllowDash, Flag                bool
-	Default                        string
-	HasDefault                     bool
-}
-
-// GobEncode implements gob.GobEncoder.
-func (s Spec) GobEncode() ([]byte, error) {
-	g := specGob{
-		Name: s.Name, Type: s.Type, Description: s.Description, Short: s.Short,
-		Required: s.Required, Variadic: s.Variadic, Rest: s.Rest,
-		AllowDash: s.AllowDash, Flag: s.Flag,
-	}
-	if s.Default != nil {
-		g.Default, g.HasDefault = *s.Default, true
-	}
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(g); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// GobDecode implements gob.GobDecoder.
-func (s *Spec) GobDecode(data []byte) error {
-	var g specGob
-	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&g); err != nil {
-		return err
-	}
-	*s = Spec{
-		Name: g.Name, Type: g.Type, Description: g.Description, Short: g.Short,
-		Required: g.Required, Variadic: g.Variadic, Rest: g.Rest,
-		AllowDash: g.AllowDash, Flag: g.Flag,
-	}
-	if g.HasDefault {
-		d := g.Default
-		s.Default = &d
-	}
-	return nil
 }

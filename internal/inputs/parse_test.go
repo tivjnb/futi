@@ -15,7 +15,7 @@ var (
 	k8sLogs = node{
 		label: "futi k8s logs",
 		args:  []Spec{{Name: "pod", Required: true}},
-		flags: []Spec{{Name: "follow", Type: "bool", Short: "f", Flag: true}, {Name: "tail", Type: "int", Default: str("100"), Flag: true}},
+		flags: []Spec{{Name: "follow", Type: "bool", Short: "f", Flag: true}, {Name: "tail", Type: "int", Default: "100", HasDefault: true, Flag: true}},
 	}
 	filesCopy = node{
 		label: "futi files copy",
@@ -29,8 +29,8 @@ var (
 	}
 	dockerBuild = node{
 		label: "futi docker build",
-		args:  []Spec{{Name: "context", Default: str(".")}},
-		flags: []Spec{{Name: "tag", Required: true, Short: "t", Flag: true}, {Name: "file", Default: str("Dockerfile"), Flag: true}},
+		args:  []Spec{{Name: "context", Default: ".", HasDefault: true}},
+		flags: []Spec{{Name: "tag", Required: true, Short: "t", Flag: true}, {Name: "file", Default: "Dockerfile", HasDefault: true, Flag: true}},
 	}
 	dockerRun = node{
 		label: "futi docker run",
@@ -208,7 +208,7 @@ func TestArgsUsage(t *testing.T) {
 	}{
 		{nil, "no arguments"},
 		{[]Spec{{Name: "pod", Required: true}}, "1 argument: <pod>"},
-		{[]Spec{{Name: "a", Required: true}, {Name: "b", Default: str("x")}, {Name: "c", Required: true, Variadic: true}}, "3 arguments: <a> [b] <c>..."},
+		{[]Spec{{Name: "a", Required: true}, {Name: "b", Default: "x", HasDefault: true}, {Name: "c", Required: true, Variadic: true}}, "3 arguments: <a> [b] <c>..."},
 		{[]Spec{{Name: "a", Required: true}, {Name: "rest", Rest: true}}, "2 arguments: <a> [rest...]"},
 		{[]Spec{{Name: "paths", Variadic: true}}, "1 argument: [paths...]"},
 		{[]Spec{{Name: "k_args", Required: true, Rest: true}}, "1 argument: <k-args>..."},

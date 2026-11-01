@@ -81,8 +81,8 @@ func bindOne(s Spec, given map[string]any) (v argvtmpl.Value, set bool, err erro
 // bindUnset handles an input that was not given (or is an empty list).
 func bindUnset(s Spec) (argvtmpl.Value, bool, error) {
 	switch {
-	case s.Default != nil:
-		str, err := canonical(s, *s.Default)
+	case s.HasDefault:
+		str, err := canonical(s, s.Default)
 		if err != nil {
 			return argvtmpl.Value{}, false, err
 		}

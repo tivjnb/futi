@@ -93,7 +93,7 @@ func writeArgs(b *strings.Builder, args []inputs.Spec) {
 		if a.Required {
 			meta = append(meta, "(required)")
 		}
-		if a.Default != nil {
+		if a.HasDefault {
 			meta = append(meta, defaultMeta(a))
 		}
 		if a.Rest {
@@ -128,7 +128,7 @@ func writeFlags(b *strings.Builder, flags []inputs.Spec) {
 		if f.Required {
 			meta = append(meta, "(required)")
 		}
-		if f.Default != nil {
+		if f.HasDefault {
 			meta = append(meta, defaultMeta(f))
 		}
 		rows = append(rows, row{sig: sig, desc: termtext.Line(f.Description), meta: meta})
@@ -140,7 +140,7 @@ func writeFlags(b *strings.Builder, flags []inputs.Spec) {
 // defaultMeta is "(default "x")" for a string input and "(default 100)" for
 // the others.
 func defaultMeta(s inputs.Spec) string {
-	val := termtext.Line(*s.Default)
+	val := termtext.Line(s.Default)
 	if s.Type == "" || s.Type == "string" {
 		return fmt.Sprintf("(default %q)", val)
 	}

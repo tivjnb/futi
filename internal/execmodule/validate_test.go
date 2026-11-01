@@ -12,9 +12,6 @@ import (
 // cmdText is a string-form cmd.
 func cmdText(s string) CmdSpec { return CmdSpec{Text: s} }
 
-// strPtr returns a pointer to s (for Spec.Default).
-func strPtr(s string) *string { return &s }
-
 // TestValidateValidModule проверяет, что валидный модуль не даёт ошибок
 // и предупреждений.
 func TestValidateValidModule(t *testing.T) {
@@ -27,7 +24,7 @@ func TestValidateValidModule(t *testing.T) {
 					Cmd: cmdText("docker build {{.tag}} {{.file}}"),
 					Flags: []inputs.Spec{
 						{Name: "tag", Required: true, Flag: true},
-						{Name: "file", Default: strPtr("Dockerfile"), Flag: true},
+						{Name: "file", Default: "Dockerfile", HasDefault: true, Flag: true},
 					},
 				},
 				"logs": {

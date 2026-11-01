@@ -54,20 +54,20 @@ func Validate(args, flags []Spec) []error {
 		if isBool && s.Required {
 			fail("required is not allowed for bool")
 		}
-		if s.Required && s.Default != nil && *s.Default != "" {
+		if s.Required && s.HasDefault && s.Default != "" {
 			fail("required and default are mutually exclusive")
 		}
 
-		if s.Default != nil {
+		if s.HasDefault {
 			switch {
 			case s.Variadic || s.Rest:
 				fail("variadic and rest inputs cannot have a default")
 			case validType && s.Type == "int":
-				if _, err := strconv.Atoi(*s.Default); err != nil {
+				if _, err := strconv.Atoi(s.Default); err != nil {
 					fail("default is not an integer")
 				}
 			case isBool:
-				if _, ok := parseBool(*s.Default); !ok {
+				if _, ok := parseBool(s.Default); !ok {
 					fail("default is not a boolean (true/false/1/0/yes/no/on/off)")
 				}
 			}

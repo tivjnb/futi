@@ -444,8 +444,8 @@ func paramHint(p inputs.Spec) string {
 	if p.Required {
 		return "(required)"
 	}
-	if p.Default != nil && *p.Default != "" {
-		return "(default: " + *p.Default + ")"
+	if p.HasDefault && p.Default != "" {
+		return "(default: " + p.Default + ")"
 	}
 	return ""
 }

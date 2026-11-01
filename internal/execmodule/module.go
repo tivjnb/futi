@@ -304,6 +304,10 @@ func parseInputs(raw []inputYAML, flag bool) []inputs.Spec {
 	}
 	specs := make([]inputs.Spec, len(raw))
 	for i, in := range raw {
+		def := ""
+		if in.Default != nil {
+			def = *in.Default
+		}
 		specs[i] = inputs.Spec{
 			Name:        in.Name,
 			Type:        in.Type,
@@ -313,7 +317,8 @@ func parseInputs(raw []inputYAML, flag bool) []inputs.Spec {
 			Variadic:    in.Variadic,
 			Rest:        in.Rest,
 			AllowDash:   in.AllowDash,
-			Default:     in.Default,
+			Default:     def,
+			HasDefault:  in.Default != nil,
 			Flag:        flag,
 		}
 	}
