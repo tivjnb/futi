@@ -7,6 +7,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -139,6 +140,10 @@ func (r *Runtime) Execute(ctx context.Context, t *Target, req ExecuteRequest) (E
 		}
 	}
 
+	if err := batchCheck(runtime.GOOS, exec.LookPath, argv[0], p.Args); err != nil {
+		return res, invalidInput(err)
+	}
+
 	stdout, stderr, limiter := outputWriters(req.Stdout, req.Stderr, req.OutputLimit)
 	cfg := &executor.Config{
 		Dir:            workDir,
@@ -162,6 +167,20 @@ func (r *Runtime) Execute(ctx context.Context, t *Target, req ExecuteRequest) (E
 		return res, fmt.Errorf("execute: %w", ctx.Err())
 	}
 	return res, fatal
+}
+
+// batchCheck refuses input values that cmd.exe would interpret when argv0
+// resolves to a .bat or .cmd file. It only applies on Windows. A failed
+// lookup is skipped: the executor reports it when starting the command.
+func batchCheck(goos string, look func(string) (string, error), argv0 string, args []argvtmpl.Arg) error {
+	if goos != "windows" {
+		return nil
+	}
+	exe, err := look(argv0)
+	if err != nil {
+		return nil
+	}
+	return argvtmpl.CheckBatch(exe, args)
 }
 
 // splitRunError separates the outcome of executor.RunWithConfig: a child

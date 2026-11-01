@@ -1107,6 +1107,10 @@ zsh prints descriptions of commands/modules next to the hints.
 
 Commands are executed through `exec` with a ready argv — **without** a shell. The metacharacters `;`, `$()`, `` ` `` in parameters are not executed as shell code (they pass as ordinary text in arguments). If you need a shell, write it explicitly (`sh -c '...'`), passing user input as a positional argument with `{{quote}}` (see the examples).
 
+### Batch files on Windows
+
+On Windows, when the program of a command resolves (after the `PATH` lookup) to a `.bat` or `.cmd` file, Go cannot quote arguments safely for `cmd.exe`. futi therefore refuses to run the command if any argument element containing a user value (an arg, a flag or `rest`) contains `"`, `%`, `!`, `&`, `|`, `<`, `>`, `^` or a line break; the error names the input, for example `value for <x> contains "&", unsafe for batch file deploy.cmd`. Prefer an `.exe` for commands that take user input. The check is skipped by `--dry-run`.
+
 ### `{{quote}}` for user values
 
 Parameter values go through parsing again (shlex) when argv is built. Inserting `{{.param}}` in quotes (`"{{.msg}}"`) can be "broken out of" by a value with a quote character: it escapes the quotes and becomes separate arguments (flag injection). For values in dangerous positions use `{{quote .param}}`, which guarantees exactly one argument (see [spaces and quotes](#important-spaces-and-quotes-in-values)).
