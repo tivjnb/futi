@@ -112,7 +112,7 @@ func (t *Template) Check(inputs []Input) []error {
 				add(r.item, pc.pos, "rest input "+strconv.Quote(in.Name)+" must be a whole argument")
 				wholeArgErr = true
 			case in.Variadic && len(r.pieces) > 1:
-				add(r.item, pc.pos, "variadic input "+strconv.Quote(in.Name)+" must be a whole argument; use {{range .env}}--env={{.}}{{end}}")
+				add(r.item, pc.pos, "variadic input "+strconv.Quote(in.Name)+" must be a whole argument; use {{range ."+in.Name+"}}--"+in.Name+"={{.}}{{end}}")
 				wholeArgErr = true
 			}
 			if !slices.Contains(names, in.Name) {
