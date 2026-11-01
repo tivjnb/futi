@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/tivjnb/futi/internal/argvtmpl"
@@ -52,9 +53,7 @@ func RunHook(ctx context.Context, hook execmodule.CmdSpec, moduleRoot, moduleNam
 	// A program path with a separator is relative to the module root, like
 	// the cwd of the hook; the executor would resolve it against futi's cwd.
 	// A bare name is still looked up in PATH.
-	if prog := argv[0]; !filepath.IsAbs(prog) && strings.ContainsAny(prog, `/`+string(filepath.Separator)) {
-		argv[0] = filepath.Join(moduleRoot, prog)
-	}
+	argv[0] = hookProgramPath(argv[0], moduleRoot, runtime.GOOS == "windows")
 
 	env := os.Environ()
 	env = append(env,
@@ -72,4 +71,24 @@ func RunHook(ctx context.Context, hook execmodule.CmdSpec, moduleRoot, moduleNam
 		Group:          group,
 	}
 	return executor.RunWithConfig(ctx, cfg, argv[0], argv[1:]...)
+}
+
+// hookProgramPath joins a program path with a separator to the module root,
+// like the cwd of the hook. A path that is not relative to the module root is
+// returned as is: an absolute one, a bare name (looked up in PATH) and, with
+// win, a drive-relative (C:foo\x.exe) or root-relative (\foo) one.
+func hookProgramPath(prog, moduleRoot string, win bool) string {
+	if win {
+		if len(prog) >= 2 && prog[1] == ':' || strings.HasPrefix(prog, `\`) || strings.HasPrefix(prog, `/`) {
+			return prog
+		}
+		if strings.ContainsAny(prog, `/\`) {
+			return filepath.Join(moduleRoot, prog)
+		}
+		return prog
+	}
+	if !filepath.IsAbs(prog) && strings.Contains(prog, "/") {
+		return filepath.Join(moduleRoot, prog)
+	}
+	return prog
 }

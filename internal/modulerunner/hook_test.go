@@ -202,3 +202,68 @@ func TestRunHookEmptyArgv(t *testing.T) {
 		t.Fatalf("err = %v, want hook rendered to empty argv", err)
 	}
 }
+
+// TestHookProgramPath: a program path with a separator that is relative to the
+// module root is joined with it; drive-relative, root-relative and absolute
+// paths and bare names are left as they are. win selects the Windows rules,
+// so the table runs on any OS.
+func TestHookProgramPath(t *testing.T) {
+	root := filepath.Join("ROOT", "mod")
+	tests := []struct {
+		prog   string
+		win    bool
+		joined bool
+	}{
+		{"scripts/x.sh", false, true},
+		{"./setup.sh", false, true},
+		{"/abs/x.sh", false, false},
+		{"x.sh", false, false},
+		{`a\b`, false, false}, // a backslash is an ordinary character
+		{"scripts/x.sh", true, true},
+		{`scripts\x.exe`, true, true},
+		{`.\x.exe`, true, true},
+		{"x.exe", true, false},
+		{`C:\bin\x.exe`, true, false},
+		{`C:/bin/x.exe`, true, false},
+		{`C:foo\x.exe`, true, false}, // relative to the cwd of drive C
+		{`c:x.exe`, true, false},
+		{`\foo\x.exe`, true, false}, // relative to the root of the current drive
+		{`/foo/x.exe`, true, false},
+		{`\\server\share\x.exe`, true, false},
+	}
+	for _, tt := range tests {
+		got := hookProgramPath(tt.prog, root, tt.win)
+		if tt.joined {
+			if want := filepath.Join(root, tt.prog); got != want {
+				t.Errorf("hookProgramPath(%q, win=%v) = %q, want %q", tt.prog, tt.win, got, want)
+			}
+		} else if got != tt.prog {
+			t.Errorf("hookProgramPath(%q, win=%v) = %q, want it unchanged", tt.prog, tt.win, got)
+		}
+	}
+}
+
+// A relative module root and a relative program path: the script is found
+// from the absolute module root, not from the cwd.
+func TestRunHookRelativeRootAndProgram(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	rel := filepath.Join("rel", "mod")
+	if err := os.MkdirAll(filepath.Join(rel, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rel, "scripts", "x.sh"), []byte("#!/bin/sh\npwd\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := RunHook(context.Background(), hookList("scripts/x.sh"), rel, "m", nil, &out, &out, executor.GroupIsolateWithoutTTY, true); err != nil {
+		t.Fatalf("RunHook: %v", err)
+	}
+	want, err := filepath.EvalSymlinks(filepath.Join(cwd, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(out.String()); got != want {
+		t.Fatalf("hook ran in %q, want %q", got, want)
+	}
+}
