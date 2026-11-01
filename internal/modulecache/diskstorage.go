@@ -65,12 +65,13 @@ func NewDiskStorage(path string) *DiskStorage {
 
 // Load загружает cacheFile из gob-файла.
 // Если файл отсутствует — возвращает пустую cacheFile без ошибки.
-// Если файл повреждён — возвращает error (вызывающий решает: rebuild).
 // Если версия схемы не совпадает с cacheFileVersion, а также если идентичность
 // бинаря не определена или не совпадает с записанной (в том числе у файла
 // старого формата без неё) — возвращает пустую cacheFile без ошибки и без
-// лога: это штатно после каждого обновления futi (кэш перестраивается с
-// пустого состояния; строка в stderr попала бы в вывод futi __complete).
+// лога, как и у файла, который не декодируется (повреждён или записан сборкой
+// с несовместимой схемой, например futi 0.1.0): это штатно после каждого
+// обновления futi (кэш перестраивается с пустого состояния; строка в stderr
+// попала бы в вывод futi __complete).
 func (d *DiskStorage) Load() (cacheFile, error) {
 	f, err := os.Open(d.path)
 	if err != nil {
@@ -83,7 +84,10 @@ func (d *DiskStorage) Load() (cacheFile, error) {
 
 	var cf cacheFile
 	if err := gob.NewDecoder(f).Decode(&cf); err != nil {
-		return cacheFile{}, fmt.Errorf("modulecache: decode cache file %q: %w", d.path, err)
+		// The cache is derived data. A file that does not decode was written
+		// by a build with an incompatible schema (or is damaged): rebuild
+		// silently, the same as for another version or binary identity.
+		return cacheFile{}, nil
 	}
 	// Другая версия схемы или чужая идентичность бинаря — ожидаемо после
 	// обновления/отката futi: тихая перестройка с пустого состояния.

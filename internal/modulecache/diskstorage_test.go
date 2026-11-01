@@ -1,6 +1,7 @@
 package modulecache
 
 import (
+	"bytes"
 	"encoding/gob"
 	"errors"
 	"os"
@@ -114,18 +115,55 @@ func TestDiskStorageSaveOverwritesExisting(t *testing.T) {
 	}
 }
 
-// TestDiskStorageLoadCorruptedReturnsError проверяет, что повреждённый файл — error.
-func TestDiskStorageLoadCorruptedReturnsError(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "corrupted.gob")
-	if err := os.WriteFile(path, []byte("not a gob file"), 0o644); err != nil {
-		t.Fatalf("write corrupted file: %v", err)
+// TestDiskStorageLoadUndecodableFileIsSilentRebuild: a file the current build
+// cannot decode (garbage, or a schema from an older futi where Module.Cmd was a
+// string) is derived data: Load returns an empty cacheFile without an error.
+func TestDiskStorageLoadUndecodableFileIsSilentRebuild(t *testing.T) {
+	type oldModule struct {
+		Name string
+		Cmd  string // a struct (CmdSpec) in the current schema
+	}
+	type oldEntry struct {
+		Module *oldModule
+		Size   int64
+	}
+	type oldCacheFile struct {
+		Version         int
+		LastRefreshTime time.Time
+		Entries         map[string]oldEntry
+		BinaryID        string
+	}
+	var oldGob bytes.Buffer
+	old := oldCacheFile{
+		Version:  cacheFileVersion,
+		BinaryID: "a",
+		Entries:  map[string]oldEntry{"/m.yaml": {Module: &oldModule{Name: "m", Cmd: "echo hi"}, Size: 7}},
+	}
+	if err := gob.NewEncoder(&oldGob).Encode(old); err != nil {
+		t.Fatalf("encode old cache: %v", err)
 	}
 
-	s := NewDiskStorage(path)
-	_, err := s.Load()
-	if err == nil {
-		t.Fatal("expected error for corrupted file, got nil")
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{"garbage", []byte("not a gob file")},
+		{"older schema with string Cmd", oldGob.Bytes()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cache.gob")
+			if err := os.WriteFile(path, tc.data, 0o644); err != nil {
+				t.Fatalf("write cache file: %v", err)
+			}
+			cf, err := newDiskStorageWithID(path, "a").Load()
+			if err != nil {
+				t.Fatalf("Load: unexpected error %v", err)
+			}
+			if len(cf.Entries) != 0 || cf.Version != 0 {
+				t.Fatalf("Load: got version %d, %d entries, want an empty cacheFile", cf.Version, len(cf.Entries))
+			}
+		})
 	}
 }
 
