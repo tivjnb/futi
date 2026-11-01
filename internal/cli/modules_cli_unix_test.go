@@ -14,7 +14,7 @@ import (
 // а не код хука: README обещает 1 для прочих ошибок modules-команд.
 func TestFutiModulesInstallFailedAttachExitsWithOne(t *testing.T) {
 	tmp := t.TempDir()
-	src := makeSourceModule(t, t.TempDir(), "a", "attach: \"exit 3\"\n")
+	src := makeSourceModule(t, t.TempDir(), "a", "attach: [sh, -c, \"exit 3\"]\n")
 	cmd := exec.Command(builtFutiBinary(t), "modules", "install", src, "--yes")
 	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(),

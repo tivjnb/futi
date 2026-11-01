@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tivjnb/futi/internal/execmodule"
 
@@ -67,7 +68,7 @@ func isNullNode(n *yaml.Node) bool {
 }
 
 // addCommandToManifest добавляет команду cmdName в commands: манифеста path.
-// cmdStr — тело команды; desc — описание (опционально).
+// cmdStr — тело команды; пустая строка — список [echo, <имя>]; desc — описание (опционально).
 // Ошибка, если команда уже существует. Результат проверяется до записи
 // (writeValidated); при невалидном результате оригинал не меняется.
 func addCommandToManifest(path, cmdName, cmdStr, desc string) error {
@@ -91,7 +92,12 @@ func addCommandToManifest(path, cmdName, cmdStr, desc string) error {
 	}
 
 	cmdNode := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	cmdNode.Content = append(cmdNode.Content, scalarStr("cmd"), scalarStr(cmdStr))
+	cmdValue := scalarStr(cmdStr)
+	if cmdStr == "" {
+		cmdValue = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Style: yaml.FlowStyle,
+			Content: []*yaml.Node{scalarStr("echo"), scalarStr(cmdName)}}
+	}
+	cmdNode.Content = append(cmdNode.Content, scalarStr("cmd"), cmdValue)
 	if desc != "" {
 		cmdNode.Content = append(cmdNode.Content, scalarStr("description"), scalarStr(desc))
 	}
@@ -213,7 +219,7 @@ func writeValidated(path string, doc *yaml.Node) error {
 }
 
 // AddCommandOptions are the arguments of Manager.AddCommand. An empty Cmd
-// defaults to "echo <Command>".
+// defaults to the list [echo, <Command>].
 type AddCommandOptions struct {
 	Module, Command, Desc, Cmd string
 }
@@ -228,6 +234,9 @@ func (m *Manager) AddCommand(opts AddCommandOptions) error {
 	if err := ValidateResolveName(opts.Module); err != nil {
 		return err
 	}
+	if err := checkCommandName(opts.Command); err != nil {
+		return err
+	}
 	source, err := m.rt.Source()
 	if err != nil {
 		return err
@@ -237,11 +246,7 @@ func (m *Manager) AddCommand(opts AddCommandOptions) error {
 		return fmt.Errorf("modules add_command: %w", err)
 	}
 
-	cmdStr := opts.Cmd
-	if cmdStr == "" {
-		cmdStr = "echo " + opts.Command
-	}
-	if err := addCommandToManifest(manifestPath, opts.Command, cmdStr, opts.Desc); err != nil {
+	if err := addCommandToManifest(manifestPath, opts.Command, opts.Cmd, opts.Desc); err != nil {
 		return fmt.Errorf("modules add_command: %w", err)
 	}
 	if err := m.rt.Cache().Invalidate(); err != nil {
@@ -271,5 +276,14 @@ func (m *Manager) RemoveCommand(opts RemoveCommandOptions) error {
 		fmt.Fprintf(m.s.Err, "cache: %v (continuing)\n", err)
 	}
 	fmt.Fprintf(m.s.Out, "Removed command %q from %s\n", opts.Command, manifestPath)
+	return nil
+}
+
+// checkCommandName rejects a command name with "{{": the generated cmd
+// [echo, <name>] would be read as a template.
+func checkCommandName(name string) error {
+	if strings.Contains(name, "{{") {
+		return fmt.Errorf("invalid command name %q: must not contain \"{{\"", name)
+	}
 	return nil
 }

@@ -41,6 +41,9 @@ type ListResult struct {
 	HasDefault bool           // ListModule: module has cmd; ListSubcommands: command has cmd
 	Commands   []CommandEntry // sorted by Name
 	Children   []ChildEntry   // ListNamespace: in discovery order
+	Warnings   []string       // path collisions found in the listed subtree (error texts)
+
+	loaded []loadedModule // modules loaded for this listing, to check for path collisions
 }
 
 // ListIn lists namespace in src: a module's commands, a command's
@@ -49,7 +52,23 @@ type ListResult struct {
 // *discovery.PartialError. Other errors are classified.
 func ListIn(src discovery.Source, loader modulerunner.ModuleLoader, namespace string, recurse bool) (ListResult, error) {
 	res, err := listIn(src, loader, namespace, recurse)
+	if err == nil || errors.As(err, new(*discovery.PartialError)) {
+		res.Warnings = collisionWarnings(src, res.loaded)
+	}
 	return res, classifyUnlessPartial(err)
+}
+
+// collisionWarnings checks the modules the listing has loaded anyway for
+// path collisions; no module is loaded for the check.
+func collisionWarnings(src discovery.Source, loaded []loadedModule) []string {
+	if len(loaded) == 0 {
+		return nil
+	}
+	addrs, err := treeAddrs(src)
+	if err != nil {
+		return []string{"cannot check path collisions: " + err.Error()}
+	}
+	return collisionTexts(collisionsOf(src, addrs, loaded, ""))
 }
 
 func listIn(src discovery.Source, loader modulerunner.ModuleLoader, namespace string, recurse bool) (ListResult, error) {
@@ -58,7 +77,11 @@ func listIn(src discovery.Source, loader modulerunner.ModuleLoader, namespace st
 	if namespace != "" {
 		manifestPath, moduleRoot, err := src.Resolve(namespace)
 		if err == nil {
-			return ModuleCommands(loader, manifestPath, moduleRoot)
+			res, mod, err := moduleCommands(loader, manifestPath, moduleRoot)
+			if err == nil {
+				res.loaded = []loadedModule{{ns: namespace, manifest: manifestPath, mod: mod}}
+			}
+			return res, err
 		}
 		if !errors.Is(err, discovery.ErrNotFound) {
 			return ListResult{}, fmt.Errorf("list: %w", err)
@@ -91,7 +114,9 @@ func listIn(src discovery.Source, loader modulerunner.ModuleLoader, namespace st
 			}
 
 			if len(cmd.Commands) > 0 {
-				return commandsResult(ListSubcommands, cmd.Commands, manifestPath, cmd.Cmd), nil
+				res := commandsResult(ListSubcommands, cmd.Commands, manifestPath, !cmd.Cmd.IsZero())
+				res.loaded = []loadedModule{{ns: ns, manifest: manifestPath, mod: mod}}
+				return res, nil
 			}
 
 			return ListResult{}, fmt.Errorf("list: command %q has no subcommands", strings.Join(commandPath, " "))
@@ -111,7 +136,8 @@ func listIn(src discovery.Source, loader modulerunner.ModuleLoader, namespace st
 	if listErr != nil && !errors.As(listErr, &partial) {
 		return ListResult{}, fmt.Errorf("list: %w", listErr)
 	}
-	res := ListResult{Kind: ListNamespace, Children: DescribeChildren(children, loader)}
+	entries, loaded := describeChildren(children, loader, namespace)
+	res := ListResult{Kind: ListNamespace, Children: entries, loaded: loaded}
 	if listErr != nil {
 		return res, listErr
 	}
@@ -120,15 +146,20 @@ func listIn(src discovery.Source, loader modulerunner.ModuleLoader, namespace st
 
 // ModuleCommands loads the module and lists its top-level commands.
 func ModuleCommands(loader modulerunner.ModuleLoader, manifestPath, moduleRoot string) (ListResult, error) {
-	mod, err := modulerunner.LoadModule(loader, manifestPath, moduleRoot)
-	if err != nil {
-		return ListResult{}, fmt.Errorf("list: %w", err)
-	}
-	return commandsResult(ListModule, mod.Commands, manifestPath, mod.Cmd), nil
+	res, _, err := moduleCommands(loader, manifestPath, moduleRoot)
+	return res, err
 }
 
-func commandsResult(kind ListKind, commands map[string]*execmodule.Command, manifestPath, defaultCmd string) ListResult {
-	res := ListResult{Kind: kind, Manifest: manifestPath, HasDefault: defaultCmd != ""}
+func moduleCommands(loader modulerunner.ModuleLoader, manifestPath, moduleRoot string) (ListResult, *execmodule.Module, error) {
+	mod, err := modulerunner.LoadModule(loader, manifestPath, moduleRoot)
+	if err != nil {
+		return ListResult{}, nil, fmt.Errorf("list: %w", err)
+	}
+	return commandsResult(ListModule, mod.Commands, manifestPath, !mod.Cmd.IsZero()), mod, nil
+}
+
+func commandsResult(kind ListKind, commands map[string]*execmodule.Command, manifestPath string, hasDefault bool) ListResult {
+	res := ListResult{Kind: kind, Manifest: manifestPath, HasDefault: hasDefault}
 	for name, cmd := range commands {
 		res.Commands = append(res.Commands, CommandEntry{Name: name, Description: cmd.Description})
 	}
@@ -139,6 +170,14 @@ func commandsResult(kind ListKind, commands map[string]*execmodule.Command, mani
 // DescribeChildren converts discovery children into entries, loading the
 // description of every non-conflicting module through loader (not verified).
 func DescribeChildren(children []discovery.Child, loader modulerunner.ModuleLoader) []ChildEntry {
+	entries, _ := describeChildren(children, loader, "")
+	return entries
+}
+
+// describeChildren is DescribeChildren that also returns the loaded modules.
+// Child names are relative to namespace.
+func describeChildren(children []discovery.Child, loader modulerunner.ModuleLoader, namespace string) ([]ChildEntry, []loadedModule) {
+	var loaded []loadedModule
 	entries := make([]ChildEntry, 0, len(children))
 	for _, c := range children {
 		e := ChildEntry{
@@ -155,12 +194,17 @@ func DescribeChildren(children []discovery.Child, loader modulerunner.ModuleLoad
 					e.LoadErr = err
 				} else {
 					e.Description = mod.Description
+					ns := c.Name
+					if namespace != "" {
+						ns = namespace + "." + c.Name
+					}
+					loaded = append(loaded, loadedModule{ns: ns, manifest: c.ManifestPath, mod: mod})
 				}
 			}
 		}
 		entries = append(entries, e)
 	}
-	return entries
+	return entries, loaded
 }
 
 // List lists namespace in the runtime's source, see ListIn.

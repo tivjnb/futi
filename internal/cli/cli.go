@@ -176,7 +176,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer, version stri
 				fmt.Fprintf(stderr, "source: %v\n", err)
 				return 1
 			}
-			if listErr := runList(stdout, source, listReq.namespace, listReq.verbose, listReq.recurse, cache); listErr != nil && !printPartialWarnings(stderr, listErr) {
+			if listErr := runList(stdout, stderr, source, listReq.namespace, listReq.verbose, listReq.recurse, cache); listErr != nil && !printPartialWarnings(stderr, listErr) {
 				fmt.Fprintln(stderr, listErrorText(listErr, listReq.namespace))
 				return 1
 			}
@@ -186,13 +186,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer, version stri
 				fmt.Fprintf(stderr, "source: %v\n", err)
 				return 1
 			}
-			helpReq.dryRun = dryRun
-			code, runErr := runHelp(context.Background(), stdin, stdout, stderr, rt, helpReq)
-			if runErr != nil {
-				raiseInterrupt(runErr)
-				return core.ExitCode(runErr)
-			}
-			return code
+			return runHelp(stdout, stderr, rt, helpReq.path)
 		case errors.Is(err, errHelp):
 			printUsage(stdout)
 			return 0

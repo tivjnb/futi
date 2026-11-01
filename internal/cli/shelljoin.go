@@ -5,8 +5,6 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/tivjnb/futi/internal/execmodule"
 )
 
 // shellSafe сообщает, что токен можно печатать без кавычек: он непустой и
@@ -68,9 +66,18 @@ func quoteANSIC(s string) string {
 	return b.String()
 }
 
+// quoteArg возвращает s в одинарных кавычках POSIX: каждая внутренняя
+// одинарная кавычка заменяется последовательностью (закрывающая кавычка,
+// экранированная кавычка, открывающая кавычка):
+//
+//	'\''
+func quoteArg(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // shellJoin склеивает argv в одну строку, которую можно вставить в shell
 // (bash/zsh): безопасные токены печатаются как есть, остальные (в том числе
-// пустые) заключаются в кавычки через execmodule.QuoteShlex, а токены с
+// пустые) заключаются в кавычки через quoteArg, а токены с
 // управляющими символами — в форме $'…'. В кавычки берутся также argv[0] с
 // «=» (иначе это присваивание) и токен, начинающийся с «=» (zsh раскрывает
 // =cmd).
@@ -83,7 +90,7 @@ func shellJoin(argv []string) string {
 		case shellSafe(a) && !strings.HasPrefix(a, "=") && !(i == 0 && strings.Contains(a, "=")):
 			parts[i] = a
 		default:
-			parts[i] = execmodule.QuoteShlex(a)
+			parts[i] = quoteArg(a)
 		}
 	}
 	return strings.Join(parts, " ")

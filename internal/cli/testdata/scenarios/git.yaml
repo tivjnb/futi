@@ -1,0 +1,14 @@
+name: git
+cmd: "git status"
+commands:
+  commit:
+    flags:
+      - name: message
+        short: m
+      - name: amend
+        type: bool
+    cmd: "git commit {{if .amend}}--amend{{end}} {{if .message}}--message={{.message}}{{end}}"
+  help:
+    args:
+      - name: topic
+    cmd: "git help {{.topic}}"

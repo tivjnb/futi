@@ -38,7 +38,6 @@ func classify(err error) error {
 		errors.Is(err, execmodule.ErrCommandNotFound):
 		return &classError{err: err, class: ErrNotFound}
 	case errors.Is(err, discovery.ErrInvalidNamespace),
-		errors.Is(err, modulerunner.ErrNoDefaultCommand),
 		errors.Is(err, execmodule.ErrRequiresSubcommand):
 		return &classError{err: err, class: ErrInvalidInput}
 	}

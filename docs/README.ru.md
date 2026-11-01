@@ -20,7 +20,7 @@ futi deploy staging
 - [Быстрый старт](#быстрый-старт)
 - [Структура модуля](#структура-модуля)
 - [Discovery и namespaces](#discovery-и-namespaces)
-- [Параметры и шаблонизация](#параметры-и-шаблонизация)
+- [Входы и шаблонизация](#входы-и-шаблонизация)
 - [Модуль-пакет со скриптами](#модуль-пакет-со-скриптами)
 - [Команды CLI](#команды-cli)
 - [Валидация](#валидация)
@@ -81,30 +81,30 @@ export FUTI_MODULES_DIR=/path/to/modules
 futi modules init hello --desc "Demo module" --command greet
 ```
 
-Модуль из `futi modules init` создаёт команды-заглушки без параметров:
+Модуль из `futi modules init` создаёт команды-заглушки без входов:
 
 ```bash
 $ futi hello greet
 greet
 ```
 
-Параметры дописываются в YAML вручную (см. [Структура модуля](#структура-модуля)). Замените содержимое `.futi/hello.yaml`:
+Входы дописываются в YAML вручную (см. [Структура модуля](#структура-модуля)). Замените содержимое `.futi/hello.yaml`:
 
 ```yaml
 name: hello
 description: Demo module
 commands:
   greet:
-    params:
+    args:
       - name: name
         required: true
-    cmd: "echo hello {{quote .name}}"
+    cmd: "echo hello {{.name}}"
 ```
 
 Вызовите и посмотрите список:
 
 ```bash
-$ futi hello greet --name world
+$ futi hello greet world
 hello world
 
 $ futi list
@@ -118,7 +118,7 @@ $ futi list
 Посмотреть собранную команду, не запуская её, можно через `--dry-run`:
 
 ```bash
-$ futi --dry-run hello greet --name 'big world'
+$ futi --dry-run hello greet 'big world'
 echo hello 'big world'
 ```
 
@@ -134,7 +134,7 @@ futi list
 
 ## Структура модуля
 
-Модуль — это YAML-файл с описанием команд.
+Модуль — это YAML-файл с описанием команд. Команда принимает **args** (позиционные слова, `--` не нужен) и **flags** (`--name value`):
 
 ```yaml
 name: docker                    # опционально, по умолчанию = имя файла
@@ -142,32 +142,35 @@ description: Docker management  # опционально
 cmd: "docker ps"                # опционально: команда по умолчанию (без явной команды)
 
 commands:
-  # Простая команда без параметров
+  # Простая команда без входов
   ps:
     cmd: "docker ps"
 
-  # Команда с параметрами
+  # Команда с аргументом и флагами
   build:
     description: Build Docker image
-    params:
+    args:
+      - name: context
+        default: "."
+        description: Build context directory
+    flags:
       - name: tag
-        type: string            # string (по умолчанию), bool или int
+        short: t                # -t
         required: true
       - name: file
-        type: string
         default: Dockerfile
-    cmd: "docker build -t {{.tag}} -f {{.file}} ."
+    cmd: "docker build -t {{.tag}} -f {{.file}} {{.context}}"
 
-  # Команда с bool-параметром
+  # Обязательный аргумент и bool-флаг
   logs:
-    params:
+    args:
       - name: container
-        type: string
         required: true
+    flags:
       - name: follow
         type: bool
-        default: false
-    cmd: "docker logs {{.container}} {{if .follow}}-f{{end}}"
+        short: f
+    cmd: "docker logs {{if .follow}}-f{{end}} {{.container}}"
 
   # Вложенные команды: команда может иметь commands вместе с cmd или вместо него.
   # Если указан cmd + commands, cmd вызывается как fallback при отсутствии subcommand.
@@ -181,50 +184,64 @@ commands:
         cmd: "migrate down"
 ```
 
+```bash
+futi docker build --tag myapp          # docker build -t myapp -f Dockerfile .
+futi docker build ./ctx -t myapp       # args и флаги в любом порядке
+futi docker logs -f web                # docker logs -f web
+```
+
 ### Поля
+
+Узел (модуль или команда) имеет такие поля:
 
 | Поле | Тип | Описание |
 |---|---|---|
-| `name` | string | Имя модуля (опционально, по умолчанию = имя файла без `.yaml` или каталога с `config.yaml`; для `futi.yaml` — `futi`). Это значение доступно как `{{.module_name}}` и `FUTI_MODULE_NAME` в `cmd` и в хуках `attach`/`detach` |
-| `description` | string | Описание модуля (опционально) |
-| `cmd` | string | Команда по умолчанию на уровне модуля (опционально) |
-| `params` | list | Схема команды по умолчанию: параметры (опционально) |
-| `positional` | block | Схема команды по умолчанию: позиционные аргументы (опционально) |
-| `commands` | map | Команды модуля |
-| `commands.<name>.description` | string | Описание команды (опционально) |
-| `commands.<name>.cmd` | string | Шаблон команды (если есть `commands` — fallback) |
-| `commands.<name>.params` | list | Параметры команды (опционально) |
-| `commands.<name>.positional` | block | Требования к позиционным аргументам (опционально) |
-| `commands.<name>.commands` | map | Вложенные команды (опционально) |
-| `params[].name` | string | Имя параметра (обязательно): буквы, цифры, `_` и `-`, не начинается с цифры или `-`. Имена `args`, `args_list`, `env`, `module_name`, `module_root` зарезервированы — ошибка схемы |
-| `params[].type` | string | Тип: `string` (по умолчанию), `bool` или `int` |
-| `params[].required` | bool | Обязательный параметр (по умолчанию `false`) |
-| `params[].default` | string | Значение по умолчанию |
-| `params[].description` | string | Описание параметра (опционально, показывается в help) |
-| `positional.min` | int | Обязательный минимум позиционных аргументов после `--` (по умолчанию `0`) |
+| `name` | string | Только модуль. Имя модуля (опционально, по умолчанию = имя файла без `.yaml` или каталога с `config.yaml`; для `futi.yaml` — `futi`). Это значение доступно как `{{.module_name}}` и `FUTI_MODULE_NAME` в `cmd` и в хуках `attach`/`detach` |
+| `description` | string | Описание (опционально, показывается в `list` и help) |
+| `cmd` | string или list | Шаблон команды (см. [Шаблонизация](#шаблонизация)). У модуля — команда по умолчанию; у команды с `commands` — fallback |
+| `args` | list | Позиционные входы |
+| `flags` | list | Входы, передаваемые как `--name` |
+| `commands` | map | Вложенные команды (узел может иметь `cmd`, `args` и `commands` одновременно) |
+| `attach`, `detach` | string или list | Только модуль. Хуки install/uninstall (см. [Управление модулями](#управление-модулями)) |
 
-Имя с дефисом, например `dry-run`: в CLI — `--dry-run`, в шаблоне — `{{index . "dry-run"}}` (точка-нотация `{{.dry-run}}` не работает).
+`args` и `flags` узла относятся только к его собственному `cmd`: подкоманды их не наследуют. `args` и `flags` на уровне модуля описывают команду модуля по умолчанию.
 
-Верхнеуровневые `params` и `positional` описывают команду по умолчанию (`cmd`):
-валидация, defaults и help работают так же, как у обычных команд.
+Вход (элемент `args` или `flags`) — объект с `name`; сокращённой записи нет:
+
+| Поле | Где | По умолчанию | Описание |
+|---|---|---|---|
+| `name` | оба | — | Обязательно. `[a-z][a-z0-9_]*`, уникально среди args и flags узла. В CLI `_` превращается в `-` (`ignore_case` — это `--ignore-case`); в шаблоне — `{{.ignore_case}}`. Имена `help`, `env`, `module_root`, `module_name` зарезервированы |
+| `type` | оба | `string` | `string`, `int` или `bool`; `bool` — только у flags |
+| `required` | оба, кроме bool | `false` | Вход обязателен. Вместе с любым `default` (даже пустым) — ошибка схемы. У variadic/rest — минимум одно значение |
+| `default` | оба, кроме variadic/rest | — | Строка; для `int` — целое, для `bool` — одно из `true/false/1/0/yes/no/on/off` |
+| `description` | оба | — | Показывается в help и completion |
+| `short` | flags | — | Одна латинская буква, регистр значим (`-f` ≠ `-F`), уникальна в узле; `h` зарезервирована. Допустима у variadic-флага |
+| `variadic` | оба | `false` | Args: несколько слов подряд. Flags: флаг можно повторять, значения копятся. Не для `bool` |
+| `rest` | args | `false` | Только последний arg: забирает все оставшиеся токены дословно (см. [Rest](#rest-оставшиеся-токены)) |
+| `allow_dash` | оба, кроме bool | `false` | Снимает [защиту от значений с ведущим `-`](#значения-с-ведущим--) |
+
+Args команды имеют одну из трёх форм: обязательные, затем необязательные (`req* opt*`); обязательные, один `variadic`, обязательные (`req* variadic req*`); обязательные, затем один `rest` (`req* rest`). Перед `variadic`/`rest` могут стоять только обязательные args; необязательный arg может идти после обязательных и иметь `default` (`context` выше по умолчанию `.`).
 
 ```yaml
 # meta.yaml — модуль как одна команда со схемой
 name: meta
-cmd: "python scripts/meta.py --files {{quote .args}}{{if .json}} --json{{end}}"
-params:
+cmd: "python3 scripts/meta.py {{if .json}}--json{{end}} --files {{.files}}"
+args:
+  - name: files
+    variadic: true
+    required: true
+flags:
   - name: json
     type: bool
-    default: "false"
-positional:
-  min: 1
 ```
 
 ```bash
-futi meta --json -- photo.jpg
+futi meta --json photo.jpg scan.png
 ```
 
-Неизвестный ключ манифеста (например, опечатка `requird` в параметре) — ошибка схемы с номером строки: `line 9: unknown key "requird" in commands.build.params[0]`. Ключи с префиксом `x-` разрешены на любом уровне структуры и игнорируются — под них удобно заводить YAML-якоря (`x-common: &c {…}` и `<<: *c`). Исключение: ключ внутри `commands` — это имя команды, и `x-build` там обычная команда.
+Неизвестный ключ манифеста (например, опечатка `requird` во входе) — ошибка схемы с номером строки: `line 9: unknown key "requird" in commands.build.flags[0]`. Ключи с префиксом `x-` разрешены на любом уровне структуры и игнорируются — под них удобно заводить YAML-якоря (`x-common: &c {…}` и `<<: *c`). Исключение: ключ внутри `commands` — это имя команды, и `x-build` там обычная команда.
+
+> **Старый формат.** `params`, `positional`, `{{.args}}`, `{{.args_list}}` и `{{quote …}}` больше не существуют. Модуль, который их использует, не загружается; ошибка указывает на замену (например, `"params" was replaced by "args"/"flags" (see README)`). Параметры переносятся в `flags` (или в `args`, если они были позиционными), `{{quote .x}}` заменяется на `{{.x}}`, а `{{.args}}` — на arg с `rest` или `variadic`.
 
 ---
 
@@ -364,141 +381,191 @@ sources:
 
 ---
 
-## Параметры и шаблонизация
+## Входы и шаблонизация
 
-### Передача параметров
-
-```bash
-futi docker build --tag myapp --file Dockerfile.dev
-futi docker logs --follow
-futi docker logs --follow=false
-futi docker logs --follow -- mycontainer
-```
-
-Форматы:
-- `--param value` — пробел (для string/int-параметров)
-- `--param=value` — через `=` (обязательно для значений, начинающихся с `--`)
-- `--bool-flag` — без значения (=`true`)
-- `--bool-flag=false` — явный false
-
-> **Важно:** порядок строгий — `futi <путь…> [флаги] [-- args]`. Путь
-> (namespace и команда) заканчивается на первом токене, начинающемся с `-`
-> (одиночный `-` — обычное слово). После этого слово допустимо только как
-> значение предыдущего string/int-флага; bool-флаг слово никогда не съедает
-> (`--force false` — ошибка, пишите `--force=false`), а лишнее слово —
-> ошибка `unexpected argument`. Позиционные аргументы команды передаются
-> после `--`. Флаги до пути (`futi --tag x docker build`) не поддерживаются.
->
-> Значение `string`/`int` может начинаться с одного `-` (`--n -5`,
-> `--msg -h`); значение, начинающееся с `--`, — только через `=`
-> (`--msg=--x`). Короткие флаги (`-v`, `-f` и т. п.) у обычных команд не
-> принимаются — параметры передаются как `--name`. `-v`/`-r` — только флаги
-> `list`; `--verbose`/`--recurse` у обычной команды — обычные параметры.
-> `-h`/`--help` после пути показывает справку по этому пути.
-
-### Шаблонизация
-
-futi использует Go `text/template`:
-
-| Синтаксис | Описание |
-|---|---|
-| `{{.name}}` | Подстановка значения параметра |
-| `{{quote .name}}` | Безопасная вставка значения как **одного** аргумента (экранирует кавычки/пробелы/метасимволы) |
-| `{{.args}}` | Все аргументы после `--` (строка, пробел-joined) |
-| `{{index .args_list 0}}` | N-й аргумент после `--` (доступ к массиву) |
-| `{{if .follow}}...{{end}}` | Условный блок (для bool) |
-| `{{.env.FOO}}` | Переменная окружения `FOO` (error если не задана) |
-| `{{if index .env "FOO"}}...{{end}}` | Условный блок по наличию env var |
-
-Аргументы после `--` передаются в шаблон:
+### Передача входов
 
 ```bash
-futi echo_mod echo -- hello world
-# → cmd: "echo {{.args}}" → echo hello world
-
-futi echo_mod echo -- hello world
-# → cmd: "echo {{index .args_list 0}}" → echo hello
+futi docker build --tag myapp --file Dockerfile.dev ./ctx
+futi docker build ./ctx -t myapp           # args и флаги в любом порядке
+futi docker logs --follow web
+futi docker logs web --follow=false
+futi k8s logs -- -weird-pod-name           # после "--" всё — args
 ```
 
-Команда по умолчанию (на уровне модуля) вызывается без явной команды:
+Командная строка: `futi [--dry-run] <путь…> [args и флаги…]`. Токены после пути читаются слева направо:
 
-```bash
-futi echo_mod -- hello world
-# → module.cmd: "echo {{.args}}" → echo hello world
-```
+- `--name value`, `--name=value` — флаг со значением `string`/`int`; `-s value` — его короткая форма (задаётся полем `short`). Короткие флаги не склеиваются (`-fi` — ошибка с подсказкой `-f -i`) и не принимают `=` (`-f=x` — ошибка)
+- `--bool-flag` — `bool`-флаг равен `true`; `--bool-flag=false` — явное значение (`true/false/1/0/yes/no/on/off`). Голый bool-флаг следующее слово никогда не съедает: `--force false` — ошибка (`bool flag --force takes no separate value; use --force=false`); чтобы передать arg `false`, поставьте его после `--`
+- значение не-bool флага — следующий токен, **если он не флаг этой команды и не `--`**: `--tail -5` и `-m -x` дают значения `-5` и `-x` (если `-x` не флаг команды), а `--message --amend` при объявленном `--amend` — ошибка: `flag --message requires a value (got --amend; use --message=--amend)`. Нет значения — `flag --message requires a value`
+- `-5` и `-3.2` (минус и число) — никогда не флаги: это обычные значения
+- любой другой токен на `-` — неизвестный флаг: `unknown flag --x for "futi k8s logs"` (с подсказкой похожего имени)
+- всё остальное — arg: args заполняются по порядку объявления
+- `--` делает все следующие токены args (флаги и `-h` не распознаются). futi поглощает **не больше одного** `--`; следующие — обычные значения
+- `-h` / `--help` до `--` и вне позиции значения флага показывает справку команды
+- повтор не-variadic флага: побеждает последний; `variadic`-флаг копит значения по порядку
+- пустое значение `""` — это значение: для необязательного string-arg или флага это пустой аргумент; для `required` и `int` — ошибка (`empty value for --tag`)
 
-> **Примечание:** разделитель `--` для args может быть заменён гибридным режимом в будущих версиях (позиционные args для листовых команд без явного `--`).
+После разбора всей строки: применяются defaults, пропущенный обязательный вход — ошибка (`missing argument <pod>`, `missing required flag --tag`), `int` должен быть целым, лишнее слово — `unexpected argument "extra" (futi k8s logs takes 1 argument: <pod>)` (с подсказкой `--x=…`, если предыдущий токен — bool-флаг).
 
-Bool-параметры принимают `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off` (без учёта регистра и пробелов по краям): falsy-значения приводятся к пустой строке, truthy — к `true`. Любое другое значение, включая пустое (`--flag=`), — ошибка. Не переданный bool без `default` — false.
+`--dry-run`, `-h/--help` и `--version` самого futi распознаются только **до** пути. После пути все флаги принадлежат команде: `futi k8s logs x --dry-run` завершится ошибкой `unknown flag --dry-run`, если у команды нет такого флага.
 
-### Валидация параметров
+#### Подкоманда или arg
 
-- `required: true` и параметр не передан → ошибка; пустое значение string/int (`--tag=`) тоже ошибка (для bool явный `false` допустим)
-- `required: true` вместе с непустым `default` → ошибка схемы (`futi modules validate <ns>`)
-- `default` int-параметра должен быть целым числом, `default` bool — одним из значений выше, иначе ошибка схемы
-- `default` применяется, если параметр не передан
-- Неизвестный параметр (нет в схеме) → ошибка
-- `positional.min` и аргументов после `--` меньше минимума → ошибка
+Если у узла есть и подкоманды, и args, первое слово после пути, совпавшее с именем подкоманды, — это **подкоманда**. Чтобы передать такое значение как arg, поставьте его после `--`: `futi db migrate -- up`. Подкоманда распознаётся только сразу после пути: если первым идёт флаг, `--` или другое слово, всё дальнейшее — входы узла (`futi db migrate --verbose up`: `up` — arg команды `migrate`). Поэтому добавление подкоманды может изменить смысл строки вроде `futi echo build` (раньше это было значение, теперь подкоманда); об узле с подкомандами и string-arg предупреждают `futi modules validate`, справка узла и `futi modules update`.
 
-Пример `positional`:
+Модуль с командой по умолчанию `cmd` и командами `logs`, `ctx` по-прежнему может служить шорткатом: `futi k logs pod` запускает команду, `futi k get pods` — `kubectl get pods` из команды по умолчанию.
+
+#### Variadic
 
 ```yaml
 commands:
-  greet:
-    cmd: "echo {{index .args_list 0}}"
-    positional:
-      min: 1       # требует минимум 1 позиционный аргумент после --
+  copy:
+    args:
+      - name: src
+        variadic: true
+        required: true
+      - name: dst
+        required: true
+    cmd: "cp -- {{.src}} {{.dst}}"
 ```
 
-### Важно: пробелы и кавычки в значениях
+`futi files copy a.txt b.txt dir/` — `src` берёт столько слов, сколько остаётся после резервирования хвостовых обязательных (`a.txt b.txt`), `dst` — `dir/`. Variadic-флаг повторяется: `--env A=1 --env B=2`.
 
-Если значение параметра содержит пробелы, используйте `{{quote}}`:
+#### Rest: оставшиеся токены
+
+Arg с `rest` передаёт оставшиеся токены обёрнутой утилите **дословно**, включая флаги и `-h`:
 
 ```yaml
-cmd: "echo {{quote .msg}}"   # --msg "hello world" → один аргумент: hello world
+commands:
+  run:
+    args:
+      - name: image
+        required: true
+      - name: docker_args
+        rest: true
+    flags:
+      - name: rm
+        type: bool
+    cmd: "docker run {{if .rm}}--rm{{end}} {{.image}} {{.docker_args}}"
 ```
-
-`{{quote}}` экранирует значение так, что оно становится ровно **одним**
-аргументом команды, даже если содержит пробелы, кавычки или метасимволы.
-
-Паттерн с ручными кавычками (`cmd: "echo \"{{.msg}}\""`) тоже работает,
-но небезопасен: значение проходит повторный разбор `shlex`, поэтому
-пользователь может «пробить» кавычки и добавить произвольные флаги:
 
 ```bash
-futi mod --msg 'x" --force "y'
-# cmd: "echo \"{{.msg}}\""  → echo "x" --force "y"  → --force стал отдельным аргументом!
-# cmd: "echo {{quote .msg}}" → echo 'x" --force "y' → --force остался частью значения
+futi docker run nginx -it --rm -p 80:80    # docker run nginx -it --rm -p 80:80
+futi docker run --rm nginx -it             # --rm — флаг самого "run"; утилита получает: nginx -it
+futi docker run nginx -- -it               # то же, что: futi docker run nginx -it
 ```
 
-Для значений в опасных позициях (`git commit -m`, `docker run`, любые
-`--flag {{.param}}`) всегда используйте `{{quote}}`.
+Rest начинается сразу после токена, заполнившего последний arg перед ним (а если `rest` — единственный arg, то на первом токене, который не флаг, или после `--`). Флаги команды ставятся **до** него. `--` поглощается, только если это самый первый токен rest и до него `--` не поглощался; любой следующий `--` — значение: `futi docker run nginx -- -it` даёт `-it`, `futi docker run nginx -it -- x` даёт `-it -- x`, а `futi docker run -- nginx -- -it` — `nginx -- -it`. До старта rest неизвестный флаг — ошибка, после — часть rest: поэтому добавление флага к команде никогда не меняет смысл строки, которая была валидной. Rest на ведущий `-` не проверяется.
+
+### Шаблонизация
+
+`cmd` — шаблон в синтаксисе Go `text/template`, но разбирает и вычисляет его сам futi (см. [`cmd` и `text/template`](#cmd-и-texttemplate)). Результат — список argv: команда запускается без shell.
+
+| Синтаксис | Описание |
+|---|---|
+| `{{.name}}` | Значение arg или flag |
+| `{{.env.FOO}}` | Переменная окружения `FOO` (ошибка исполнения, если не задана) |
+| `{{.module_root}}`, `{{.module_name}}` | Каталог и имя модуля |
+| `{{if .follow}}…{{else if .x}}…{{else}}…{{end}}` | Условный блок |
+| `{{range .files}}…{{.}}…{{end}}` | Повтор для каждого значения `variadic`-входа |
+
+Условие `if` — это `.x`, `.env.X` или `eq A B`, `and`, `or`, `not` над ними и строковыми/числовыми литералами (`{{if and .a (not .b)}}`, `{{if eq .mode "fast"}}`). `eq` сравнивает строковые формы (`int` — по десятичной записи); незаданный вход в `eq` — false; variadic/rest в `eq` — ошибка загрузки.
+
+**Две формы `cmd`:**
+
+- **Строка** — пробельные символы (пробел, табуляция, перевод строки) вне кавычек разделяют аргументы; многострочный `>-`/`|` безопасен и не даёт пустых аргументов. Кавычки `'…'`/`"…"` в литеральном тексте только группируют (без `$`, без экранирования, кроме `\"` и `\\` внутри `"…"`); `{{…}}` внутри кавычек — часть того же аргумента.
+- **Список** — каждый элемент — ровно один аргумент; пробелы буквальные, кавычки не интерпретируются. Пустой элемент `""` — пустой аргумент, а элемент `'""'` — литерал из двух символов кавычек (не пустой аргумент).
+
+```yaml
+cmd: "docker build -t {{.tag}} ."
+cmd: [docker, build, -t, "{{.tag}}", .]
+```
+
+**Значение никогда не режется и не разбирается заново.** Скалярное значение вставляется в свой аргумент как есть: пробелы, кавычки и метасимволы — данные. `--msg "hello world"` при `cmd: "echo {{.msg}}"` даёт один аргумент `hello world`. Функции `quote` и ручного квотирования нет.
+
+**Незаданные входы.** Вход без значения и без `default` — *незаданный*:
+
+- аргумент, который упоминает незаданный вход вне `if`, выпадает целиком (`--tail={{.tail}}` исчезает, если `tail` не передан);
+- аргумент, упоминающий **два и больше** входов вне `if`, из которых хоть один может быть не задан, — ошибка загрузки: иначе вместе с ним молча пропало бы значение другого входа (`{{.user}}@{{.host}}` с необязательным `user`; пишите `{{if .user}}{{.user}}@{{end}}{{.host}}`);
+- аргумент, ставший пустым только из-за пустого `if`, выпадает; ставший пустым из-за значения `""` — остаётся;
+- переменная окружения с пустым значением в отдельном аргументе (`"{{.env.FOO}}"`) не даёт аргумента, как незаданный вход; для проверки используйте `{{if .env.FOO}}`.
+
+**Variadic и rest.** Аргумент, состоящий только из variadic-входа (`{{.src}}`), превращается в N аргументов (в ноль — для пустого списка). Variadic в склейке (`--env={{.env_var}}`) — ошибка загрузки: используйте `range`.
+
+```yaml
+cmd: "docker run {{range .env_var}}-e {{.}} {{end}}{{.image}}"    # -e A=1 -e B=2 nginx
+```
+
+`range` работает только по variadic-входу, без `$i, $v` и без `{{else}}`; его тело может давать любое число аргументов. `rest` допустим только целым аргументом, не в `range` и не в склейке. `cmd`, который вычисляется в пустой список, завершается ошибкой `command rendered to empty argv`.
+
+**Висящий флаг** — ошибка загрузки: литерал вроде `--tail`, за которым стоит аргумент, способный выпасть (необязательный вход без default), съел бы следующее слово. Пишите `{{if .tail}}--tail {{.tail}}{{end}}` или `--tail={{.tail}}`. Для variadic/rest эта проверка не действует.
+
+#### `cmd` и `text/template`
+
+Синтаксис — от шаблонов Go, но futi разрешает лишь его часть и отличается в двух местах:
+
+1. **В строковой форме пробел в литеральном тексте — граница аргумента**, а значение никогда не режется: `echo {{.msg}}` — всегда ровно два аргумента, что бы ни лежало в `msg`. При связке `text/template` + разбор по пробелам значение с пробелами распалось бы на несколько слов.
+2. **`if` по не-bool входу проверяет «значение задано»**, а не «не ноль»: `--tail=0` считается заданным (в Go `0` и `""` — false). Для `bool` это истинность значения; variadic истинен, когда список непуст; `.env.X` истинна, если переменная задана и не пуста (в условии незаданная переменная — false, не ошибка).
+
+Всё остальное — ошибка загрузки с подсказкой: `with`, `$var`, `:=`, конвейеры `|`, вызовы функций (`printf`, `quote`, `index`, `len`, `html`, `js`, `call`, …), `define`/`template`/`block`, trim-маркеры `{{-` / `-}}` и комментарии внутри аргумента. Комментарий `{{/* … */}}` допустим только между пробельными символами или у края всего шаблона; у края тела `if`/`range` он отвергается.
+
+### Значения с ведущим `-`
+
+Аргумент, **первый символ которого получен из значения пользователя** (arg или flag, включая элементы `range`), не может начинаться с `-`: обёрнутая утилита прочла бы его как опцию. Это касается и склеек (`{{.user}}@{{.host}}`), и значений `int` (`-5`). Ошибка:
+
+```
+value "-rf" for <src> starts with "-" and would be read as an option by cp; use --opt={{.src}}, put a literal -- before it, or set allow_dash
+```
+
+(для `git` подсказка упоминает ещё `--end-of-options`). Значения `env`, `module_root` и `module_name` не проверяются. Способы обойти:
+
+- поставить значение после опции через `=`: `--file={{.file}}` — аргумент начинается с литерала автора;
+- поставить в `cmd` литерал `--` перед значением: `cp -- {{.src}} {{.dst}}`. Это снимает проверку со всех аргументов после него, **только если каждый из них состоит ровно из одной ссылки на вход** (включая тела `if` и `range`), без литеральных символов. Иначе проверка остаётся: `kubectl exec {{.pod}} -- ls {{.path}}` (литерал `ls`), `rsync -- {{.src}} {{.host}}:{{.dst}}` (литерал `:`) и `ssh {{.host}} -- tail {{.file}}` проверяются по-прежнему. Решение принимается по шаблону, а не по реальным значениям;
+- `allow_dash: true` на входе снимает проверку для всех его вхождений (для рецепта с shell ниже).
+
+`rest` не проверяется никогда. Та же проверка действует для CLI и для других фронтендов (MCP/REST), а в JSON Schema превращается в `"not": {"pattern": "^-"}` для строк и `"minimum": 0` для int.
 
 ### Переменные окружения в шаблонах
 
-Доступ к переменным окружения через `{{.env.FOO}}` — полезно для секретов (токены, API keys), которые небезопасно передавать через `--param` (видны в `ps`):
+Доступ к переменным окружения через `{{.env.FOO}}` — полезно для секретов (токены, API keys), которые небезопасно передавать флагами (видны в `ps`):
 
 ```yaml
 commands:
   deploy:
-    params:
+    args:
       - name: target
-        type: string
         required: true
-    cmd: "deploy --token {{.env.DEPLOY_TOKEN}} --env {{quote .target}}"
+    cmd: "deploy --token {{.env.DEPLOY_TOKEN}} --env {{.target}}"
 ```
 
 ```bash
 export DEPLOY_TOKEN=secret123
-futi deploy --target staging
+futi deploy staging
 # → deploy --token secret123 --env staging
 ```
 
-Обращение к несуществующей переменной вызывает ошибку (fail-fast). Для опциональной проверки используйте `index`:
+Обращение к несуществующей переменной — ошибка исполнения (fail-fast). Для необязательной переменной используйте условие, где незаданная переменная — просто false:
 
 ```yaml
-cmd: "deploy {{if index .env \"VERBOSE\"}}-v{{end}}"
+cmd: "deploy {{if .env.VERBOSE}}-v{{end}}"
 ```
+
+### Команда, которой нужен shell
+
+futi сам никогда не запускает `sh -c`. Если вам действительно нужны пайпы или циклы, пишите shell явно и передавайте пользовательский ввод позиционными параметрами скрипта (`$1`, `$2`), а не внутри текста скрипта:
+
+```yaml
+commands:
+  upper:
+    args:
+      - name: text
+        required: true
+        allow_dash: true         # значение идёт в "$1", sh не читает его как опцию
+    cmd: [sh, -c, 'printf "%s\n" "$1" | tr a-z A-Z', sh, "{{.text}}"]
+```
+
+`allow_dash` нужен, потому что элемент `"{{.text}}"` — это целое значение, и `-n` иначе был бы отвергнут. `sh` не читает `$1` как опцию (всё после скрипта он берёт как параметры), но команда внутри скрипта может: поэтому в скрипте `printf "%s\n" "$1"`, а не `echo "$1"` (`echo` принял бы `-n` или `-e` за свою опцию). Внутри скрипта всегда квотируйте `"$1"` и используйте `--` или `printf` там, где вызываемая программа это поддерживает.
 
 ---
 
@@ -506,7 +573,7 @@ cmd: "deploy {{if index .env \"VERBOSE\"}}-v{{end}}"
 
 Модуль может содержать собственные скрипты. futi не задаёт `WorkDir` для
 команды — она исполняется в cwd вызова (`./photo.jpg` разрешается оттуда).
-Ссылайтесь на файлы модуля явно через шаблон `{{quote .module_root}}`:
+Ссылайтесь на файлы модуля явно через шаблон `{{.module_root}}`:
 
 ```
 ~/.config/futi/modules/mytool/
@@ -520,23 +587,22 @@ cmd: "deploy {{if index .env \"VERBOSE\"}}-v{{end}}"
 name: mytool
 commands:
   deploy:
-    params:
+    args:
       - name: target
-        type: string
         required: true
-    cmd: "{{quote .module_root}}/scripts/deploy.sh {{quote .target}}"
+    cmd: "{{.module_root}}/scripts/deploy.sh {{.target}}"
 ```
 
 ```bash
-futi mytool deploy --target staging
+futi mytool deploy staging
 # выполнит ~/.config/futi/modules/mytool/scripts/deploy.sh staging
 ```
 
 Скрипты вызываются с `WorkDir` = cwd вызова futi. Первый токен cmd
 подчиняется обычной Unix-семантике: относительный путь резолвится от cwd,
 bare-имя — через `PATH`. Свои скрипты пакета — явно через
-`{{quote .module_root}}/scripts/...` (кавычки экранируют пробелы в пути,
-если модуль лежит в каталоге с пробелами).
+`{{.module_root}}/scripts/...` (значение никогда не режется, поэтому модуль
+в каталоге с пробелами работает без кавычек).
 
 ### `{{.module_root}}` и `{{.module_name}}`
 
@@ -544,7 +610,7 @@ bare-имя — через `PATH`. Свои скрипты пакета — яв
 используются для обращения к файлам модуля из cmd и хуков:
 
 ```yaml
-cmd: "{{quote .module_root}}/scripts/{{.name}}.sh"
+cmd: "{{.module_root}}/scripts/{{.name}}.sh"   # .name — вход команды
 ```
 
 ```yaml
@@ -555,7 +621,10 @@ cmd: "{{quote .module_root}}/scripts/{{.name}}.sh"
 # └── .venv/            # python3 -m venv .venv && .venv/bin/pip install qrcode
 commands:
   make:
-    cmd: "{{quote .module_root}}/.venv/bin/python {{quote .module_root}}/scripts/make.py --text {{quote .text}}"
+    args:
+      - name: text
+        required: true
+    cmd: "{{.module_root}}/.venv/bin/python {{.module_root}}/scripts/make.py --text={{.text}}"
 ```
 
 Переменные прокинуты также как `FUTI_MODULE_ROOT` и `FUTI_MODULE_NAME` в
@@ -574,8 +643,8 @@ missingkey-ошибку (`fail-fast`, как `{{.env.X}}` при отсутст�
 
 ### Cwd вызова и пути пользователя
 
-Относительные пути, переданные пользователем (`--out result.png`, файлы
-после `--`), резолвятся ОС от cwd вызова `futi` — естественная Unix-семантика.
+Относительные пути, переданные пользователем (`--out result.png`, файловые
+args), резолвятся ОС от cwd вызова `futi` — естественная Unix-семантика.
 Скрипту, которому нужен cwd, достаточно `getcwd()` (он = cwd вызова futi):
 
 ```python
@@ -587,8 +656,8 @@ out = os.path.join(os.getcwd(), "result.png")
 > `WorkDir` = корень модуля и передавал `FUTI_CWD` в env. Это поведение
 > удалено. Правки модулей:
 >
-> - `cmd: "./scripts/x.sh ..."` → `cmd: "{{quote .module_root}}/scripts/x.sh ..."`
-> - `cmd: ".venv/bin/python scripts/x.py ..."` → `cmd: "{{quote .module_root}}/.venv/bin/python {{quote .module_root}}/scripts/x.py ..."`
+> - `cmd: "./scripts/x.sh ..."` → `cmd: "{{.module_root}}/scripts/x.sh ..."`
+> - `cmd: ".venv/bin/python scripts/x.py ..."` → `cmd: "{{.module_root}}/.venv/bin/python {{.module_root}}/scripts/x.py ..."`
 > - `base = os.environ.get("FUTI_CWD") or os.getcwd()` → `base = os.getcwd()`
 >   (cwd вызова futi = cwd скрипта, `getcwd()` достаточно)
 > - `os.environ["FUTI_CWD"]` для путей модуля → `os.environ["FUTI_MODULE_ROOT"]`
@@ -598,16 +667,16 @@ out = os.path.join(os.getcwd(), "result.png")
 ## Команды CLI
 
 ```bash
-futi <namespace...> <command> [--param val] [-- args]   # вызов команды модуля
-futi <namespace...> [<command>] -h          # справка по пути (модуль, ветка или команда)
+futi <namespace...> <command> [args и --flags]   # вызов команды модуля
+futi <path...> -h                           # справка по пути (namespace, модуль, ветка или команда)
 futi <namespace>                            # команда по умолчанию (если есть cmd на уровне модуля)
 futi --dry-run <path...> <command>          # показать команду, не исполняя
+futi help <path...>                         # справка по пути
 futi list                                   # модули и namespaces в корне
-futi <namespace...> list                    # содержимое namespace или команды модуля
-futi <namespace...> list -v                 # то же, с колонкой PATH
-futi <namespace...> list -r                 # рекурсивный обход поддерева
+futi list <path...>                         # содержимое namespace или команды модуля
+futi list <path...> -v                      # то же, с колонкой PATH
+futi list <path...> -r                      # рекурсивный обход поддерева
 futi modules validate <namespace>           # валидация схемы модуля
-futi <namespace...> help                    # справка по модулю/команде
 futi modules init <name> [flags]            # создать модуль с шаблоном
 futi modules install <source> [flags]       # установить модуль из source (local/git/archive)
 futi modules uninstall <name> [flags]       # detach + удаление (с подтверждением)
@@ -628,23 +697,27 @@ futi --version                              # вывести версию
 
 Удалить единственную команду модуля без `cmd` нельзя — получился бы пустой модуль; `futi modules remove_command` откажет и оставит манифест без изменений.
 
-Парсинг: путь — слова до первого флага (токена с `-`); последнее слово пути — команда, всё до него — namespace (сегменты через `.`); затем флаги, затем `--`. Аргументы после `--` передаются в шаблон команды как `{{.args}}` (строка) и `{{.args_list}}` (массив). Сегменты пути можно писать через точку: `futi docker.build` = `futi docker build` (если есть модуль `docker.build`, побеждает он — сначала пробуется длиннейший namespace).
+Парсинг: путь читается по словам по объединённому дереву всех источников — namespace-каталоги, модули и их команды. Слово продолжает путь, только если точно совпадает с именем ребёнка текущего узла; путь заканчивается на первом токене, начинающемся с `-` (длиннее одного символа), на `--`, на слове, которое не ребёнок, или в конце. Слово с точками делится на сегменты и продолжает путь, только если совпали все: `futi docker.build` = `futi docker build`, а `file.txt` после узла с ребёнком `file` — не слово пути. После пути идут входы команды: args и флаги в любом порядке, а `--` делает остальное обычными args (см. [Входы и шаблонизация](#входы-и-шаблонизация)). Флаги родительского узла подкомандами не наследуются.
 
-**Зарезервированные имена**: `list`, `cache`, `modules`, `completion`, `__complete` (перехватываются CLI до резолва модулей) нельзя использовать ни в одном сегменте пути модуля — ни в namespace, ни в имени. Проверка выполняется при `futi modules init` и `futi modules install` (для `--namespace` и итогового имени); уже установленные модули не затрагиваются. Команда модуля с именем `list` — ошибка схемы (см. раздел ошибок валидации). `help` — исключение: если в модуле определена своя команда `help`, вызывается она.
+Если у итогового узла нет `cmd`, вызов завершается ошибкой: `unknown command "x" for "futi docker" (available: build, run)`, если дальше есть слово, иначе `"futi db" requires a subcommand (available: migrate)`. Если имя подкоманды встречается дальше в строке (`futi db --verbose migrate up`), добавляется подсказка ` (put the full command path before flags)`.
 
-```bash
-futi docker build --tag myapp        # namespace=docker, command=build
-futi dev deploy staging              # namespace=dev.deploy, command=staging
-futi k8s logs --follow -- mypod      # namespace=k8s, command=logs, follow=true, args="mypod"
-futi echo_mod echo -- hello world    # namespace=echo_mod, command=echo, args="hello world"
-futi echo_mod -- hello world         # default cmd модуля echo_mod, args="hello world"
+**Коллизия путей**: путь, который называет две сущности сразу, — ошибка, например модуль `dev/deploy.yaml` (`dev deploy`) и команда `deploy` модуля `dev.yaml`: `path "dev deploy" is ambiguous: command "deploy" of module dev (<manifest>) and module dev.deploy (<manifest>)`. Проверяется по всем источникам вместе при резолве пути. Локальный модуль, перекрывающий одноимённый глобальный, — не коллизия.
+
+**Зарезервированные имена**: `help`, `list`, `cache`, `modules`, `completion`, `__complete` — встроенные команды только первым словом, поэтому не могут быть именами модулей и namespace верхнего уровня. Глубже в пути это обычные имена: `futi git help` и `futi git list` вызывают команды `help` и `list` модуля `git`, а `tools/help.yaml` — допустимый модуль. Проверка выполняется при `futi modules init` и `futi modules install` (для `--namespace` и, без namespace, для итогового имени); уже установленные модули не затрагиваются.
+
+futi docker build --tag myapp        # модуль docker, команда build
+futi dev deploy staging              # модуль dev.deploy, команда staging
+futi k8s logs mypod --follow         # модуль k8s, команда logs, pod=mypod, follow=true
+futi echo_mod hello world            # cmd по умолчанию модуля echo_mod, words=[hello, world]
+futi echo_mod -- upper               # "--": "upper" — слово, а не подкоманда
+```
 ```
 
 **Stdin, сигналы и код выхода.** Команда модуля наследует stdin futi: пайпы (`echo data | futi m c`) и интерактивные утилиты (`ssh`, `psql`, `docker exec -it`) работают. Ctrl+C (SIGINT) и Ctrl+\ (SIGQUIT) терминал доставляет сразу команде — когда futi запущен на переднем плане терминала, он ждёт её завершения и ничего не делает сам. Без терминала или не на переднем плане (CI, фон, нет управляющего терминала) SIGINT/SIGQUIT, присланные futi (`kill -INT <pid>`, IDE), пересылаются команде. SIGTERM и SIGHUP, полученные futi, пересылаются команде всегда. При сигнале всей группе процессов (`timeout`, `timeout -s INT`, systemd `KillMode=control-group`, `kill -TERM -<pgid>`) команда получит SIGTERM (а без терминала и SIGINT/SIGQUIT) дважды: напрямую и от futi. Если futi переслал команде SIGTERM, SIGHUP или SIGINT, после её завершения он завершается тем же сигналом, даже если команда перехватила сигнал и вышла с 0; после пересланного SIGQUIT код выхода — `128+3`. Код выхода futi для команды модуля равен коду команды; если команда убита сигналом N — `128+N` (например, 143 для SIGTERM); при гибели команды от SIGINT/SIGTERM/SIGHUP futi сам завершается тем же сигналом, поэтому шелл прерывает циклы по Ctrl+C. То же относится к `futi modules *`: если хук (`attach`/`detach`) убит прерывающим сигналом, futi завершается этим сигналом; прочие ошибки `modules`-команд дают код 1. SIGINT и SIGHUP, проигнорированные при запуске futi (`nohup`, фоновая команда шелла), остаются игнорируемыми и для команды (для SIGQUIT и SIGTERM рантайм Go ставит свой обработчик, наследования нет).
 
 ### Навигация через `list`
 
-`list` показывает содержимое текущего уровня иерархии:
+`futi list [<path...>]` показывает содержимое уровня иерархии (путь можно писать через пробел или точку: `futi list images converter` = `futi list images.converter`):
 
 ```bash
 $ futi list                          # корень: модули и namespaces
@@ -655,7 +728,7 @@ $ futi list                          # корень: модули и namespaces
 │ namespace │ images │                   │
 └───────────┴────────┴───────────────────┘
 
-$ futi images list                   # namespace: вложенные namespaces и модули
+$ futi list images                   # namespace: вложенные namespaces и модули
 ┌───────────┬───────────┬───────────────┐
 │   TYPE    │   NAME    │  DESCRIPTION  │
 ├───────────┼───────────┼───────────────┤
@@ -663,14 +736,14 @@ $ futi images list                   # namespace: вложенные namespaces 
 │ module    │ png       │ PNG utilities │
 └───────────┴───────────┴───────────────┘
 
-$ futi images converter list         # вложенный namespace
+$ futi list images converter         # вложенный namespace
 ┌────────┬────────┬──────────────────────┐
 │  TYPE  │  NAME  │     DESCRIPTION      │
 ├────────┼────────┼──────────────────────┤
 │ module │ to_png │ Convert images to PNG │
 └────────┴────────┴──────────────────────┘
 
-$ futi images png list               # модуль: команды
+$ futi list images png               # модуль: команды
 ┌─────────┬─────────────┐
 │ COMMAND │ DESCRIPTION │
 ├─────────┼─────────────┤
@@ -678,7 +751,7 @@ $ futi images png list               # модуль: команды
 │ resize  │             │
 └─────────┴─────────────┘
 
-$ futi docker list                   # модуль в корне: команды
+$ futi list docker                   # модуль в корне: команды
 ┌─────────┬─────────────┐
 │ COMMAND │ DESCRIPTION │
 ├─────────┼─────────────┤
@@ -690,7 +763,7 @@ $ futi docker list                   # модуль в корне: команд�
 Если у модуля есть команда по умолчанию (`cmd` на уровне модуля), она отображается первой с маркером `(default)`:
 
 ```bash
-$ futi echo_mod list                 # модуль с default cmd
+$ futi list echo_mod                 # модуль с default cmd
 ┌───────────┬─────────────┐
 │ COMMAND   │ DESCRIPTION │
 ├───────────┼─────────────┤
@@ -701,7 +774,7 @@ $ futi echo_mod list                 # модуль с default cmd
 
 То же касается subcommands: если команда имеет `cmd` + `commands`, `cmd` показывается как `(default)` (fallback при вызове без subcommand).
 
-Логика: если namespace резолвится как модуль — `list` показывает его команды. Если как namespace-директория — показывает непосредственных детей (вложенные namespaces и модули). `list` зарезервирован — команда с именем `list` (на любом уровне вложенности) в модуле — ошибка схемы.
+Логика: если namespace резолвится как модуль — `list` показывает его команды. Если как namespace-директория — показывает непосредственных детей (вложенные namespaces и модули). `list` — встроенная команда только первым словом: `futi docker list` вызывает команду `list` модуля `docker` (ошибка, если её нет).
 
 Флаг `-v`/`--verbose` добавляет колонку `PATH` — путь к манифесту модуля. Полезно при нескольких источниках модулей или отладке:
 
@@ -729,7 +802,7 @@ $ futi list -r
 │ module    │ images.png           │ PNG utilities        │
 └───────────┴──────────────────────┴──────────────────────┘
 
-$ futi images list -r                # от контекста images
+$ futi list images -r                # от контекста images
 ┌───────────┬──────────────────┬──────────────────────┐
 │   TYPE    │       NAME       │     DESCRIPTION      │
 ├───────────┼──────────────────┼──────────────────────┤
@@ -743,65 +816,64 @@ $ futi images list -r                # от контекста images
 
 ### Справка через `help`
 
-`help` — контекстная справка на любом уровне, без выхода в README:
+`futi help <path...>` — контекстная справка на любом уровне, без выхода в README; `-h`/`--help` после пути делает то же:
 
 ```bash
-futi demo help                 # справка по модулю
-futi demo build help           # справка по команде
-futi demo migrate help         # справка по ветке команд
+futi help demo                 # справка по модулю
+futi help demo build           # справка по команде (= futi demo build -h)
+futi help demo migrate         # справка по ветке команд
+futi help images               # namespace: его дети
 ```
 
-Модульная справка — описание, default cmd и список команд:
+Справка по модулю — описание, usage команды по умолчанию и список подкоманд:
 
 ```bash
-$ futi demo help
-demo — Demo module
-default: echo default
-commands:
+$ futi help demo
+Demo module
+
+usage: futi demo
+flags:
+  -h, --help
+subcommands:
   build    Build the project
   migrate  Database migrations
 ```
 
-Командная справка — USAGE с параметрами (тип, required, default, описание),
-позиционные требования и итоговый шаблон команды:
+Справка по команде показывает строку usage, args (с описанием, default и `(required)`), flags (тип, короткая форма, required, default) и, если у команды есть подкоманды, их список:
 
 ```bash
-$ futi demo build help
-demo build — Build the project
+$ futi help demo build
+Build the project
 
-USAGE
-  futi demo build [--tag value] [--file value] [--push] [-- args]
-
-PARAMETERS
-  --tag   (string, required)  Image tag
-  --file  (string, default: Dockerfile)  Dockerfile path
-  --push  (bool, default: false)
-
-CMD
-  docker build -t {{.tag}} -f {{.file}} .
+usage: futi demo build [flags] [context]
+  context  Build context directory (default ".")
+flags:
+  -t, --tag string   Image tag (required)
+      --file string  Dockerfile path (default "Dockerfile")
+      --push
+  -h, --help
 ```
 
-`help` подсказывается автодополнением на каждом уровне (модуль/команда/
-subcommand). Если в модуле определена собственная команда `help` — вызывается
-она, системная справка не перехватывает user-defined имена. Пользовательская `help` исполняется как обычная команда: получает флаги и `-- args`, её stderr и код выхода пробрасываются.
+`variadic`-вход показывается с `...` (`[words...]`), `rest`-arg — как `[docker_args...]` с пометкой `(passed verbatim)`. Если у узла есть подкоманды и string-arg, в справке добавляется `words up, down are subcommands; pass such a value after --`. Шаблон в справке не показывается; собранную команду смотрите через [`--dry-run`](#--dry-run).
+Завершающий `-h`/`--help` после пути игнорируется (`futi help demo -h` = `futi help demo`); `futi help --help` показывает справку самого futi, как `futi -h`. Каждое слово после `futi help` должно быть словом пути: `futi help docker build extra` — ошибка `unknown command "extra" for "futi docker build"`. `help` — встроенная команда только первым словом: `futi demo help` вызывает команду `help` модуля `demo` как обычную команду (флаги, `-- args`, её stderr и код выхода) и завершается ошибкой, если такой команды нет; `futi help demo help` показывает справку этой команды.
 
 ### `--dry-run`
 
 `--dry-run` — глобальный флаг: печатает итоговую команду модуля и ничего не исполняет.
 
-Для команды с шаблоном `cmd: "docker build -t {{quote .tag}} -f {{quote .file}} ."` (`file` по умолчанию `Dockerfile`):
+Для команды с шаблоном `cmd: "docker build -t {{.tag}} -f {{.file}} ."` (`file` по умолчанию `Dockerfile`):
 
 ```bash
 $ futi --dry-run docker build --tag 'my app'
 docker build -t 'my app' -f Dockerfile .
 ```
 
-Вывод — одна строка в stdout: argv команды после рендера шаблона и разбора shlex, токены с пробелами и спецсимволами в одинарных кавычках (строку можно вставить в shell). Вывод печатается в синтаксисе bash/zsh (не POSIX sh/dash): форма `$'…'` используется только для токенов с управляющими или непечатаемыми символами (ESC, `\r`, bidi и т. п.), чтобы чужой модуль не мог подделать отображаемую команду. Чтобы вставить такие токены обратно в shell, нужна UTF-8 локаль: `\u…` внутри `$'…'` зависит от локали. Ошибки (неизвестная команда, пропущенный обязательный параметр, ошибка шаблона) выводятся так же, как без `--dry-run`, с тем же кодом выхода.
+Вывод — одна строка в stdout: argv команды после вычисления шаблона, токены с пробелами и спецсимволами в одинарных кавычках (строку можно вставить в shell). Вывод печатается в синтаксисе bash/zsh (не POSIX sh/dash): форма `$'…'` используется только для токенов с управляющими или непечатаемыми символами (ESC, `\r`, bidi и т. п.), чтобы чужой модуль не мог подделать отображаемую команду. Чтобы вставить такие токены обратно в shell, нужна UTF-8 локаль: `\u…` внутри `$'…'` зависит от локали. Ошибки (неизвестная команда, пропущенный обязательный вход, ошибка шаблона) выводятся так же, как без `--dry-run`, с тем же кодом выхода.
 
-- Флаг распознаётся только первым аргументом `futi`; после пути `--dry-run` — обычный флаг модуля, а не зарезервированное имя параметра.
+- Флаг распознаётся только первым аргументом `futi`; после пути `--dry-run` — обычный флаг модуля, а не зарезервированное имя.
 - Хуки (`attach`/`detach`) не исполняются и не показываются: печатается только команда.
-- `-h` / `--help` после пути работает как обычно (справка, код 0). Пользовательская команда `help` модуля показывается как любая другая.
-- `list`, `help` (системная справка), `modules`, `cache`, `completion`, `--version` и `-h` без пути не команды модулей: с `--dry-run` они завершаются ошибкой `--dry-run applies only to module commands` (код 1).
+- `-h` / `--help` после пути работает как обычно (справка, код 0). Команда модуля с именем `help` (`futi --dry-run demo help`) показывается как любая другая.
+- `list`, `help`, `modules`, `cache`, `completion`, `--version` и `-h` без пути не команды модулей: с `--dry-run` они завершаются ошибкой `--dry-run applies only to module commands` (код 1).
 - **Секреты:** шаблон подставляет значения `{{.env.X}}` — они попадут в вывод. Не публикуйте результат `--dry-run` для команд с токенами и паролями в окружении.
 
 ---
@@ -819,10 +891,13 @@ OK
 
 ```bash
 $ futi modules validate bad
-ERROR: command "build": param "tag" has invalid type "float" (valid: string, bool, int)
-ERROR: command "build": duplicate param "tag"
+ERROR: line 10: "positional" was replaced by "args"/"flags" (see README)
+ERROR: command "build": flag "tag": invalid type "float" (valid: string, int, bool)
+ERROR: command "build": flag "tag": duplicate name "tag"
+ERROR: command "build": cmd: 1:14: "-t" would be left without its value when "tag" is unset; use {{if .tag}}-t {{.tag}}{{end}} or -t={{.tag}}
 ERROR: command "empty": must have cmd or commands
-modules: validate: module "bad" has 3 error(s)
+ERROR: command "old": cmd: 1:8: {{.args}} was replaced by a rest arg (see README)
+modules: validate: module "bad" has 6 error(s)
 $ echo $?
 1
 ```
@@ -843,18 +918,21 @@ $ echo $?
 - неизвестный ключ манифеста (с номером строки; такие ошибки выводятся первыми)
 - модуль без `cmd` и без `commands`
 - команда без `cmd` и без `commands` (бесполезная команда); `cmd` из одних пробелов считается пустым
-- `params` или `positional.min` без `cmd` — на любом уровне (модуль, команда); параметры не наследуются подкомандами
-- синтаксическая ошибка шаблона в `cmd`, `attach`, `detach` (проверяется только разбор, имена переменных — нет)
+- `args` или `flags` без `cmd` — на любом уровне (модуль, команда); входы не наследуются подкомандами
+- ошибка схемы входа: `type` не из `{string, int, bool}`, `bool` с `required`/`variadic`/`allow_dash`, `required` вместе с любым `default` (даже пустым), `default` не того типа, дубликат имени среди args и flags узла, имя не по `[a-z][a-z0-9_]*`, зарезервированное имя (`help`, `env`, `module_root`, `module_name`), неверный `short` (не одна латинская буква, дубликат, `h`), `rest` не у последнего arg и недопустимая форма args (разрешены только `required… optional…`, `required… variadic required…` или `required… rest`)
+- ошибка шаблона в `cmd`, `attach`, `detach`: синтаксис, недопустимая конструкция (см. [`cmd` и `text/template`](#cmd-и-texttemplate)), ссылка на необъявленный вход, bool вне условия, variadic/rest в склейке без `range`, `range` по не-variadic входу; хуки могут ссылаться только на `env`, `module_root` и `module_name`
+- вход, который `cmd` нигде не упоминает (`input "port" is not used in cmd`)
+- висящий флаг: литерал `--tail`, за которым стоит аргумент, способный выпасть (`"--tail" would be left without its value when "tail" is unset; use {{if .tail}}--tail {{.tail}}{{end}} or --tail={{.tail}}`); для variadic/rest не проверяется
+- аргумент, упоминающий два и больше входов, из которых один может быть не задан (`{{.user}}@{{.host}}`)
 - недопустимое имя команды в `commands`: пустое, начинается с `-`, содержит `.`, пробельные или управляющие символы
-- команда с именем `list` (на любом уровне) — недостижима, `list` перехватывается как системный запрос
-- дубликаты имён `params` в команде
-- `type` параметра не из `{string, bool, int}` (пустой = `string`)
-- имя параметра зарезервировано (`args`, `args_list`, `env`, `module_name`, `module_root`) — иначе оно перекрылось бы служебной переменной шаблона
-- имя параметра не соответствует `^[A-Za-z_][A-Za-z0-9_-]*$` (в т.ч. пустое)
+- старый формат: ключи `params`/`positional` (`"params" was replaced by "args"/"flags" (see README)`), функция `quote` и `{{.args}}`/`{{.args_list}}` в шаблоне (каждый случай с подсказкой)
+- коллизия путей: один путь адресует две сущности объединённого дерева, например команда `deploy` модуля `dev.yaml` и модуль `dev/deploy.yaml` (`path "dev deploy" is ambiguous: …`). Проверяется по всем источникам; `futi list` печатает её строкой `Warning:` в stderr и всё равно показывает листинг
 
 **Предупреждения** (не блокируют, показываются только в `validate`):
 
 - команда с `commands`, но без `cmd` — вызов без subcommand падает в runtime
+- узел с подкомандами и string-arg (включая `variadic` и `rest`) — слово, равное имени подкоманды, принимается за подкоманду; такое значение передавайте после `--` (arg типа `int` предупреждения не вызывает). То же предупреждение выводят справка узла и `futi modules update`
+- хук с отдельным словом `&&`, `||`, `|`, `>`, `<` или `>>` — хуки исполняются без shell, поэтому оно передаётся программе аргументом; используйте `[sh, -c, "…"]`
 
 Валидация выполняется рекурсивно для всех вложенных `commands`. Порядок ошибок детерминирован: неизвестные ключи, затем `attach`/`detach` и пустой модуль, затем `(default)`, затем команды по алфавиту (родитель раньше вложенных). При обычном вызове (`futi <ns> <cmd>`) валидация запускается автоматически при загрузке модуля — `futi modules validate <ns>` нужен для просмотра **всех** ошибок за один проход и для warnings (которые в runtime не показываются).
 
@@ -954,12 +1032,18 @@ futi modules install ~/dev/qr --local
 
 ```yaml
 attach: ".venv/bin/python -m pip install -r requirements.txt"
-detach: "rm -rf .venv"
+detach: [rm, -rf, .venv]
 ```
 
-Хуки выполняются в каталоге модуля; `{{.module_name}}`/`FUTI_MODULE_NAME` — то же имя, что и в `cmd` (поле `name`, а без него — имя каталога/файла модуля), при install, update и uninstall; доступны `{{.module_name}}`, `{{.module_root}}`, `{{.env.FOO}}`, `{{quote ...}}` и переменные окружения FUTI_MODULE_NAME / FUTI_MODULE_ROOT. Хуки наследуют stdin futi и выполняются без таймаута: зависший хук прерывается Ctrl+C. Без управляющего терминала (CI, cron, ssh без tty) хук запускается в своей группе процессов: сигналы SIGINT, SIGQUIT, SIGTERM и SIGHUP, полученные futi, пересылаются всем процессам хука, включая порождённые составной командой (`sh -c`). При управляющем терминале хук остаётся в группе futi (интерактивные хуки работают) — в том числе когда futi запущен в фоне (`&`) или с перенаправленным вводом (`</dev/null`): перенаправление и фон изоляцию не включают; при адресном `kill -TERM <futi>` процессы, порождённые хуком, могут остаться. Изолированный хук (без управляющего терминала) не погибает от сигнала, посланного группе futi (`kill -9 -<pgid>`, `timeout -s KILL futi …`): его группа отдельная. Провал `attach` при install откатывает установку (модуль удаляется); при update — только предупреждение, новое дерево сохраняется. Провал `detach` при uninstall — предупреждение (или отказ с `--strict-detach`).
+Хук — шаблон в тех же двух формах, что и `cmd` (строка, разбираемая на слова, или список, где каждый элемент — один аргумент); он вычисляется в argv и исполняется без shell, поэтому `&&`, `|`, `>`, `;`, `$VAR` и glob не интерпретируются: они доходят до программы обычным текстом. `futi modules validate` предупреждает, если в хуке есть отдельное слово `&&`, `||`, `|`, `>`, `<` или `>>`. Составной хук пишется с явным shell:
 
-`attach` из скачанного манифеста — чужой код, поэтому install и update перед его запуском спрашивают подтверждение (в stderr, шаблон показывается как есть, без подстановки значений):
+```yaml
+attach: [sh, -c, "python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"]
+```
+
+Хуки выполняются в каталоге модуля; `{{.module_name}}`/`FUTI_MODULE_NAME` — то же имя, что и в `cmd` (поле `name`, а без него — имя каталога/файла модуля), при install, update и uninstall; доступны `{{.module_name}}`, `{{.module_root}}`, `{{.env.FOO}}` (входов и `quote` нет) и переменные окружения FUTI_MODULE_NAME / FUTI_MODULE_ROOT. Программа, записанная с путём (`scripts/x.sh`, `./x.sh`), ищется от каталога модуля, голое имя (`python3`) — через `PATH`. Хуки наследуют stdin futi и выполняются без таймаута: зависший хук прерывается Ctrl+C. Без управляющего терминала (CI, cron, ssh без tty) хук запускается в своей группе процессов: сигналы SIGINT, SIGQUIT, SIGTERM и SIGHUP, полученные futi, пересылаются всем процессам хука, включая порождённые составной командой (`[sh, -c, "…"]`). При управляющем терминале хук остаётся в группе futi (интерактивные хуки работают) — в том числе когда futi запущен в фоне (`&`) или с перенаправленным вводом (`</dev/null`): перенаправление и фон изоляцию не включают; при адресном `kill -TERM <futi>` процессы, порождённые хуком, могут остаться. Изолированный хук (без управляющего терминала) не погибает от сигнала, посланного группе futi (`kill -9 -<pgid>`, `timeout -s KILL futi …`): его группа отдельная. Провал `attach` при install откатывает установку (модуль удаляется); при update — только предупреждение, новое дерево сохраняется. Провал `detach` при uninstall — предупреждение (или отказ с `--strict-detach`).
+
+`attach` из скачанного манифеста — чужой код, поэтому install и update перед его запуском спрашивают подтверждение (в stderr, хук показывается как написан, без подстановки значений; список — как `[a, "b c"]`):
 
 ```
 Module qr runs an attach hook (in /home/user/.config/futi/modules/qr):
@@ -982,7 +1066,7 @@ futi modules path qr           # каталог модуля (для скрип�
 
 `modules list` и `update` без имени видят модули всех `sources` из `config.yaml` плюс глобальный каталог и `./.futi`; `uninstall`/`update`/`info` по имени находят модуль только через discovery (в `sources` и `./.futi`) — модуль глобального каталога вне `sources` нужно добавить в `sources` или удалить вручную. Модули показываются под тем именем, под которым их находит discovery, — с mountpoint: `dev.tools.qr`; симлинки на каталоги раскрываются (циклы отсекаются, один реальный каталог показывается один раз — предпочтительно под путём без симлинка); модуль, каталог которого сам симлинк, `update` без имени пропускает (`Warning: skipped <name>: module directory is a symlink`): замена дерева превратила бы симлинк в копию; симлинк-каталог namespace выше модуля этому не мешает. Невалидный `config.yaml` — ошибка команды. Установка (`install`, `init --global`) пишет только в глобальный каталог (`FUTI_MODULES_DIR` или `~/.config/futi/modules/`) или с `--local` — в `./.futi`; если при заданных `sources` глобального каталога среди них нет, install и `init --global` предупреждают `Warning: <dir> is not listed in config.yaml sources; …` (по имени модуль не будет найден, пока каталог не добавлен в `sources`), а если он смонтирован с префиксом — печатают `Module is available as <prefix>.<name>`.
 
-`update` сравнивает hash дерева источника с lockfile (в hash входят пути, содержимое файлов, бит исполнения и цели симлинков): без изменений — no-op (обновляется только `last_check`), локальные правки установленного модуля сохраняются. Если источник изменился, update сравнивает файлы на диске с новой версией: совпадают — переписывается только lockfile; иначе в stderr печатается список изменений (`D` — удалится, `M` — изменится, `A` — появится, в этом порядке; не больше 50 строк) и задаётся вопрос `Replace module files? [y/N]` — до вопроса про `attach`. Локальные правки при этом видны как `M`/`D` и после подтверждения теряются; при отказе модуль не меняется. Без терминала на stdin нужен `--yes` (`-y`) — в CI и скриптах укажите его. Каталоги `.venv`, `node_modules`, `.git`, `__pycache__` в hash и сравнение не входят и при замене дерева не сохраняются (старое дерево удаляется целиком, `attach` пересоздаёт их). Замена дерева атомарна, `installed_at` и `about` сохраняются. При сбое переноса или записи lockfile update восстанавливает старое дерево. Если от прерванного update остался `<module>.futi-backup`, update отказывает и просит разобрать backup вручную; `list` и `update` такой каталог модулем не считают (update без имени лишь предупреждает о нём в stderr). Флаги update: `--skip-attach`, `--yes` / `-y`.
+`update` сравнивает hash дерева источника с lockfile (в hash входят пути, содержимое файлов, бит исполнения и цели симлинков): без изменений — no-op (обновляется только `last_check`), локальные правки установленного модуля сохраняются. Если источник изменился, update сравнивает файлы на диске с новой версией: совпадают — переписывается только lockfile; иначе в stderr печатается список изменений (`D` — удалится, `M` — изменится, `A` — появится, в этом порядке; не больше 50 строк) и задаётся вопрос `Replace module files? [y/N]` — до вопроса про `attach`. Локальные правки при этом видны как `M`/`D` и после подтверждения теряются; при отказе модуль не меняется. Без терминала на stdin нужен `--yes` (`-y`) — в CI и скриптах укажите его. Каталоги `.venv`, `node_modules`, `.git`, `__pycache__` в hash и сравнение не входят и при замене дерева не сохраняются (старое дерево удаляется целиком, `attach` пересоздаёт их). Замена дерева атомарна, `installed_at` и `about` сохраняются. При сбое переноса или записи lockfile update восстанавливает старое дерево. Если от прерванного update остался `<module>.futi-backup`, update отказывает и просит разобрать backup вручную; `list` и `update` такой каталог модулем не считают (update без имени лишь предупреждает о нём в stderr). Если новая версия добавляет подкоманду к узлу со string-позиционным arg, update предупреждает в stderr (`Warning: module <name>: command "…": words … are subcommands; pass such a value after --`): слово, равное имени подкоманды, теперь будет принято за подкоманду. Флаги update: `--skip-attach`, `--yes` / `-y`.
 
 Удаление требует подтверждения (размер и число файлов); без sidecar (модуль создан вручную или через `modules init`) — только с `--force`. Флаги uninstall: `--yes`, `--force`, `--skip-detach`, `--strict-detach`.
 
@@ -1102,7 +1186,7 @@ cache:
 ## Автодополнение
 
 futi поддерживает автодополнение для **bash**, **zsh** и **fish**. Имена модулей,
-namespace'ов, команд, подкоманд и параметров (`--tag`, `--force`) — динамические,
+namespace'ов, команд, подкоманд и флагов (`--tag`, `--force`) — динамические,
 поэтому completion запрашивает подсказки у futi на лету через скрытую команду
 `futi __complete <args...>` (протокол, совместимый с cobra).
 
@@ -1123,35 +1207,25 @@ futi completion fish > ~/.config/fish/completions/futi.fish
 
 ### Что дополняется
 
-- **Модули и namespaces** — `futi <TAB>`, `futi dev <TAB>`
-- **Команды и subcommands** — `futi docker <TAB>`, `futi docker migrate <TAB>`
-- **Имена параметров** — `futi docker build --<TAB>` → `--tag`, `--force`
-- **Все параметры на команде** — `futi docker build <TAB>` сразу показывает все флаги с пометками: `--tag (required)`, `--force (default: false)` (метки видны в zsh, bash/fish отрезают)
-- **После значения флага** — `futi images qr make --out qr.png <TAB>` подсказывает оставшиеся флаги (`--text`, `--scale`); значение флага не ломает подсказки. Путь (namespace и команда) всегда идёт до первого флага, поэтому после флагов слова пути и `help` не предлагаются
-- **Пути в значениях флагов** — при вводе значения не-bool флага (`--out ~/<TAB>`, `--out=~/<TAB>`) shell предлагает файлы/директории; в будущем — только для параметров типа `path` (ROADMAP)
-- **Параметры default-команды** — модуль-однокоманда (`cmd` + `params`, без `commands`) подсказывает свои флаги: `futi meta <TAB>` → `--json`
-- **После bool-флага** — `futi docker build --force <TAB>` подсказывает оставшиеся (ещё не введённые) флаги (`--tag`); значения `true`/`false` не предлагаются: bool-флаг значения не берёт, `false` задаётся как `--force=false`
-- **Глобальные флаги** — `futi --<TAB>` → `--dry-run`, `--help`, `--version`; после ведущего `--dry-run` подсказки как для обычного вызова, но без builtins (`cache`, `completion`, `list`, `modules`): `futi --dry-run <TAB>` показывает только модули и namespaces, `futi --dry-run dev <TAB>` — как обычно
-- **Builtins** — `futi cache <TAB>` → `refresh`/`status`/`clear`; `futi completion <TAB>` → `bash`/`zsh`/`fish`
+- **Слова пути** — дети текущего узла в объединённом дереве: `futi <TAB>` (модули, namespaces, builtins), `futi dev <TAB>`, `futi docker <TAB>`, `futi docker migrate <TAB>`. Подкоманда подсказывается только сразу после пути: когда дальше идёт флаг или другое слово, остальное — входы узла
+- **Флаги** — только для слова, начинающегося с `-`: `futi k8s logs -<TAB>` → `--follow`, `-f`, `--tail`, `--help`; уже использованные флаги повторно не предлагаются (кроме variadic). Пометки `(required)` и `(default: …)` видны в zsh, bash/fish их отрезают
+- **Значения** — для значения не-bool флага (`futi docker build --tag <TAB>`, `--tag=<TAB>`) и для позиционного arg ничего не подсказывается: shell тоже не добавляет файлы (дополнение файлов запланировано для входов `path`/`dir`, см. ROADMAP). Bool-флаг значения не берёт, поэтому после него `true`/`false` не предлагаются
+- **Rest-arg** — после старта rest-arg (`futi docker run nginx <TAB>`) или когда он первый вход узла без подкоманд (`futi run <TAB>`), токены уходят утилите как есть, и shell дополняет файлы как обычно. Всё после `--` — данные: ни флаги, ни подкоманды не подсказываются
+- **`help` и `list`** — встроенные команды только первым словом; после них дополняется путь команды: `futi help do<TAB>` → `docker`, `futi list dev <TAB>`. Внутри пути `help` и `list` подсказываются, только если модуль определяет такие команды
+- **Глобальные флаги** — `futi --<TAB>` → `--dry-run`, `--help`, `--version`; после ведущего `--dry-run` подсказки как для обычного вызова, но без builtins (`cache`, `completion`, `list`, `modules`): `futi --dry-run <TAB>` показывает только модули и namespaces
+- **Builtins** — `futi cache <TAB>` → `refresh`/`status`/`clear`; `futi completion <TAB>` → `bash`/`zsh`/`fish`. На корне `cache`, `completion`, `list`, `modules` подсказываются как builtins даже при одноимённом модуле (CLI исполнит builtin)
 - **Валидация модуля** — `futi modules validate <TAB>` подсказывает полные имена модулей (`dev.deploy`), после первого аргумента подсказок нет
-- **Приоритет builtins** — на корне `cache`, `completion`, `list`, `modules` подсказываются как builtins даже при одноимённом модуле (CLI исполнит builtin); `futi cache <TAB>` не показывает команды такого модуля
-- **Подсказка `help`** — `help` предлагается на каждом уровне (модуль/команда/subcommand): `futi demo <TAB>`, `futi demo db <TAB>`, `futi demo greet <TAB>`. Если в модуле уже определена команда `help` (user-defined), она и предлагается — системная не дублируется.
-- **Подсказка `list`** — `list` предлагается там, где `futi <путь> list` работает: в namespace, модуле, ветке с subcommands и модуле-однокоманде (`futi dev <TAB>`, `futi docker <TAB>`, `futi docker migrate <TAB>`); на листовой команде не предлагается (там `list` — ошибка)
 - **Флаги `modules`** — `futi modules add_command <модуль> --<TAB>` → `--cmd`, `--desc`; аналогично для `init`, `install`, `uninstall`, `update`
 
-Значения строковых/числовых параметров (обычно user-supplied, например `--tag myapp`)
-не угадываются и не дополняются. После `--` (args команды) futi разрешает
-дополнение файлов.
+Модуль, который не удаётся загрузить, или путь, называющий две сущности (коллизия путей), не даёт подсказок и не печатает ошибок.
 
 zsh выводит описания команд/модулей рядом с подсказками.
 
 ### Кэш и completion
 
-`__complete` использует persistent кэш модулей (как обычный CLI), поэтому работает
-быстро — без обхода source на каждый TAB. Чтобы подсказки не были пустыми на
-холодном кэше (первый запуск) или устаревшими, `__complete` **самообновляет** кэш,
-если он никогда не обновлялся или обновлялся более часа назад. В остальных
-случаях берёт данные из кэша без Refresh.
+`__complete` использует persistent кэш модулей (как обычный CLI), поэтому не обходит источники на каждый TAB. Чтобы подсказки не были пустыми на холодном кэше (первый запуск) или устаревшими, `__complete` **самообновляет** кэш, если он никогда не обновлялся или обновлялся более часа назад.
+
+Запись кэша не принимается на веру: модули на набранном пути загружаются **с проверкой свежести** — futi считает хеш манифеста на диске и сверяет его с хешем, сохранённым в кэше (та же проверка, что и перед исполнением команды). Если файл изменился, он перечитывается, поэтому устаревший кэш не скрывает флаги и подкоманды, которые вы только что добавили в модуль. Подсказки для самого пути (дети namespace) по-прежнему берутся из кэша и листинга источников.
 
 ---
 
@@ -1177,24 +1251,21 @@ zsh выводит описания команд/модулей рядом с п
 
 ### Исполнение без shell
 
-Команды исполняются через `exec` с готовым argv — **без** оболочки.
-Метасимволы `;`, `$()`, `` ` `` из параметров не выполняются как shell-код
-(проходят как обычный текст в аргументах). Нужен shell — пишите его явно
-(`sh -c '...'`), передавая пользовательский ввод позиционным аргументом
-с `{{quote}}` (см. примеры).
+Команды исполняются через `exec` с готовым argv — **без** оболочки. Метасимволы `;`, `$()`, `` ` `` из входов не выполняются как shell-код (проходят как обычный текст в аргументах). Нужен shell — пишите его явно (`[sh, -c, '…', sh, "{{.x}}"]`), передавая пользовательский ввод позиционным параметром скрипта (`$1`), а не внутри текста скрипта (см. [Команда, которой нужен shell](#команда-которой-нужен-shell) и примеры).
 
-### `{{quote}}` для пользовательских значений
+### Batch-файлы в Windows
 
-Значения параметров проходят повторный разбор (shlex) при сборке argv.
-Вставка `{{.param}}` в кавычках (`"{{.msg}}"`) может быть «пробита» значением
-с кавычкой — оно выйдет за кавычки и станет отдельными аргументами
-(flag-инъекция). Для значений в опасных позициях используйте `{{quote .param}}` —
-гарантия ровно одного аргумента (см. [пробелы и кавычки](#важно-пробелы-и-кавычки-в-значениях)).
+В Windows, когда программа команды после поиска в `PATH` оказывается файлом `.bat` или `.cmd`, Go не умеет безопасно квотировать аргументы для `cmd.exe`. Поэтому futi отказывается запускать команду, если любой элемент argv, содержащий значение пользователя (arg, flag или `rest`), содержит `"`, `%`, `!`, `&`, `|`, `<`, `>`, `^` или перевод строки; ошибка называет вход, например `value for <x> contains "&", unsafe for batch file deploy.cmd`. Для команд, принимающих пользовательский ввод, предпочитайте `.exe`. `--dry-run` эту проверку пропускает.
+
+### Одно значение — один аргумент
+
+Значение arg или flag никогда не режется и не разбирается заново: оно вставляется в аргумент как есть, с пробелами, кавычками и метасимволами, поэтому не может добавить аргументы к команде. Ручного квотирования нет (функция `quote` удалена): значение — всегда ровно один аргумент.
+
+Значение, начинающееся с `-`, всё равно могло бы быть прочитано обёрнутой программой как опция, поэтому futi отвергает такое значение, если оно стало бы первым символом аргумента, — если только шаблон не защищён литералом `--` или у входа нет `allow_dash: true` (см. [Значения с ведущим `-`](#значения-с-ведущим--)). Для значений в опасных позициях (`git commit -m`, `docker run`, `rm`) используйте `--opt={{.x}}` или литерал `--`. Токены `rest`-arg передаются дословно и не проверяются: не отдавайте `rest` программе, которая трактует свои аргументы как опасную опцию, если только это не смысл команды.
 
 ### Секреты — через окружение
 
-Токены и ключи передавайте через `{{.env.NAME}}`, а не через `--param`:
-параметры видны в `ps` и истории shell, окружение процесса — нет.
+Токены и ключи передавайте через `{{.env.NAME}}`, а не через флаги: аргументы видны в `ps` и истории shell, окружение процесса — нет.
 
 ### Целостность кэша
 
@@ -1208,35 +1279,49 @@ Persistent кэш сверяет SHA-256 чексумму манифеста п�
 
 Готовые рабочие модули (`git`, `docker`, `files`, `backup`) лежат в каталоге [`examples/`](../examples/) — скопируйте их в каталог модулей или подключите через `sources`; посмотреть собранную команду без запуска можно через `futi --dry-run <путь> …`.
 
-### Echo-модуль (args + default cmd)
+### Echo module (args + default cmd)
 
 ```yaml
 # ~/.config/futi/modules/echo_mod.yaml
 name: echo_mod
 description: Echo utilities
-cmd: "echo {{.args}}"           # команда по умолчанию (без shell)
+cmd: "echo {{.words}}"           # команда по умолчанию (без shell)
+args:
+  - name: words
+    variadic: true
 commands:
   upper:
     description: Uppercase echo
-    # futi исполняет argv БЕЗ shell: pipes, $() и циклы не работают напрямую.
-    # Нужен shell — пишите его явно (sh -c). Пользовательский ввод передавайте
-    # позиционным аргументом sh ($1) с {{quote}}, чтобы кавычки в значении
-    # не ломали скрипт и не инжектили код.
-    cmd: "sh -c 'echo \"$1\" | tr a-z A-Z' sh {{quote .args}}"
+    # futi исполняет argv БЕЗ shell: пайпы, $() и циклы напрямую не работают.
+    # Нужен shell — пишите его явно (sh -c) и передавайте пользовательский ввод
+    # позиционным параметром sh ($1): значение никогда не становится частью скрипта.
+    args:
+      - name: text
+        required: true
+        allow_dash: true       # идёт в "$1": sh не читает его как опцию
+    cmd: [sh, -c, 'printf "%s\n" "$1" | tr a-z A-Z', sh, "{{.text}}"]
   repeat:
-    description: Repeat first arg N times
-    params:
+    description: Repeat the text N times
+    args:
+      - name: text
+        required: true
+        allow_dash: true
+    flags:
       - name: count
         type: int
+        short: n
         required: true
-    cmd: "sh -c 'for i in $(seq 1 {{.count}}); do echo \"$1\"; done' sh {{quote (index .args_list 0)}}"
+    cmd: [sh, -c, 'for i in $(seq 1 "$2"); do printf "%s\n" "$1"; done', sh, "{{.text}}", "{{.count}}"]
 ```
 
 ```bash
-futi echo_mod -- hello world         # echo hello world (default cmd)
-futi echo_mod upper -- hello world   # HELLO WORLD (через sh -c | tr)
-futi echo_mod repeat --count 3 -- hi # hi\nhi\nhi
+futi echo_mod hello world            # echo hello world (cmd по умолчанию)
+futi echo_mod upper "hello world"    # HELLO WORLD (через sh -c | tr)
+futi echo_mod repeat hi -n 3         # hi\nhi\nhi
+futi echo_mod -- upper               # напечатает "upper": после "--" это слово, а не подкоманда
 ```
+
+`futi modules validate echo_mod` здесь печатает предупреждение: команда по умолчанию принимает строковые слова, а `upper`/`repeat` — подкоманды, поэтому такое слово первым будет прочитано как подкоманда (справка узла показывает это тоже). То же предупреждение печатается для модуля со строковым позиционным arg, у которого есть дочерние модули (модуль `dev` с arg и `dev/deploy.yaml`): `futi dev deploy` уходит в дочерний модуль, а предупреждение перечисляет имена дочерних модулей.
 
 ### Git shortcuts
 
@@ -1250,28 +1335,29 @@ commands:
 
   fresh:
     description: Reset to remote branch
-    params:
+    args:
       - name: branch
-        type: string
         default: main
-    cmd: "sh -c 'git fetch origin && git reset --hard origin/\"$1\"' sh {{quote .branch}}"
+    cmd: [sh, -c, 'git fetch origin && git reset --hard "origin/$1"', sh, "{{.branch}}"]
 
   squash:
     description: Squash last N commits
-    params:
+    args:
       - name: count
-        type: string
+        type: int
         required: true
+    flags:
       - name: message
-        type: string
+        short: m
         required: true
-    cmd: "sh -c 'git reset --soft HEAD~\"$1\" && git commit -m \"$2\"' sh {{quote .count}} {{quote .message}}"
+        allow_dash: true
+    cmd: [sh, -c, 'git reset --soft "HEAD~$1" && git commit -m "$2"', sh, "{{.count}}", "{{.message}}"]
 ```
 
 ```bash
 futi git amend
-futi git fresh --branch develop
-futi git squash --count 3 --message "feature complete"
+futi git fresh develop
+futi git squash 3 --message "feature complete"
 ```
 
 ### Docker wrapper
@@ -1283,28 +1369,40 @@ description: Docker utilities
 commands:
   clean:
     description: Remove stopped containers and dangling images
-    cmd: "sh -c 'docker container prune -f && docker image prune -f'"
+    cmd: [sh, -c, "docker container prune -f && docker image prune -f"]
 
   shell:
     description: Shell into running container
-    params:
+    args:
       - name: container
-        type: string
         required: true
-    cmd: "docker exec -it {{quote .container}} sh"
+    cmd: "docker exec -it {{.container}} sh"
+
+  run:
+    description: Run an image; everything after the image goes to docker verbatim
+    args:
+      - name: image
+        required: true
+      - name: docker_args
+        rest: true
+    flags:
+      - name: rm
+        type: bool
+    cmd: "docker run {{if .rm}}--rm{{end}} {{.image}} {{.docker_args}}"
 
   build-all:
     description: Build all images in directory
-    cmd: "sh -c 'for d in */; do docker build -t \"${d%/}\" \"$d\"; done'"
+    cmd: [sh, -c, 'for d in */; do docker build -t "${d%/}" "$d"; done']
 ```
 
 ```bash
 futi docker clean
-futi docker shell --container myapp
+futi docker shell myapp
+futi docker run --rm nginx -p 8080:80
 futi docker build-all
 ```
 
-### Проектный deploy-пакет
+### Project deploy package
 
 ```
 ~/.config/futi/modules/deploy/
@@ -1320,31 +1418,28 @@ name: deploy
 description: Deployment utilities
 commands:
   staging:
-    params:
+    args:
       - name: version
-        type: string
         required: true
-    cmd: "./scripts/deploy.sh staging {{.version}}"
+    cmd: ["{{.module_root}}/scripts/deploy.sh", staging, "{{.version}}"]
 
   production:
-    params:
+    args:
       - name: version
-        type: string
         required: true
-    cmd: "./scripts/deploy.sh production {{.version}}"
+    cmd: ["{{.module_root}}/scripts/deploy.sh", production, "{{.version}}"]
 
   rollback:
-    params:
+    args:
       - name: target
-        type: string
         required: true
-    cmd: "./scripts/rollback.sh {{quote .target}}"
+    cmd: ["{{.module_root}}/scripts/rollback.sh", "{{.target}}"]
 ```
 
 ```bash
-futi deploy staging --version v1.2.3
-futi deploy production --version v1.2.3
-futi deploy rollback --target production
+futi deploy staging v1.2.3
+futi deploy production v1.2.3
+futi deploy rollback production
 ```
 
 ---
@@ -1355,8 +1450,7 @@ futi находится на ранней стадии (0.x): формат мо�
 
 ### Ближайшие планы
 
-- **Типы параметров** — расширение за пределы `int`: `file`, `json`, `secret` (безопасная передача через env, не args; базовый доступ к env vars уже есть через `{{.env.FOO}}`). Для `file`/`path`-типов автокомплит будет предлагать пути только им (сейчас — всем не-bool флагам)
-- **Гибридный args-парсинг** — позиционные args для листовых команд без явного `--`
+- **Типы входов** — расширение за пределы `int`: `file`, `json`, `secret` (безопасная передача через env, не args; базовый доступ к env vars уже есть через `{{.env.FOO}}`), `choices`, аннотации команд. Для `path`/`dir`-типов автокомплит будет предлагать пути только им
 - **Descriptions в bash/fish** — zsh выводит описания уже сейчас; bash/fish — roadmap
 - **PowerShell** — 4-й shell после стабилизации bash/zsh/fish
 - **Модульный completion** — модули сами предоставляют подсказки для автодополнения (динамические кандидаты: имена контейнеров, веток и т.п.); тогда же имя `completion` может быть отдано модулям через smart-роутинг (`futi completion bash|zsh|fish` остаётся builtin-генерацией скрипта, остальные вызовы — резолв модуля). Сейчас `completion`/`__complete` зарезервированы (см. `futi modules init`)
@@ -1388,7 +1482,7 @@ echo '{"port": 8080}' | futi docker run --image nginx   # futi создаст в
 Одно ядро — множество способов доступа. Модуль пишется один раз, доступен из любого интерфейса:
 
 - **MCP** — интеграция с AI-агентами (Claude, GPT и т.п.): команды модулей становятся tools,
-  схема параметров — их input schema. Основной сценарий — **удалённый**: futi развёрнут на
+  схема входов — их input schema. Основной сценарий — **удалённый**: futi развёрнут на
   машине как сервер, удалённый агент подключается по сети (MCP over streamable HTTP) и
   запускает команды на этой машине. Локально — `futi mcp` по stdio
 - **HTTP API** — REST для CI/CD и автоматизации, на том же сервере, что и MCP
@@ -1399,7 +1493,7 @@ echo '{"port": 8080}' | futi docker run --image nginx   # futi создаст в
 ```bash
 futi serve --addr 127.0.0.1:8080            # форма команды предварительная
 curl -X POST http://localhost:8080/api/v1/exec -H "Authorization: Bearer $TOKEN" \
-  -d '{"namespace": "docker", "command": "build", "params": {"tag": "myapp"}}'
+  -d '{"namespace": "docker", "command": "build", "inputs": {"tag": "myapp"}}'
 ```
 
 ### Менеджер модулей

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/shlex"
 	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
@@ -498,10 +497,10 @@ func TestRunInitThroughSymlinkShowsResolvedPath(t *testing.T) {
 	}
 }
 
-// F57: зарезервированное слово запрещено в любом сегменте пути, а не только
-// в basename; validate и help зарезервированными не являются.
+// Reserved words are builtin commands, recognized only as the first word: they
+// are rejected as the top-level segment only; validate is not reserved.
 func TestRunInitReservedSegments(t *testing.T) {
-	for _, arg := range []string{"list", "cache", "modules", "completion", "__complete", "cache/tool", "a/list", "a/list.yaml", "a/list.yml", "a/modules/b"} {
+	for _, arg := range []string{"help", "list", "cache", "modules", "completion", "__complete", "cache/tool", "help.yaml", "list.yml"} {
 		t.Run("reject/"+arg, func(t *testing.T) {
 			t.Chdir(t.TempDir())
 			err := Init(&bytes.Buffer{}, io.Discard, InitOptions{Path: arg})
@@ -513,7 +512,7 @@ func TestRunInitReservedSegments(t *testing.T) {
 			}
 		})
 	}
-	for _, arg := range []string{"a/validate", "tools/help", "validate"} {
+	for _, arg := range []string{"a/validate", "tools/help", "validate", "a/list", "a/list.yaml", "a/modules/b"} {
 		t.Run("accept/"+arg, func(t *testing.T) {
 			t.Chdir(t.TempDir())
 			if err := Init(&bytes.Buffer{}, io.Discard, InitOptions{Path: arg}); err != nil {
@@ -619,9 +618,10 @@ func TestModulesInitRejectsInvalidName(t *testing.T) {
 	}
 }
 
-// F62: cmd сгенерированной команды разбирается shlex в [echo, <имя>].
+// F62: cmd сгенерированной команды — список [echo, <имя>]: имя остаётся одним
+// элементом argv, что бы в нём ни было.
 func TestGenerateModuleYAMLQuotesCommand(t *testing.T) {
-	for _, name := range []string{`a"b`, `it's`, `x\y`, `$HOME`, "plain"} {
+	for _, name := range []string{`a"b`, `it's`, `x\y`, `$HOME`, "plain", "two words"} {
 		t.Run(name, func(t *testing.T) {
 			yaml := generateModuleYAML("m", "d", "", []string{name})
 			mod, err := execmodule.ParseManifest([]byte(yaml), "/x/m.yaml", "/x")
@@ -629,15 +629,36 @@ func TestGenerateModuleYAMLQuotesCommand(t *testing.T) {
 				t.Fatalf("ParseManifest: %v\n%s", err, yaml)
 			}
 			cmd := mod.Commands[name].Cmd
-			got, err := shlex.Split(cmd)
-			if err != nil {
-				t.Fatalf("shlex.Split(%q): %v", cmd, err)
-			}
-			want := []string{"echo", name}
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("argv = %q, want %q", got, want)
+			want := execmodule.CmdSpec{List: []string{"echo", name}, IsList: true}
+			if !reflect.DeepEqual(cmd, want) {
+				t.Fatalf("cmd = %+v, want %+v", cmd, want)
 			}
 		})
+	}
+}
+
+// TestInitSkeletonListForm: the generated module uses the list form of cmd
+// and none of the removed constructs, and loads without errors.
+func TestInitSkeletonListForm(t *testing.T) {
+	for _, commands := range [][]string{nil, {"greet", "build"}} {
+		yaml := generateModuleYAML("m", "d", "", commands)
+		for _, banned := range []string{"quote", "params", "positional", "{{"} {
+			if strings.Contains(yaml, banned) {
+				t.Errorf("skeleton %q contains %q:\n%s", commands, banned, yaml)
+			}
+		}
+		mod, err := execmodule.LoadManifest([]byte(yaml), "/x/m.yaml", "/x")
+		if err != nil {
+			t.Fatalf("LoadManifest(%q): %v\n%s", commands, err, yaml)
+		}
+		if len(mod.Commands) == 0 {
+			t.Fatalf("no commands in\n%s", yaml)
+		}
+		for name, c := range mod.Commands {
+			if !c.Cmd.IsList || len(c.Cmd.List) != 2 || c.Cmd.List[0] != "echo" {
+				t.Errorf("command %q: cmd = %+v, want the list [echo, <name>]", name, c.Cmd)
+			}
+		}
 	}
 }
 
@@ -663,5 +684,16 @@ func TestInitDefaultsDescription(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `description: "My tool"`) {
 		t.Fatalf("manifest lacks default description:\n%s", data)
+	}
+}
+
+func TestInitRejectsTemplateCommandName(t *testing.T) {
+	t.Chdir(t.TempDir())
+	err := Init(io.Discard, io.Discard, InitOptions{Path: "m", Commands: []string{"a{{b"}})
+	if err == nil || !strings.Contains(err.Error(), `"{{"`) {
+		t.Fatalf("err = %v, want an error naming \"{{\"", err)
+	}
+	if _, statErr := os.Stat(".futi"); statErr == nil {
+		t.Fatal(".futi must not be created")
 	}
 }

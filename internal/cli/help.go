@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -13,53 +12,10 @@ import (
 	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
-// runHelp обрабатывает запрос справки req. Сначала проверяет user-defined
-// команду "help": если "<positional> help" резолвится как исполнимая
-// команда/модуль — выполняет её общим путём runParsed (флаги, args, раздельные
-// stdout/stderr, код команды; user-defined выигрывает). Иначе показывает
-// системную справку для positional (флаги и args игнорируются). Возвращает код
-// выхода и ошибку запуска пользовательской команды (см. runParsed).
-func runHelp(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt *core.Runtime, req *helpRequest) (int, error) {
+// runHelp prints system help for the node at path: `futi help <path...>`.
+func runHelp(stdout, stderr io.Writer, rt *core.Runtime, path []string) int {
 	source, _ := rt.Source() // main has already checked the error
-	loader := rt.Cache()
-	// Полный путь с "help" как последней командой.
-	full := make([]string, len(req.positional)+1)
-	copy(full, req.positional)
-	full[len(req.positional)] = "help"
-
-	pa := &parsedArgs{flags: req.flags, argsList: req.argsList, dryRun: req.dryRun}
-	pa.namespace, pa.command = splitPath(full)
-	var resolved bool
-	t, err := rt.Resolve(pa.namespace, pa.command)
-	switch {
-	case err == nil && t.Command().Cmd != "":
-		return runTarget(ctx, stdin, stdout, stderr, rt, t, pa) // single module load
-	case err == nil || helpMiss(err):
-		resolved = true // module loaded, no executable help
-	default:
-		// Module not found, broken module, source error: the original path.
-		var executable bool
-		resolved, executable = core.ExecutableHelpIn(source, loader, full)
-		if executable {
-			return runParsed(ctx, stdin, stdout, stderr, rt, pa)
-		}
-	}
-
-	if req.dryRun && resolved {
-		// Системная справка — не команда модуля: печатать нечего. Для
-		// неразрешённого пути отказа нет: нужна обычная ошибка «не найден».
-		fmt.Fprintln(stderr, errDryRunScope)
-		return 1, nil
-	}
-	return systemHelpCode(stdout, stderr, source, loader, req.positional), nil
-}
-
-// helpMiss reports errors that Resolve returns only after the module was
-// loaded and the path had no executable command.
-func helpMiss(err error) bool {
-	return errors.Is(err, execmodule.ErrCommandNotFound) ||
-		errors.Is(err, execmodule.ErrRequiresSubcommand) ||
-		errors.Is(err, modulerunner.ErrNoDefaultCommand)
+	return systemHelpCode(stdout, stderr, source, rt.Cache(), path)
 }
 
 // runSystemHelp показывает системную справку для positional:
@@ -73,12 +29,12 @@ func runSystemHelp(w io.Writer, source discovery.Source, loader modulerunner.Mod
 			return err
 		}
 	}
-	name := strings.Join(positional, " ")
+	name := strings.Join(doc.Path, " ")
 	switch doc.Kind {
 	case core.HelpUsage:
 		printUsage(w)
 	case core.HelpModule:
-		fmt.Fprint(w, execmodule.FormatModuleHelp(doc.Module, name))
+		fmt.Fprint(w, execmodule.FormatCommandHelp(name, &doc.Module.Command))
 	case core.HelpCommand:
 		fmt.Fprint(w, execmodule.FormatCommandHelp(name, doc.Command))
 	case core.HelpNamespace:

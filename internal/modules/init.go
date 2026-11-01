@@ -22,9 +22,8 @@ type InitOptions struct {
 }
 
 // ValidateInitPath checks the module path given to init: the name must be
-// valid and no segment may be a reserved word.
+// valid and its top-level segment may not be a reserved word.
 func ValidateInitPath(path string) error {
-	// F57: зарезервированное слово запрещено в любом сегменте пути.
 	trimmed := path
 	if strings.HasSuffix(trimmed, ".yaml") {
 		trimmed = strings.TrimSuffix(trimmed, ".yaml")
@@ -101,7 +100,7 @@ func initModuleName(path string) string {
 // defaultCmd — cmd на уровне модуля (пусто = не добавлять).
 // commands — имена команд (если пусто — одна команда hello по умолчанию).
 // #46: name квотируется. #47: ключи команд квотируются. F62: имя команды в
-// cmd квотируется для shlex — argv всегда [echo, <имя>].
+// cmd — список ["echo", "<имя>"]: argv всегда [echo, <имя>].
 func generateModuleYAML(name, description, defaultCmd string, commands []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "name: %s\n", quoteYAMLValue(name))
@@ -112,10 +111,10 @@ func generateModuleYAML(name, description, defaultCmd string, commands []string)
 	b.WriteString("commands:\n")
 	if len(commands) > 0 {
 		for _, cmd := range commands {
-			fmt.Fprintf(&b, "  %s:\n    cmd: %s\n", quoteYAMLValue(cmd), quoteYAMLValue("echo "+execmodule.QuoteShlex(cmd)))
+			fmt.Fprintf(&b, "  %s:\n    cmd: [\"echo\", %s]\n", quoteYAMLValue(cmd), quoteYAMLValue(cmd))
 		}
 	} else {
-		b.WriteString("  \"hello\":\n    cmd: \"echo hello\"\n")
+		b.WriteString("  \"hello\":\n    cmd: [\"echo\", \"hello\"]\n")
 	}
 	return b.String()
 }
@@ -154,6 +153,12 @@ func Init(out, errOut io.Writer, opts InitOptions) error {
 	targetPath, err := targetFilePath(&opts, globalDir)
 	if err != nil {
 		return err
+	}
+
+	for _, c := range opts.Commands {
+		if err := checkCommandName(c); err != nil {
+			return err
+		}
 	}
 
 	name := filepath.Base(opts.Path)

@@ -13,6 +13,8 @@ import (
 	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/executor"
+	"github.com/tivjnb/futi/internal/inputs"
+	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
 // raiseInterrupt обрабатывает ошибку запуска команды. Если
@@ -34,84 +36,120 @@ func raiseInterrupt(err error) {
 }
 
 // formatRunError форматирует ошибку выполнения команды для вывода в stderr.
-// Для *execmodule.TemplateError (ошибка парсинга/выполнения cmd-шаблона) даёт
-// дружелюбное многострочное сообщение без длинной цепочки обёрток и технического
-// трейса text/template. Для остальных ошибок — "run: <err>" как раньше.
 func formatRunError(err error) string {
-	var tmplErr *execmodule.TemplateError
-	if errors.As(err, &tmplErr) {
-		return fmt.Sprintf(
-			"error: failed to render template.\n  Template: %s\n  Cause: %v",
-			tmplErr.Cmd, tmplErr.Cause,
-		)
-	}
 	return fmt.Sprintf("run: %v", err)
 }
 
 // runErrorText — текст ошибки запуска: короткий, если причина уже напечатана
-// предупреждением, иначе formatRunError. Ошибки шаблона не сокращаются.
+// предупреждением, иначе formatRunError.
 func runErrorText(err error, path []string) string {
-	var tmplErr *execmodule.TemplateError
-	if !errors.As(err, &tmplErr) && coveredByWarning(err) {
+	if coveredByWarning(err) {
 		return coveredReadMessage("run", strings.Join(path, "."))
 	}
 	return formatRunError(err)
 }
 
-// runParsed — общий путь исполнения команды (rt.Resolve → bindFlags
-// (-h/--help → справка) → rt.Execute → formatRunError) для обычной ветки main и
-// пользовательской help. Пишет в переданные stdout/stderr и возвращает код
-// выхода. Второе значение — ошибка запуска (уже напечатанная в stderr): её
-// возвращаем наружу, чтобы вызывающий через raiseInterrupt корректно
-// обработал сигнальный путь (процесс гибнет тем же сигналом), а Main
-// возвращает код, и тесты проверяют его без os.Exit.
-func runParsed(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt *core.Runtime, pa *parsedArgs) (int, error) {
-	source, _ := rt.Source() // main has already checked the error
-	loader := rt.Cache()
-	// Схема команды нужна для привязки флагов (bool/string/int). -h/--help —
-	// справка по пути, в том числе для веток без своей команды (futi docker -h).
-	helpPath := commandPath(pa)
-	t, err := rt.Resolve(pa.namespace, pa.command)
-	if err != nil {
-		if hasHelpFlag(pa.flags) {
-			return systemHelpCode(stdout, stderr, source, loader, helpPath), nil
-		}
-		fmt.Fprintf(stderr, "%s\n", withPathHint(withValidateHint(runErrorText(err, helpPath), err, helpPath, source), pa.flags))
-		return core.ExitCode(err), err
+// resolveErrorText is the text of a path resolution error: path grammar
+// errors (unknown word, missing subcommand, collision) are printed as is,
+// others via runErrorText.
+func resolveErrorText(err error, path []string) string {
+	var pathErr *modulerunner.PathError
+	var collision *modulerunner.CollisionError
+	if errors.As(err, &pathErr) || errors.As(err, &collision) {
+		return err.Error()
 	}
-	return runTarget(ctx, stdin, stdout, stderr, rt, t, pa)
+	return runErrorText(err, path)
 }
 
-// runTarget runs an already resolved target: flag binding, -h, execution,
-// dry-run output and the wait error.
-func runTarget(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt *core.Runtime, t *core.Target, pa *parsedArgs) (int, error) {
+// runParsed — общий путь исполнения команды (rt.ResolveWords → inputs.Parse
+// (-h/--help → справка) → rt.Execute → formatRunError). Пишет в переданные
+// stdout/stderr и возвращает код выхода. Второе значение — ошибка запуска
+// (уже напечатанная в stderr): её возвращаем наружу, чтобы вызывающий через
+// raiseInterrupt корректно обработал сигнальный путь (процесс гибнет тем же
+// сигналом), а Main возвращает код, и тесты проверяют его без os.Exit.
+func runParsed(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt *core.Runtime, pa *parsedArgs) (int, error) {
 	source, _ := rt.Source() // main has already checked the error
-	loader := rt.Cache()
-	helpPath := commandPath(pa)
-	params, help, err := bindFlags(t.Command(), pa.flags)
+	t, rest, err := rt.ResolveWords(pa.words)
 	if err != nil {
-		fmt.Fprintf(stderr, "%s\n", withPathHint(err.Error(), pa.flags))
+		// -h/--help after a path without a runnable command (futi docker -h):
+		// help for the leading words.
+		path, flags := splitPathFlags(pa.words)
+		if hasHelpFlag(flags) {
+			return systemHelpCode(stdout, stderr, source, rt.Cache(), path), nil
+		}
+		fmt.Fprintf(stderr, "%s\n", withValidateHint(resolveErrorText(err, path), err, path, source))
+		return core.ExitCode(err), err
+	}
+	path := pa.words[:len(pa.words)-len(rest)]
+	return runTarget(ctx, stdin, stdout, stderr, rt, t, path, rest, pa.dryRun)
+}
+
+// withSubcommandHint appends the path hint to a parse error when a word
+// naming a subcommand of cmd follows a chain of flags that take no value:
+// the user put flags before the path (futi db --verbose migrate). A word that
+// is the value of a flag, or that follows a positional, is not a path word.
+func withSubcommandHint(msg string, cmd *execmodule.Command, rest []string) string {
+	for i := 0; i < len(rest); i++ {
+		tok := rest[i]
+		if tok == "--" {
+			break
+		}
+		if !modulerunner.IsFlagToken(tok) {
+			if _, ok := cmd.Commands[tok]; ok && i > 0 {
+				return msg + " (" + modulerunner.PathBeforeFlagsHint + ")"
+			}
+			break
+		}
+		if flagTakesValue(cmd, tok) {
+			i++ // the next token is the value
+		}
+	}
+	return msg
+}
+
+// flagTakesValue reports that tok is a declared non-bool flag written without
+// "=": its value is the next token.
+func flagTakesValue(cmd *execmodule.Command, tok string) bool {
+	for _, f := range cmd.Flags {
+		if f.Type == "bool" {
+			continue
+		}
+		if tok == "--"+strings.ReplaceAll(f.Name, "_", "-") || (f.Short != "" && tok == "-"+f.Short) {
+			return true
+		}
+	}
+	return false
+}
+
+// runTarget runs an already resolved target reached by path: parsing of the
+// inputs (-h shows the help), execution, dry-run output and the wait error.
+func runTarget(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt *core.Runtime, t *core.Target, path, rest []string, dryRun bool) (int, error) {
+	source, _ := rt.Source() // main has already checked the error
+	cmd := t.Command()
+	res, err := inputs.Parse(cmd.Args, cmd.Flags, rest, "futi "+strings.Join(path, " "))
+	if err != nil {
+		fmt.Fprintf(stderr, "%s\n", withSubcommandHint(err.Error(), cmd, rest))
 		return 1, nil
 	}
-	if help {
-		return systemHelpCode(stdout, stderr, source, loader, helpPath), nil
+	if res.Help {
+		return systemHelpCode(stdout, stderr, source, rt.Cache(), path), nil
 	}
-	res, err := rt.Execute(ctx, t, core.ExecuteRequest{
-		Params: params, Args: pa.argsList,
-		Stdin: stdin, Stdout: stdout, Stderr: stderr,
-		DryRun: pa.dryRun,
+	exec, err := rt.Execute(ctx, t, core.ExecuteRequest{
+		Inputs: res.Values,
+		Stdin:  stdin, Stdout: stdout, Stderr: stderr,
+		DryRun: dryRun,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "%s\n", formatRunError(err))
 		return core.ExitCode(err), err
 	}
-	if pa.dryRun {
-		fmt.Fprintln(stdout, shellJoin(res.Argv))
+	if dryRun {
+		fmt.Fprintln(stdout, shellJoin(exec.Argv))
 		return 0, nil
 	}
-	if res.WaitErr != nil {
-		fmt.Fprintf(stderr, "%s\n", formatRunError(res.WaitErr))
-		return res.ExitCode, res.WaitErr
+	if exec.WaitErr != nil {
+		fmt.Fprintf(stderr, "%s\n", formatRunError(exec.WaitErr))
+		return exec.ExitCode, exec.WaitErr
 	}
 	return 0, nil
 }

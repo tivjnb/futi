@@ -7,9 +7,11 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
+	"github.com/tivjnb/futi/internal/argvtmpl"
 	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/executor"
 	"github.com/tivjnb/futi/internal/modulerunner"
@@ -48,24 +50,26 @@ func (t *Target) ModuleName() string { return t.r.ModuleName() }
 // Manifest returns the path of the module manifest.
 func (t *Target) Manifest() string { return t.r.ManifestPath }
 
-// Resolve finds the command for namespace and command. Not-found and
-// invalid-input failures carry ErrNotFound and ErrInvalidInput.
-func (r *Runtime) Resolve(namespace, command string) (*Target, error) {
+// ResolveWords walks the command path at the start of words over the merged
+// module tree and returns the runnable command and the words after the path.
+// Not-found and invalid-input failures carry ErrNotFound and ErrInvalidInput.
+func (r *Runtime) ResolveWords(words []string) (*Target, []string, error) {
 	src, err := r.Source()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	res, err := modulerunner.Resolve(src, r.loader(), namespace, command)
+	res, rest, err := modulerunner.ResolveWords(src, r.loader(), words)
 	if err != nil {
-		return nil, classify(err)
+		return nil, nil, classify(err)
 	}
-	return &Target{r: res}, nil
+	return &Target{r: res}, rest, nil
 }
 
 // ExecuteRequest describes one command run.
 type ExecuteRequest struct {
-	Params map[string]string
-	Args   []string
+	// Inputs holds the given args and flags by name: string, bool, []string
+	// or []any of strings (see inputs.Bind).
+	Inputs map[string]any
 	// Stdin is the child's stdin; nil means empty.
 	Stdin io.Reader
 	// Stdout and Stderr receive the output; nil discards it.
@@ -101,12 +105,16 @@ type ExecuteResult struct {
 // output, and ctx cancellation (wrapping ctx.Err(), which takes priority).
 func (r *Runtime) Execute(ctx context.Context, t *Target, req ExecuteRequest) (ExecuteResult, error) {
 	var res ExecuteResult
-	resolved, err := t.r.Validate(req.Params, req.Args)
+	vals, err := t.r.Validate(req.Inputs)
 	if err != nil {
 		return res, invalidInput(err)
 	}
-	p, err := t.r.Prepare(resolved, req.Args)
+	p, err := t.r.Prepare(vals)
 	if err != nil {
+		var dash *argvtmpl.DashError
+		if errors.As(err, &dash) {
+			return res, invalidInput(err)
+		}
 		return res, err
 	}
 	res.Argv = p.Argv
@@ -132,6 +140,10 @@ func (r *Runtime) Execute(ctx context.Context, t *Target, req ExecuteRequest) (E
 		}
 	}
 
+	if err := batchCheck(runtime.GOOS, exec.LookPath, argv[0], p.Args); err != nil {
+		return res, invalidInput(err)
+	}
+
 	stdout, stderr, limiter := outputWriters(req.Stdout, req.Stderr, req.OutputLimit)
 	cfg := &executor.Config{
 		Dir:            workDir,
@@ -155,6 +167,20 @@ func (r *Runtime) Execute(ctx context.Context, t *Target, req ExecuteRequest) (E
 		return res, fmt.Errorf("execute: %w", ctx.Err())
 	}
 	return res, fatal
+}
+
+// batchCheck refuses input values that cmd.exe would interpret when argv0
+// resolves to a .bat or .cmd file. It only applies on Windows. A failed
+// lookup is skipped: the executor reports it when starting the command.
+func batchCheck(goos string, look func(string) (string, error), argv0 string, args []argvtmpl.Arg) error {
+	if goos != "windows" {
+		return nil
+	}
+	exe, err := look(argv0)
+	if err != nil {
+		return nil
+	}
+	return argvtmpl.CheckBatch(exe, args)
 }
 
 // splitRunError separates the outcome of executor.RunWithConfig: a child

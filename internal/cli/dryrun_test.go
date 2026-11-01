@@ -25,17 +25,20 @@ func dryRunEnv(t *testing.T) (modules, workdir string) {
 	}
 	yaml := `commands:
   mk:
-    params:
+    flags:
       - name: file
         required: true
-    cmd: "touch {{quote .file}}"
+    cmd: "touch {{.file}}"
   help:
     cmd: "echo helped"
   say:
-    params:
+    args:
+      - name: words
+        variadic: true
+    flags:
       - name: file
         required: true
-    cmd: "echo {{quote .file}} {{.args}}"
+    cmd: "echo {{.file}} {{.words}}"
 `
 	plain := "commands:\n  go:\n    cmd: \"echo go\"\n"
 	if err := os.WriteFile(filepath.Join(modules, "plain.yaml"), []byte(plain), 0o644); err != nil {
@@ -112,14 +115,14 @@ func TestFutiDryRun(t *testing.T) {
 		{"--dry-run", "--help"},
 		{"--dry-run", "--version"},
 		{"--dry-run", "list"},
-		{"--dry-run", "m", "list"},
+		{"--dry-run", "list", "m"},
 		{"--dry-run", "modules", "list"},
 		{"--dry-run", "modules", "init", "zz"},
 		{"--dry-run", "modules", "validate", "m"},
 		{"--dry-run", "cache", "status"},
 		{"--dry-run", "completion", "bash"},
 		{"--dry-run", "__complete", ""},
-		{"--dry-run", "plain", "help"},
+		{"--dry-run", "help", "plain"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			stdout, stderr, code := run(args...)
@@ -131,7 +134,7 @@ func TestFutiDryRun(t *testing.T) {
 
 	t.Run("не первый аргумент — обычный флаг модуля", func(t *testing.T) {
 		_, stderr, code := run("m", "mk", "--dry-run")
-		if code == 0 || strings.Contains(stderr, wantMsg) || !strings.Contains(stderr, `unknown param "dry-run"`) {
+		if code == 0 || strings.Contains(stderr, wantMsg) || !strings.Contains(stderr, `unknown flag --dry-run for "futi m mk"`) {
 			t.Fatalf("code=%d stderr=%q", code, stderr)
 		}
 	})

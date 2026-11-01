@@ -31,7 +31,7 @@ Then look around:
 ```bash
 futi list -r
 futi git log --count 5
-futi files count -- "my file.txt" other.txt
+futi files count "my file.txt" other.txt
 ```
 
 ## Previewing a command
@@ -42,5 +42,5 @@ futi files count -- "my file.txt" other.txt
 futi --dry-run git switch --branch feat/x
 # git switch -- feat/x
 futi --dry-run docker logs --container web --follow
-# docker logs --tail 100 --follow -- web
+# docker logs --tail=100 --follow -- web
 ```

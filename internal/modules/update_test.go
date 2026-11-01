@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/metayaml"
 )
 
@@ -98,7 +99,7 @@ func TestRunModulesUpdateAttachFailureWarns(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 	// Источник изменился: новая версия с failing attach.
-	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\nattach: \"exit 5\"\ncommands:\n  run:\n    cmd: echo v2\n")
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\nattach: [sh, -c, \"exit 5\"]\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	if err := newTestManager(t, &bytes.Buffer{}, nil).Update(context.Background(), UpdateOptions{Name: "qr", Yes: true}); err != nil {
 		t.Fatalf("attach failure on update must be warning, not error: %v", err)
@@ -154,7 +155,7 @@ func TestRunModulesUpdateAllStopsOnInterrupt(t *testing.T) {
 			t.Fatalf("install: %v", err)
 		}
 	}
-	writeFile(t, filepath.Join(srcA, "config.yaml"), "name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
+	writeFile(t, filepath.Join(srcA, "config.yaml"), "name: a\nattach: [sh, -c, \"kill -INT $$\"]\ncommands:\n  run:\n    cmd: echo v2\n")
 	writeFile(t, filepath.Join(srcB, "config.yaml"), "name: b\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	err := newTestManager(t, &bytes.Buffer{}, nil).Update(context.Background(), UpdateOptions{Yes: true})
@@ -178,7 +179,7 @@ func TestRunModulesUpdateInterruptedAttachInvalidatesCache(t *testing.T) {
 	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, SkipAttach: true}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\nattach: [sh, -c, \"kill -INT $$\"]\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	// Посторонняя запись в кэше — update должен её сбросить.
 	rt := newTestRuntime(t)
@@ -208,7 +209,7 @@ func TestRunModulesUpdateInterruptPrintsErrorOnce(t *testing.T) {
 	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, SkipAttach: true}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	writeFile(t, filepath.Join(src, "config.yaml"), "name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: a\nattach: [sh, -c, \"kill -INT $$\"]\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -717,7 +718,7 @@ func TestUpdateChangeListDeletionsFirst(t *testing.T) {
 
 	var err error
 	stderr := captureStderr(t, func() {
-		err = attachGate{errW: os.Stderr, yes: true}.allowReplace("qr", "/m/qr", "", diff)
+		err = attachGate{errW: os.Stderr, yes: true}.allowReplace("qr", "/m/qr", execmodule.CmdSpec{}, diff)
 	})
 	if err != nil {
 		t.Fatalf("allowReplace: %v", err)
@@ -961,5 +962,108 @@ func TestUpdateRejectsSlashName(t *testing.T) {
 	err := newTestManager(t, &bytes.Buffer{}, nil).Update(context.Background(), UpdateOptions{Name: "a/b", Yes: true})
 	if err == nil || !strings.Contains(err.Error(), "write the namespace with a dot") {
 		t.Fatalf("err = %v, want hint to write the namespace with a dot", err)
+	}
+}
+
+const (
+	shadowV1 = "name: qr\ncmd: echo {{.what}}\nargs:\n  - name: what\ncommands:\n  run:\n    cmd: echo run\n"
+	shadowV2 = shadowV1 + "  build:\n    cmd: echo build\n"
+	shadowV3 = shadowV2 + "  test:\n    cmd: echo test\n"
+	// The old (params/positional) format is not parsed by the current loader.
+	shadowOldFormat = "name: qr\ncommands:\n  run:\n    cmd: echo {{.x}}\n    params:\n      x: {}\n"
+)
+
+const shadowWarningV2 = "Warning: module qr: command \"qr\": words build, run are subcommands; pass such a value after --\n"
+
+func TestUpdateWarnsNewShadowing(t *testing.T) {
+	tests := []struct {
+		name       string
+		installed  string
+		updated    string
+		wantStderr string
+	}{
+		{
+			name:       "update adds a subcommand to a node with a string arg",
+			installed:  shadowV1,
+			updated:    shadowV2,
+			wantStderr: shadowWarningV2,
+		},
+		{
+			name:       "warning already present before the update",
+			installed:  shadowV2,
+			updated:    shadowV2 + "# changed\n",
+			wantStderr: "",
+		},
+		{
+			name:      "same node gets another subcommand: text changed, so it is new",
+			installed: shadowV2,
+			updated:   shadowV3,
+			wantStderr: "Warning: module qr: command \"qr\": words build, run, test are subcommands;" +
+				" pass such a value after --\n",
+		},
+		{
+			name:       "old manifest does not parse: all new warnings are printed",
+			installed:  shadowOldFormat,
+			updated:    shadowV2,
+			wantStderr: shadowWarningV2,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			src, dest := installForUpdate(t)
+			writeFile(t, filepath.Join(dest, "config.yaml"), tc.installed)
+			writeFile(t, filepath.Join(src, "config.yaml"), tc.updated)
+
+			_, stderr, err := runUpdateQR(t, nil, "--yes")
+			if err != nil {
+				t.Fatalf("update: %v", err)
+			}
+			var warnings string
+			for _, line := range strings.SplitAfter(stderr, "\n") {
+				if strings.HasPrefix(line, "Warning:") {
+					warnings += line
+				}
+			}
+			if warnings != tc.wantStderr {
+				t.Fatalf("warnings = %q, want %q (stderr %q)", warnings, tc.wantStderr, stderr)
+			}
+		})
+	}
+}
+
+// Declining the replacement leaves the old tree, so the warning about the new
+// shadowing subcommand (which would not be there) must not be printed.
+func TestUpdateDeclineDoesNotWarnAboutShadowing(t *testing.T) {
+	src, dest := installForUpdate(t)
+	setStdinTerminal(t, true)
+	writeFile(t, filepath.Join(dest, "config.yaml"), shadowV1)
+	writeFile(t, filepath.Join(src, "config.yaml"), shadowV2)
+
+	_, stderr, err := runUpdateQR(t, strings.NewReader("n\n"))
+	if !errors.Is(err, errUpdateNotConfirmed) {
+		t.Fatalf("err = %v, want update not confirmed", err)
+	}
+	if !strings.Contains(stderr, "Replace module files? [y/N] ") {
+		t.Fatalf("stderr = %q, want the replace question", stderr)
+	}
+	if strings.Contains(stderr, "Warning: module") {
+		t.Errorf("stderr = %q, want no shadowing warning", stderr)
+	}
+}
+
+// A module without name: gets its name from its directory; the warning the
+// installed manifest already had must not be printed again as new.
+func TestUpdateNamelessModuleKeepsOldShadowWarningQuiet(t *testing.T) {
+	src, dest := installForUpdate(t)
+	noName := strings.TrimPrefix(shadowV2, "name: qr\n")
+	writeFile(t, filepath.Join(dest, "config.yaml"), noName)
+	writeFile(t, filepath.Join(src, "config.yaml"), noName+"# changed\n")
+
+	_, stderr, err := runUpdateQR(t, nil, "--yes")
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if strings.Contains(stderr, "Warning: module") {
+		t.Errorf("stderr = %q, want no shadowing warning", stderr)
 	}
 }

@@ -1,0 +1,19 @@
+name: k8s
+description: Kubernetes helpers
+commands:
+  logs:
+    description: Show pod logs
+    args:
+      - name: pod
+        required: true
+        description: Pod name
+    flags:
+      - name: follow
+        type: bool
+        short: f
+        description: Stream logs
+      - name: tail
+        type: int
+        default: "100"
+        description: Number of lines
+    cmd: "kubectl logs {{if .follow}}-f{{end}} --tail={{.tail}} -- {{.pod}}"

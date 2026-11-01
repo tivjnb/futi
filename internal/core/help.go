@@ -24,14 +24,15 @@ const (
 // depends on Kind.
 type HelpDoc struct {
 	Kind     HelpKind
+	Path     []string            // matched path segments (dotted words split)
 	Module   *execmodule.Module  // HelpModule
 	Command  *execmodule.Command // HelpCommand
 	Children []ChildEntry        // HelpNamespace
 }
 
-// HelpIn resolves system help for path in src. For a partial namespace
-// listing it returns both a valid HelpNamespace and the *discovery.PartialError.
-// Other errors are classified.
+// HelpIn resolves system help for the node at path in src; every word of path
+// must be a path word. For a partial namespace listing it returns both a valid
+// HelpNamespace and the *discovery.PartialError. Other errors are classified.
 func HelpIn(src discovery.Source, loader modulerunner.ModuleLoader, path []string) (HelpDoc, error) {
 	doc, err := helpIn(src, loader, path)
 	return doc, classifyUnlessPartial(err)
@@ -42,11 +43,22 @@ func helpIn(src discovery.Source, loader modulerunner.ModuleLoader, path []strin
 		return HelpDoc{Kind: HelpUsage}, nil
 	}
 
-	manifest, root, cmdPath, ok := resolvePositional(src, path)
-	if !ok {
-		// Не модуль — возможно, каталог-namespace: справка = его дочерние элементы
-		// (как `futi <ns> list`).
-		children, err := src.ListChildren(strings.Join(path, "."))
+	// Help shows what would run: modules are loaded verified, as for execution.
+	node, n, err := modulerunner.Walk(src, loader, path, modulerunner.WalkOptions{Verified: true})
+	if err != nil {
+		var collision *modulerunner.CollisionError
+		if errors.As(err, &collision) {
+			return HelpDoc{}, err
+		}
+		return HelpDoc{}, fmt.Errorf("help: %w", err)
+	}
+	if n < len(path) {
+		return HelpDoc{}, modulerunner.UnknownCommandError(src, node, path[n])
+	}
+
+	if node.Module == nil {
+		// Namespace directory: its children.
+		children, err := src.ListChildren(node.Namespace)
 		var partial *discovery.PartialError
 		isPartial := errors.As(err, &partial)
 		if err != nil && !isPartial && !errors.Is(err, discovery.ErrNotFound) {
@@ -55,84 +67,25 @@ func helpIn(src discovery.Source, loader modulerunner.ModuleLoader, path []strin
 		if (err == nil || isPartial) && len(children) > 0 {
 			// Частичный листинг: дети читаемых sources возвращаются вместе с
 			// ошибкой — вызывающий покажет предупреждения.
-			return HelpDoc{Kind: HelpNamespace, Children: DescribeChildren(children, loader)}, err
+			return HelpDoc{Kind: HelpNamespace, Path: node.Path, Children: DescribeChildren(children, loader)}, err
 		}
-		return HelpDoc{}, &helpModuleNotFoundError{path: strings.Join(path, " ")}
-	}
-
-	mod, err := modulerunner.LoadModuleVerified(loader, manifest, root)
-	if err != nil {
-		return HelpDoc{}, fmt.Errorf("help: %w", err)
+		return HelpDoc{}, &helpModuleNotFoundError{path: strings.Join(node.Path, " ")}
 	}
 
 	// Модульный help: command path пуст.
-	if len(cmdPath) == 0 {
-		return HelpDoc{Kind: HelpModule, Module: mod}, nil
-	}
-
-	// Командный help: резолвим command path.
-	cmd, err := mod.ResolveCommandPath(cmdPath)
-	if err != nil {
-		return HelpDoc{}, fmt.Errorf("help: %w", err)
+	if len(node.CmdPath) == 0 {
+		return HelpDoc{Kind: HelpModule, Path: node.Path, Module: node.Module}, nil
 	}
 
 	// Ветка с subcommands — справка ветки (как модульная, по subcommands).
+	cmd := node.Command
 	if len(cmd.Commands) > 0 {
-		branch := &execmodule.Module{
-			Name:        mod.Name,
-			Description: cmd.Description,
-			Cmd:         cmd.Cmd,
-			Params:      cmd.Params,
-			Positional:  cmd.Positional,
-			Commands:    cmd.Commands,
-		}
-		return HelpDoc{Kind: HelpModule, Module: branch}, nil
+		branch := &execmodule.Module{Name: node.Module.Name, Command: *cmd}
+		return HelpDoc{Kind: HelpModule, Path: node.Path, Module: branch}, nil
 	}
 
 	// Листовая команда.
-	return HelpDoc{Kind: HelpCommand, Command: cmd}, nil
-}
-
-// ExecutableHelpIn reports whether path (ending in "help") resolves to a module
-// and whether that is a runnable user command or a module default command.
-func ExecutableHelpIn(src discovery.Source, loader modulerunner.ModuleLoader, path []string) (resolved, executable bool) {
-	manifest, root, cmdPath, ok := resolvePositional(src, path)
-	if !ok {
-		return false, false
-	}
-	return true, isExecutableHelp(loader, manifest, root, cmdPath)
-}
-
-// resolvePositional находит модуль для positional через progressive resolution
-// (от длиннейшего namespace к коротчайшему). Возвращает манифест, корень и
-// оставшийся command path. ok=false если ни один namespace не резолвится.
-func resolvePositional(source discovery.Source, positional []string) (manifest, root string, cmdPath []string, ok bool) {
-	for i := len(positional); i >= 0; i-- {
-		ns := strings.Join(positional[:i], ".")
-		mp, mr, err := source.Resolve(ns)
-		if err == nil {
-			return mp, mr, positional[i:], true
-		}
-	}
-	return "", "", nil, false
-}
-
-// isExecutableHelp определяет, резолвится ли командный путь как исполнимая
-// команда "help" (листовая с Cmd) или модуль с default cmd. Возвращает false
-// для веток без Cmd и несуществующих команд — тогда показываем системную справку.
-func isExecutableHelp(loader modulerunner.ModuleLoader, manifest, root string, cmdPath []string) bool {
-	mod, err := modulerunner.LoadModuleVerified(loader, manifest, root)
-	if err != nil {
-		return false
-	}
-	if len(cmdPath) == 0 {
-		return mod.Cmd != "" // модуль с default cmd (например модуль "help")
-	}
-	cmd, err := mod.ResolveCommandPath(cmdPath)
-	if err != nil {
-		return false
-	}
-	return cmd.Cmd != ""
+	return HelpDoc{Kind: HelpCommand, Path: node.Path, Command: cmd}, nil
 }
 
 // helpModuleNotFoundError — модуль для справки не найден; Unwrap отдаёт

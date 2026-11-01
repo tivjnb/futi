@@ -126,17 +126,17 @@ name: m
 commands:
   logs:
     description: Show logs
-    params:
+    flags:
       - name: follow
         type: bool
         default: "false"
-    cmd: "echo follow={{.follow}}"
+    cmd: "echo follow={{if .follow}}true{{else}}false{{end}}"
   say:
     description: Say a message
-    params:
+    flags:
       - name: msg
         type: string
-    cmd: "echo msg={{quote .msg}}"
+    cmd: "echo msg={{.msg}}"
   grp:
     commands:
       leaf:
@@ -158,9 +158,9 @@ func TestFutiBoolFlagDoesNotEatWord(t *testing.T) {
 	}
 	// Флаг до команды: "logs" больше не значение флага и не команда — путь [m].
 	out, errOut, code = runFutiBin(t, strictOrderManifest, "m", "--follow", "logs")
-	if code != 1 || out != "" || !strings.Contains(errOut, `module "m" has no default command`) ||
-		!strings.Contains(errOut, "the command path goes before flags") {
-		t.Fatalf("code=%d out=%q stderr=%q, want no-default-command error with path hint", code, out, errOut)
+	want := "\"futi m\" requires a subcommand (available: grp, logs, say) (put the full command path before flags)\n"
+	if code != 1 || out != "" || errOut != want {
+		t.Fatalf("code=%d out=%q stderr=%q, want 1 and %q", code, out, errOut, want)
 	}
 }
 
@@ -187,7 +187,7 @@ func TestFutiBranchHelpFlagListsChildren(t *testing.T) {
 
 func TestFutiUnknownShortFlagIsError(t *testing.T) {
 	_, errOut, code := runFutiBin(t, strictOrderManifest, "m", "logs", "-f")
-	if code != 1 || !strings.Contains(errOut, `unknown flag "-f"`) {
+	if code != 1 || !strings.Contains(errOut, `unknown flag -f for "futi m logs"`) {
 		t.Fatalf("code=%d stderr=%q, want 1 and unknown flag", code, errOut)
 	}
 }
@@ -206,22 +206,22 @@ func TestFutiFlagsBeforePathIsUsageError(t *testing.T) {
 	}
 }
 
-func TestFutiUnknownParamStillRejectedByValidate(t *testing.T) {
+func TestFutiUnknownFlagRejected(t *testing.T) {
 	_, errOut, code := runFutiBin(t, strictOrderManifest, "m", "logs", "--zzz=1")
-	if code != 1 || !strings.Contains(errOut, `unknown param "zzz"`) {
-		t.Fatalf("code=%d stderr=%q, want 1 and unknown param", code, errOut)
+	if code != 1 || !strings.Contains(errOut, `unknown flag --zzz for "futi m logs"`) {
+		t.Fatalf("code=%d stderr=%q, want 1 and unknown flag", code, errOut)
 	}
 }
 
 // --zzz и --zzz=1 дают одну и ту же строку ошибки.
-func TestFutiUnknownParamSameMessageBothForms(t *testing.T) {
+func TestFutiUnknownFlagSameMessageBothForms(t *testing.T) {
 	_, bare, code1 := runFutiBin(t, strictOrderManifest, "m", "logs", "--zzz")
 	_, eq, code2 := runFutiBin(t, strictOrderManifest, "m", "logs", "--zzz=1")
 	if code1 != 1 || code2 != 1 {
 		t.Fatalf("codes = %d, %d, want 1, 1", code1, code2)
 	}
-	if bare != eq || bare != "unknown param \"zzz\"\n" {
-		t.Fatalf("stderr bare=%q eq=%q, want both %q", bare, eq, "unknown param \"zzz\"\n")
+	if bare != eq || bare != "unknown flag --zzz for \"futi m logs\"\n" {
+		t.Fatalf("stderr bare=%q eq=%q, want both %q", bare, eq, "unknown flag --zzz for \"futi m logs\"\n")
 	}
 }
 
@@ -254,7 +254,7 @@ func runFutiBinary(t *testing.T, mods string, args ...string) (stdout, stderr st
 	return out.String(), errb.String(), code
 }
 
-// TestSystemHelpForNamespaceDirectory: futi <ns> -h и futi <ns> help для
+// TestSystemHelpForNamespaceDirectory: futi <ns> -h и futi help <ns> для
 // каталога-namespace (не модуля) печатают дочерние элементы, код 0 (audit F70).
 func TestSystemHelpForNamespaceDirectory(t *testing.T) {
 	mods := t.TempDir()
@@ -263,7 +263,7 @@ func TestSystemHelpForNamespaceDirectory(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(mods, "docker", "build.yaml"), "name: build\ncmd: \"echo built\"\n")
 
-	for _, args := range [][]string{{"docker", "-h"}, {"docker", "help"}} {
+	for _, args := range [][]string{{"docker", "-h"}, {"help", "docker"}} {
 		stdout, stderr, code := runFutiBinary(t, mods, args...)
 		if code != 0 || !strings.Contains(stdout, "build") {
 			t.Fatalf("futi %v: code=%d stdout=%q stderr=%q, want code 0 and stdout with %q", args, code, stdout, stderr, "build")
@@ -276,18 +276,60 @@ func TestSystemHelpForNamespaceDirectory(t *testing.T) {
 	}
 }
 
-// TestBindFlagsErrorKeepsPathHint: futi k8s --follow logs — ошибка привязки флага
-// не должна скрывать подсказку о порядке пути и флагов (audit F70).
-func TestBindFlagsErrorKeepsPathHint(t *testing.T) {
+// TestParseErrorKeepsPathHint: futi k8s --follow logs — ошибка разбора флага
+// не должна скрывать подсказку о порядке пути и флагов (audit F70), если
+// дальше стоит имя подкоманды.
+func TestParseErrorKeepsPathHint(t *testing.T) {
 	mods := t.TempDir()
-	writeFile(t, filepath.Join(mods, "k8s.yaml"), "name: k8s\ncmd: \"echo k8s\"\n")
+	writeFile(t, filepath.Join(mods, "k8s.yaml"), "name: k8s\ncmd: \"echo k8s\"\ncommands:\n  logs:\n    cmd: echo logs\n")
 
 	_, stderr, code := runFutiBinary(t, mods, "k8s", "--follow", "logs")
 	if code == 0 {
 		t.Fatal("code 0, want error")
 	}
-	if !strings.Contains(stderr, `unknown param "follow"`) || strings.Count(stderr, "the command path goes before flags") != 1 {
-		t.Fatalf("stderr = %q, want unknown param error with a single path hint", stderr)
+	if !strings.Contains(stderr, `unknown flag --follow for "futi k8s"`) || strings.Count(stderr, "put the full command path before flags") != 1 {
+		t.Fatalf("stderr = %q, want unknown flag error with a single path hint", stderr)
+	}
+}
+
+// The path hint only follows flags that take no value: a word equal to a
+// subcommand name is a flag value or a positional elsewhere.
+func TestParseErrorPathHintNotFalse(t *testing.T) {
+	mods := t.TempDir()
+	writeFile(t, filepath.Join(mods, "db.yaml"), `name: db
+commands:
+  migrate:
+    args:
+      - {name: steps}
+    flags:
+      - {name: name}
+      - {name: force, type: bool, short: f}
+    cmd: "echo {{.steps}} {{.name}} {{if .force}}f{{end}}"
+    commands:
+      up:
+        cmd: echo up
+`)
+	const hint = "put the full command path before flags"
+	for _, tt := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"subcommand name as flag value", []string{"db", "migrate", "--name", "up", "--bad"}, false},
+		{"subcommand name as short flag value", []string{"db", "migrate", "-f", "--bad"}, false},
+		{"subcommand name after a positional", []string{"db", "migrate", "5", "up"}, false},
+		{"subcommand name after a bool flag", []string{"db", "migrate", "--bad", "up"}, true},
+		{"subcommand name after a bool flag, known", []string{"db", "migrate", "-f", "up", "x"}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, stderr, code := runFutiBinary(t, mods, tt.args...)
+			if code != 1 {
+				t.Fatalf("code = %d, stderr = %q, want 1", code, stderr)
+			}
+			if got := strings.Contains(stderr, hint); got != tt.want {
+				t.Errorf("hint present = %v, want %v; stderr = %q", got, tt.want, stderr)
+			}
+		})
 	}
 }
 

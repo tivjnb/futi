@@ -2,58 +2,40 @@ package execmodule
 
 import (
 	"fmt"
-	"regexp"
+	"slices"
 	"sort"
-	"strconv"
 	"strings"
-	"text/template"
 	"unicode"
+
+	"github.com/tivjnb/futi/internal/argvtmpl"
+	"github.com/tivjnb/futi/internal/inputs"
 )
 
-// Допустимые типы параметров. Пустой тип означает string (по умолчанию).
-var validParamTypes = map[string]bool{
-	"":       true,
-	"string": true,
-	"bool":   true,
-	"int":    true,
-}
-
-// Служебные ключи данных шаблона (см. Render): параметр с таким именем
-// перекрывался бы ими, поэтому Validate отвергает такие имена.
-var reservedParamNames = map[string]bool{
-	"args":        true,
-	"args_list":   true,
-	"env":         true,
-	"module_name": true,
-	"module_root": true,
-}
-
-// paramNameRe — допустимое имя параметра: буквы, цифры, _ и -, не начинается
-// с цифры или дефиса.
-var paramNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
-
-// defaultPath — путь схемы default-команды модуля в сообщениях.
+// defaultPath is the path of the module's own command in messages.
 const defaultPath = "(default)"
 
 // Validate проверяет схему модуля и возвращает все найденные ошибки и предупреждения.
 //
 // Errors (блокируют загрузку модуля в LoadModule):
-//   - неизвестный ключ манифеста (с номером строки)
+//   - неизвестный ключ манифеста (с номером строки); ключи params и positional
+//     старого формата
 //   - модуль без cmd и без commands
 //   - команда без cmd и без commands (бесполезная команда); cmd из одних пробелов — пустой
-//   - params/positional без cmd (на любом уровне)
-//   - синтаксическая ошибка шаблона в cmd, attach, detach
+//   - args/flags без cmd (на любом уровне)
+//   - ошибки схемы входов (inputs.Validate) с префиксом command "<path>"
+//   - ошибки шаблона cmd: синтаксис, запрещённые конструкции, ссылки на
+//     необъявленные входы, неупомянутые входы (argvtmpl.Check)
+//   - ошибки шаблона в attach, detach: синтаксис, любой вход ({{.x}}); доступны
+//     только env, module_root, module_name
 //   - недопустимое имя команды (пустое, с "-" в начале, с точкой, пробелами, управляющими символами)
-//   - команда с именем list (на любом уровне): недостижима, list — системный запрос
-//   - дубликаты имён params в команде
-//   - type параметра ∉ {"", "string", "bool", "int"}
-//   - имя параметра зарезервировано (args, args_list, env, module_name, module_root)
-//   - имя параметра не соответствует ^[A-Za-z_][A-Za-z0-9_-]*$ (в т.ч. пустое)
 //
 // Warnings (не блокируют, показываются в futi validate):
 //   - команда с commands, но без cmd (вызов без subcommand падает в runtime)
+//   - элемент хука attach/detach — оператор shell (&&, ||, |, >, <, >>): хуки
+//     идут без shell, он попадёт программе аргументом
+//   - подкоманда перекрывает значения позиционного string-входа (ShadowWarnings)
 //
-// Схема default-команды модуля (params/positional верхнего уровня)
+// Схема default-команды модуля (args/flags верхнего уровня)
 // проверяется теми же правилами с путём "(default)".
 // Рекурсивно обходит все команды и subcommands. Возвращает ВСЕ ошибки за один
 // проход — автор модуля исправляет всё за итерацию, а не по одной ошибке.
@@ -64,31 +46,48 @@ const defaultPath = "(default)"
 func (m *Module) Validate() (errors []error, warnings []string) {
 	errors = append(errors, m.schemaErrs...)
 
-	validateHook("attach", m.Attach, &errors)
-	validateHook("detach", m.Detach, &errors)
+	validateHook("attach", m.Attach, &errors, &warnings)
+	validateHook("detach", m.Detach, &errors, &warnings)
 
-	if strings.TrimSpace(m.Cmd) == "" && len(m.Commands) == 0 {
+	if m.Cmd.IsZero() && len(m.Commands) == 0 {
 		errors = append(errors, fmt.Errorf("module has no cmd and no commands"))
 	}
 
-	// Схема default-команды проверяется, когда у модуля есть cmd или params/positional.
+	// Схема default-команды проверяется, когда у модуля есть cmd или args/flags.
 	// Отсутствие cmd и commands у модуля сообщает отдельное правило выше.
-	hasDefaultSchema := strings.TrimSpace(m.Cmd) != "" || len(m.Params) > 0 || m.Positional.Min != 0
+	hasDefaultSchema := !m.Cmd.IsZero() || len(m.Args) > 0 || len(m.Flags) > 0
 	if hasDefaultSchema {
-		checkCommand(defaultPath, true, &Command{
-			Cmd:        m.Cmd,
-			Params:     m.Params,
-			Positional: m.Positional,
-		}, &errors, &warnings)
+		checkCommand(defaultPath, true, &m.Command, &errors, &warnings)
 	}
 	validateSubcommands("", m.Commands, &errors, &warnings)
 	return errors, warnings
 }
 
-// validateHook проверяет синтаксис шаблона хука (attach/detach).
-func validateHook(name, tmpl string, errors *[]error) {
-	if _, err := template.New(name).Funcs(TemplateFuncs()).Parse(tmpl); err != nil {
-		*errors = append(*errors, fmt.Errorf("%s: invalid template: %w", name, err))
+// shellOperators are the words that mean something to a shell but are plain
+// arguments in a hook, which runs without one.
+var shellOperators = []string{"&&", "||", "|", ">", "<", ">>"}
+
+// validateHook checks the template of a hook (attach/detach) the way cmd is
+// checked, but with no inputs: only env, module_root and module_name are
+// available. A literal shell operator element is a warning.
+func validateHook(name string, hook CmdSpec, errors *[]error, warnings *[]string) {
+	if hook.IsZero() {
+		return
+	}
+	tmpl, err := hook.Template()
+	if err != nil {
+		*errors = append(*errors, fmt.Errorf("%s: %w", name, err))
+		return
+	}
+	for _, err := range tmpl.Check(nil) {
+		*errors = append(*errors, fmt.Errorf("%s: %w", name, err))
+	}
+	var seen []string
+	for _, lit := range tmpl.Literals() {
+		if slices.Contains(shellOperators, lit) && !slices.Contains(seen, lit) {
+			seen = append(seen, lit)
+			*warnings = append(*warnings, fmt.Sprintf("%s: %q is passed to the program as an argument (hooks run without a shell); use [sh, -c, \"…\"]", name, lit))
+		}
 	}
 }
 
@@ -96,23 +95,13 @@ func validateHook(name, tmpl string, errors *[]error) {
 // проверяет имя, саму команду и рекурсивно её subcommands.
 // parent — полный путь родителя ("" на верхнем уровне).
 func validateSubcommands(parent string, cmds map[string]*Command, errors *[]error, warnings *[]string) {
-	names := make([]string, 0, len(cmds))
-	for name := range cmds {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
+	for _, name := range sortedNames(cmds) {
 		path := name
 		if parent != "" {
 			path = parent + "." + name
 		}
 		if !validCommandName(name) {
 			*errors = append(*errors, fmt.Errorf("command %q: invalid command name (must be non-empty, not start with \"-\", no dots, whitespace or control characters)", path))
-		}
-		// list последним словом пути CLI перехватывает как системный запрос,
-		// поэтому команда с таким именем была бы недостижима.
-		if name == "list" {
-			*errors = append(*errors, fmt.Errorf("command %q: \"list\" is reserved (use a different command name)", path))
 		}
 		validateCommand(path, cmds[name], errors, warnings)
 	}
@@ -143,7 +132,7 @@ func validateCommand(path string, cmd *Command, errors *[]error, warnings *[]str
 // Сюда добавляются правила уровня команды.
 func checkCommand(path string, isDefault bool, cmd *Command, errors *[]error, warnings *[]string) {
 	// Проверка: команда должна иметь cmd или commands (или оба).
-	hasCmd := strings.TrimSpace(cmd.Cmd) != ""
+	hasCmd := !cmd.Cmd.IsZero()
 	hasCommands := len(cmd.Commands) > 0
 
 	// Для (default) это правило не применяется: его покрывает ошибка модуля.
@@ -157,57 +146,76 @@ func checkCommand(path string, isDefault bool, cmd *Command, errors *[]error, wa
 		*warnings = append(*warnings, fmt.Sprintf("command %q: has subcommands but no cmd (calling without subcommand will fail)", path))
 	}
 
-	// params/positional не наследуются подкомандами: без cmd они бессмысленны.
-	if !hasCmd && (len(cmd.Params) > 0 || cmd.Positional.Min != 0) {
-		*errors = append(*errors, fmt.Errorf("command %q: params/positional require cmd", path))
+	// Входы не наследуются подкомандами: без cmd они бессмысленны.
+	hasInputs := len(cmd.Args) > 0 || len(cmd.Flags) > 0
+	if !hasCmd && hasInputs {
+		*errors = append(*errors, fmt.Errorf("command %q: args/flags require cmd", path))
+	}
+
+	for _, err := range inputs.Validate(cmd.Args, cmd.Flags) {
+		*errors = append(*errors, fmt.Errorf("command %q: %w", path, err))
 	}
 
 	if hasCmd {
-		if _, err := template.New(path).Funcs(TemplateFuncs()).Parse(cmd.Cmd); err != nil {
-			*errors = append(*errors, fmt.Errorf("command %q: invalid cmd template: %w", path, err))
-		}
-	}
-
-	// Проверка positional: min не может быть отрицательным.
-	if cmd.Positional.Min < 0 {
-		*errors = append(*errors, fmt.Errorf("command %q: positional min must be >= 0, got %d", path, cmd.Positional.Min))
-	}
-
-	// Проверка params: дубликаты имён и невалидные типы.
-	seen := make(map[string]bool)
-	for _, p := range cmd.Params {
-		if seen[p.Name] {
-			*errors = append(*errors, fmt.Errorf("command %q: duplicate param %q", path, p.Name))
-		}
-		seen[p.Name] = true
-
-		// Зарезервированные имена перекрылись бы служебными ключами шаблона.
-		if reservedParamNames[p.Name] {
-			*errors = append(*errors, fmt.Errorf("command %q: param %q is reserved (args, args_list, env, module_name, module_root)", path, p.Name))
-		} else if !paramNameRe.MatchString(p.Name) {
-			*errors = append(*errors, fmt.Errorf("command %q: invalid param name %q (allowed: letters, digits, _ and -, not starting with a digit or -)", path, p.Name))
-		}
-
-		if !validParamTypes[p.Type] {
-			*errors = append(*errors, fmt.Errorf("command %q: param %q has invalid type %q (valid: string, bool, int)", path, p.Name, p.Type))
-		}
-
-		if p.Required && p.Default != "" {
-			*errors = append(*errors, fmt.Errorf("command %q: param %q: required and default are mutually exclusive", path, p.Name))
-		}
-		if p.Default != "" {
-			switch p.Type {
-			case "int":
-				if _, err := strconv.Atoi(p.Default); err != nil {
-					*errors = append(*errors, fmt.Errorf("command %q: param %q: default %q is not an int", path, p.Name, p.Default))
-				}
-			case "bool":
-				if _, ok := parseBool(p.Default); !ok {
-					*errors = append(*errors, fmt.Errorf("command %q: param %q: default %q is not a boolean (true/false, 1/0, yes/no, on/off)", path, p.Name, p.Default))
-				}
+		tmpl, err := cmd.Cmd.Template()
+		if err != nil {
+			*errors = append(*errors, fmt.Errorf("command %q: cmd: %w", path, err))
+		} else {
+			for _, err := range tmpl.Check(inputs.TemplateInputs(cmd.Args, cmd.Flags)) {
+				*errors = append(*errors, fmt.Errorf("command %q: cmd: %w", path, err))
 			}
 		}
 	}
+
+	if w, ok := shadowWarning(path, cmd); ok {
+		*warnings = append(*warnings, w)
+	}
+}
+
+// ShadowWarnings returns the warnings of c and of its subcommands (recursively)
+// where a subcommand name could be meant as a value: the node has subcommands
+// and a positional string arg (variadic and rest included), so a word equal to
+// a subcommand name is taken as the subcommand, not as the value. Subcommand
+// paths are path plus the command names, separated by spaces.
+func ShadowWarnings(path string, c *Command) []string {
+	var out []string
+	if w, ok := shadowWarning(path, c); ok {
+		out = append(out, w)
+	}
+	for _, name := range sortedNames(c.Commands) {
+		out = append(out, ShadowWarnings(path+" "+name, c.Commands[name])...)
+	}
+	return out
+}
+
+// shadowWarning is the warning of the node itself, without descending.
+func shadowWarning(path string, c *Command) (string, bool) {
+	return ShadowWarningFor(path, c, sortedNames(c.Commands))
+}
+
+// ShadowWarningFor is the warning for a node whose words (subcommands, or the
+// names of child modules) could be meant as a value: the node has a
+// positional string arg (variadic and rest included). ok is false without
+// words or without such an arg.
+func ShadowWarningFor(path string, c *Command, words []string) (string, bool) {
+	if len(words) == 0 {
+		return "", false
+	}
+	for _, a := range c.Args {
+		if a.Kind() == argvtmpl.String {
+			return fmt.Sprintf("command %q: words %s are subcommands; pass such a value after --", path, strings.Join(words, ", ")), true
+		}
+	}
+	return "", false
+}
+
+func sortedNames(cmds map[string]*Command) []string {
+	names := make([]string, 0, len(cmds))
+	for name := range cmds {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // FormatValidateReport форматирует ошибки и предупреждения в читаемый отчёт.

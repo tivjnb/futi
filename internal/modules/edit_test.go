@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -63,8 +64,8 @@ func TestAddCommandPreservesCommentsAndFields(t *testing.T) {
 	if _, ok := mod.Commands["scan"]; !ok {
 		t.Fatal("command scan not found after edit")
 	}
-	if mod.Attach != "true" {
-		t.Fatalf("attach must survive edit, got %q", mod.Attach)
+	if mod.Attach.Text != "true" {
+		t.Fatalf("attach must survive edit, got %+v", mod.Attach)
 	}
 }
 
@@ -164,8 +165,8 @@ func TestRunModulesAddCommandDefaultCmd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadModule: %v", err)
 	}
-	if got := mod.Commands["scan"].Cmd; got != "echo scan" {
-		t.Fatalf("default cmd must be \"echo scan\", got %q", got)
+	if got := mod.Commands["scan"].Cmd; !reflect.DeepEqual(got.List, []string{"echo", "scan"}) {
+		t.Fatalf("default cmd must be [echo scan], got %+v", got)
 	}
 }
 
@@ -412,5 +413,47 @@ func TestRemoveCommandRejectsSlashModule(t *testing.T) {
 	err := newTestManager(t, &bytes.Buffer{}, nil).RemoveCommand(RemoveCommandOptions{Module: "a/b", Command: "x"})
 	if err == nil || !strings.Contains(err.Error(), "write the namespace with a dot") {
 		t.Fatalf("RemoveCommand err = %v, want namespace-with-a-dot error", err)
+	}
+}
+
+// The default cmd of add_command is the list [echo, <name>]: any name that
+// the template language accepts stays one argv element.
+func TestAddCommandDefaultCmdIsList(t *testing.T) {
+	dir := t.TempDir()
+	writeManifestFixture(t, dir, "qr")
+	t.Setenv("FUTI_MODULES_DIR", dir)
+
+	name := `say"hi`
+	if err := newTestManager(t, &bytes.Buffer{}, nil).AddCommand(AddCommandOptions{Module: "qr", Command: name}); err != nil {
+		t.Fatalf("AddCommand: %v", err)
+	}
+	mod, err := execmodule.LoadModule(filepath.Join(dir, "qr", "config.yaml"), filepath.Join(dir, "qr"))
+	if err != nil {
+		t.Fatalf("LoadModule: %v", err)
+	}
+	want := execmodule.CmdSpec{List: []string{"echo", name}, IsList: true}
+	if !reflect.DeepEqual(mod.Commands[name].Cmd, want) {
+		t.Fatalf("cmd = %+v, want %+v", mod.Commands[name].Cmd, want)
+	}
+}
+
+// A name with "{{" is rejected before anything is written.
+func TestAddCommandRejectsTemplateName(t *testing.T) {
+	dir := t.TempDir()
+	writeManifestFixture(t, dir, "qr")
+	t.Setenv("FUTI_MODULES_DIR", dir)
+	path := filepath.Join(dir, "qr", "config.yaml")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = newTestManager(t, &bytes.Buffer{}, nil).AddCommand(AddCommandOptions{Module: "qr", Command: "a{{b"})
+	if err == nil || !strings.Contains(err.Error(), `"{{"`) {
+		t.Fatalf("err = %v, want an error naming \"{{\"", err)
+	}
+	after, _ := os.ReadFile(path)
+	if string(before) != string(after) {
+		t.Fatal("manifest changed despite the error")
 	}
 }

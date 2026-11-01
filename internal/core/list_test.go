@@ -128,7 +128,7 @@ func TestListInPartialNotClassified(t *testing.T) {
 }
 
 func TestDescribeChildrenSkipsConflicts(t *testing.T) {
-	spy := &stubLoader{mod: &execmodule.Module{Description: "never"}}
+	spy := &stubLoader{mod: &execmodule.Module{Command: execmodule.Command{Description: "never"}}}
 	got := core.DescribeChildren([]discovery.Child{
 		{Name: "x", Type: "module", Conflict: true, ManifestPath: "/d/x.yaml"},
 	}, spy)
@@ -143,9 +143,9 @@ func TestDescribeChildrenSkipsConflicts(t *testing.T) {
 func TestRuntimeListUsesRuntimeLoader(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "db.yaml"), "name: db\ncmd: echo\n")
-	spy := &stubLoader{mod: &execmodule.Module{Name: "db", Commands: map[string]*execmodule.Command{
+	spy := &stubLoader{mod: &execmodule.Module{Name: "db", Command: execmodule.Command{Commands: map[string]*execmodule.Command{
 		"spied": {Description: "from spy"},
-	}}}
+	}}}}
 	opts := core.Options{ModulesDir: dir}
 	core.SetLoader(&opts, spy)
 	rt, err := core.NewRuntime(opts)
@@ -169,7 +169,7 @@ func TestListInConflictSources(t *testing.T) {
 	writeFile(t, filepath.Join(dirA, "x.yaml"), "name: x\ncmd: echo a\n")
 	writeFile(t, filepath.Join(dirB, "x.yaml"), "name: x\ncmd: echo b\n")
 	cfg := &config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: dirB}}}
-	spy := &stubLoader{mod: &execmodule.Module{Description: "never"}}
+	spy := &stubLoader{mod: &execmodule.Module{Command: execmodule.Command{Description: "never"}}}
 
 	res, err := core.ListIn(discovery.NewCompositeSource(cfg), spy, "", false)
 	if err != nil {
@@ -191,7 +191,7 @@ func TestListInConflictFileVsConfigYaml(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "x.yaml"), "name: x\ncmd: echo a\n")
 	writeFile(t, filepath.Join(dir, "x", "config.yaml"), "name: x\ncmd: echo b\n")
-	spy := &stubLoader{mod: &execmodule.Module{Description: "never"}}
+	spy := &stubLoader{mod: &execmodule.Module{Command: execmodule.Command{Description: "never"}}}
 
 	res, err := core.ListIn(discovery.NewGlobalSource(dir), spy, "", false)
 	if err != nil {
@@ -206,5 +206,88 @@ func TestListInConflictFileVsConfigYaml(t *testing.T) {
 	}
 	if spy.calls != 0 {
 		t.Errorf("loader calls = %d, want 0", spy.calls)
+	}
+}
+
+func TestListCollisionWarning(t *testing.T) {
+	src, global, local := collisionSource(t)
+	want := `path "dev deploy" is ambiguous: command "deploy" of module dev (` + filepath.Join(global, "dev.yaml") +
+		`) and module dev.deploy (` + filepath.Join(local, "dev", "deploy.yaml") + `)`
+	for _, ns := range []string{"", "dev"} {
+		res, err := core.ListIn(src, nil, ns, false)
+		if err != nil {
+			t.Fatalf("ListIn(%q) err = %v", ns, err)
+		}
+		if !reflect.DeepEqual(res.Warnings, []string{want}) {
+			t.Errorf("ListIn(%q).Warnings = %q, want [%q]", ns, res.Warnings, want)
+		}
+	}
+	// The listing itself is still produced.
+	res, _ := core.ListIn(src, nil, "dev", false)
+	if got := names(res.Commands); !reflect.DeepEqual(got, []string{"deploy"}) {
+		t.Errorf("Commands = %v, want [deploy]", got)
+	}
+}
+
+func TestListNoCollisionNoWarnings(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "dev.yaml"), "name: dev\ncommands:\n  build:\n    cmd: echo\n")
+	writeFile(t, filepath.Join(dir, "dev", "deploy.yaml"), "name: deploy\ncmd: echo\n")
+	res, err := core.ListIn(discovery.NewGlobalSource(dir), nil, "", false)
+	if err != nil || len(res.Warnings) != 0 {
+		t.Errorf("Warnings = %q, err = %v, want none", res.Warnings, err)
+	}
+}
+
+type failingListSource struct{ discovery.Source }
+
+func (failingListSource) List() ([]discovery.ModuleInfo, error) { return nil, errors.New("boom") }
+
+func TestListCollisionCheckFailureIsWarning(t *testing.T) {
+	src, _, _ := collisionSource(t)
+	res, err := core.ListIn(failingListSource{src}, nil, "dev", false)
+	if err != nil {
+		t.Fatalf("ListIn err = %v, want nil", err)
+	}
+	want := []string{"cannot check path collisions: boom"}
+	if !reflect.DeepEqual(res.Warnings, want) {
+		t.Errorf("Warnings = %q, want %q", res.Warnings, want)
+	}
+	if got := names(res.Commands); !reflect.DeepEqual(got, []string{"deploy"}) {
+		t.Errorf("Commands = %v, want [deploy]", got)
+	}
+}
+
+func TestListCollisionWithPartialListing(t *testing.T) {
+	dirA := t.TempDir()
+	dirB := filepath.Join(t.TempDir(), "missing")
+	writeFile(t, filepath.Join(dirA, "dev.yaml"), "name: dev\ncommands:\n  deploy:\n    cmd: echo\n")
+	writeFile(t, filepath.Join(dirA, "dev", "deploy.yaml"), "name: deploy\ncmd: echo\n")
+	cfg := &config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: dirB}}}
+	res, err := core.ListIn(discovery.NewCompositeSource(cfg), nil, "", false)
+	var pe *discovery.PartialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("err = %v, want *discovery.PartialError", err)
+	}
+	if len(res.Children) != 2 || len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], `path "dev deploy" is ambiguous`) {
+		t.Errorf("Children = %+v, Warnings = %q, want the namespace and module children and the collision", res.Children, res.Warnings)
+	}
+}
+
+// Child names of `list <ns>` are relative to ns: the loaded modules must get
+// the full address, or a collision of a nested module is not found.
+func TestListNestedNamespaceCollisionWarning(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "ns", "a.yaml"), "name: a\ncommands:\n  b:\n    cmd: echo\n")
+	writeFile(t, filepath.Join(dir, "ns", "a", "b.yaml"), "name: b\ncmd: echo\n")
+	src := discovery.NewGlobalSource(dir)
+	for _, recurse := range []bool{false, true} {
+		res, err := core.ListIn(src, nil, "ns", recurse)
+		if err != nil {
+			t.Fatalf("ListIn(recurse=%v) err = %v", recurse, err)
+		}
+		if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], `path "ns a b" is ambiguous`) {
+			t.Errorf("ListIn(ns, recurse=%v).Warnings = %q, want one collision of \"ns a b\"", recurse, res.Warnings)
+		}
 	}
 }

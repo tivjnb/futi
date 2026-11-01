@@ -1,13 +1,17 @@
 package modulecache
 
 import (
+	"bytes"
 	"encoding/gob"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tivjnb/futi/internal/execmodule"
 )
 
 // TestDiskStorageLoadMissingFileReturnsEmpty проверяет, что отсутствующий
@@ -111,18 +115,55 @@ func TestDiskStorageSaveOverwritesExisting(t *testing.T) {
 	}
 }
 
-// TestDiskStorageLoadCorruptedReturnsError проверяет, что повреждённый файл — error.
-func TestDiskStorageLoadCorruptedReturnsError(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "corrupted.gob")
-	if err := os.WriteFile(path, []byte("not a gob file"), 0o644); err != nil {
-		t.Fatalf("write corrupted file: %v", err)
+// TestDiskStorageLoadUndecodableFileIsSilentRebuild: a file the current build
+// cannot decode (garbage, or a schema from an older futi where Module.Cmd was a
+// string) is derived data: Load returns an empty cacheFile without an error.
+func TestDiskStorageLoadUndecodableFileIsSilentRebuild(t *testing.T) {
+	type oldModule struct {
+		Name string
+		Cmd  string // a struct (CmdSpec) in the current schema
+	}
+	type oldEntry struct {
+		Module *oldModule
+		Size   int64
+	}
+	type oldCacheFile struct {
+		Version         int
+		LastRefreshTime time.Time
+		Entries         map[string]oldEntry
+		BinaryID        string
+	}
+	var oldGob bytes.Buffer
+	old := oldCacheFile{
+		Version:  cacheFileVersion,
+		BinaryID: "a",
+		Entries:  map[string]oldEntry{"/m.yaml": {Module: &oldModule{Name: "m", Cmd: "echo hi"}, Size: 7}},
+	}
+	if err := gob.NewEncoder(&oldGob).Encode(old); err != nil {
+		t.Fatalf("encode old cache: %v", err)
 	}
 
-	s := NewDiskStorage(path)
-	_, err := s.Load()
-	if err == nil {
-		t.Fatal("expected error for corrupted file, got nil")
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{"garbage", []byte("not a gob file")},
+		{"older schema with string Cmd", oldGob.Bytes()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cache.gob")
+			if err := os.WriteFile(path, tc.data, 0o644); err != nil {
+				t.Fatalf("write cache file: %v", err)
+			}
+			cf, err := newDiskStorageWithID(path, "a").Load()
+			if err != nil {
+				t.Fatalf("Load: unexpected error %v", err)
+			}
+			if len(cf.Entries) != 0 || cf.Version != 0 {
+				t.Fatalf("Load: got version %d, %d entries, want an empty cacheFile", cf.Version, len(cf.Entries))
+			}
+		})
 	}
 }
 
@@ -380,5 +421,110 @@ func TestDiskStorageLoadOldVersionIsSilentRebuild(t *testing.T) {
 	}
 	if len(cf.Entries) != 0 {
 		t.Fatalf("Load version 2: got %d entries, want 0", len(cf.Entries))
+	}
+}
+
+// TestDiskStorageKeepsEmptyDefault: `default: ""` survives the gob round trip.
+// The empty default must stay distinguishable from an unset one, and the
+// cached module is not re-checked.
+func TestDiskStorageKeepsEmptyDefault(t *testing.T) {
+	dir := t.TempDir()
+	mod, err := execmodule.ParseManifest([]byte("name: m\nflags:\n  - {name: x, default: \"\"}\n  - {name: y}\ncmd: \"echo {{.x}} {{.y}}\"\n"), "m.yaml", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewDiskStorage(filepath.Join(dir, "cache.gob"))
+	if err := s.Save(cacheFile{Version: cacheFileVersion, Entries: map[string]entry{"m.yaml": {Module: mod}}}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cf, err := s.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s.binaryID == "" {
+		t.Skip("binary identity unavailable")
+	}
+	flags := cf.Entries["m.yaml"].Module.Flags
+	if !flags[0].HasDefault || flags[0].Default != "" {
+		t.Errorf("x = %+v, want an empty default that is set", flags[0])
+	}
+	if flags[1].HasDefault {
+		t.Errorf("y = %+v, want no default", flags[1])
+	}
+}
+
+// TestDiskStorageKeepsHookForms: attach (string) and detach (list) survive
+// the gob round trip in the form they were written in.
+func TestDiskStorageKeepsHookForms(t *testing.T) {
+	dir := t.TempDir()
+	mod, err := execmodule.ParseManifest([]byte("name: m\nattach: make install\ndetach: [rm, -rf, \"a b\"]\ncmd: echo\n"), "m.yaml", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewDiskStorage(filepath.Join(dir, "cache.gob"))
+	if err := s.Save(cacheFile{Version: cacheFileVersion, Entries: map[string]entry{"m.yaml": {Module: mod}}}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cf, err := s.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s.binaryID == "" {
+		t.Skip("binary identity unavailable")
+	}
+	got := cf.Entries["m.yaml"].Module
+	if want := (execmodule.CmdSpec{Text: "make install"}); !reflect.DeepEqual(got.Attach, want) {
+		t.Errorf("Attach = %+v, want %+v", got.Attach, want)
+	}
+	if want := (execmodule.CmdSpec{List: []string{"rm", "-rf", "a b"}, IsList: true}); !reflect.DeepEqual(got.Detach, want) {
+		t.Errorf("Detach = %+v, want %+v", got.Detach, want)
+	}
+}
+
+// TestDiskStorageRoundTripsWholeModule: a module with nested commands, a list
+// cmd with an empty item, every Spec field, an empty and an absent default and
+// both hook forms comes back from the disk deeply equal.
+func TestDiskStorageRoundTripsWholeModule(t *testing.T) {
+	dir := t.TempDir()
+	manifest := `name: m
+description: top
+attach: make install
+detach: [rm, -rf, "a b"]
+args:
+  - {name: target, type: string, description: "what", required: true}
+  - {name: rest, rest: true}
+flags:
+  - {name: tag, short: t, default: ""}
+  - {name: level, type: int, default: "3"}
+  - {name: verbose, type: bool}
+  - {name: raw, allow_dash: true, variadic: true}
+commands:
+  build:
+    description: nested
+    cmd: ["echo", "", "{{.target}}"]
+    flags:
+      - {name: file, default: Dockerfile}
+    commands:
+      deep:
+        cmd: echo deep
+`
+	mod, err := execmodule.ParseManifest([]byte(manifest), "m.yaml", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewDiskStorage(filepath.Join(dir, "cache.gob"))
+	if err := s.Save(cacheFile{Version: cacheFileVersion, Entries: map[string]entry{"m.yaml": {Module: mod}}}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cf, err := s.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s.binaryID == "" {
+		t.Skip("binary identity unavailable")
+	}
+	got := cf.Entries["m.yaml"].Module
+	if !reflect.DeepEqual(got, mod) {
+		t.Errorf("round trip differs:\n got %+v\nwant %+v", got, mod)
 	}
 }

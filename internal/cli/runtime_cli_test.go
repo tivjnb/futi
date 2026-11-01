@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -158,5 +159,71 @@ func TestCLINoHome(t *testing.T) {
 	}
 	if !strings.HasPrefix(stderr, "source: config path: ") {
 		t.Errorf("list: stderr = %q, want prefix %q", stderr, "source: config path: ")
+	}
+}
+
+// TestCLIInvalidModuleIsNotLoggedPerCall: a module that does not load must not
+// make every other call print a timestamped log line; running the module
+// itself reports its error once.
+func TestCLIInvalidModuleIsNotLoggedPerCall(t *testing.T) {
+	_, cwd, env := newCLIDirs(t)
+	modules := strings.TrimPrefix(env[3], "FUTI_MODULES_DIR=")
+	if err := os.WriteFile(filepath.Join(modules, "good.yaml"), []byte("cmd: echo ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modules, "bad.yaml"), []byte("commands:\n  empty: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := runFutiEnv(t, cwd, env, "good")
+	if code != 0 || strings.TrimSpace(stdout) != "ok" {
+		t.Fatalf("good: code = %d, stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if strings.Contains(stderr, "modulecache:") {
+		t.Errorf("good: stderr has a cache log line: %q", stderr)
+	}
+	_, stderr, code = runFutiEnv(t, cwd, env, "bad")
+	if code == 0 {
+		t.Fatalf("bad: code = 0, want failure")
+	}
+	if strings.Contains(stderr, "modulecache:") {
+		t.Errorf("bad: stderr has a cache log line: %q", stderr)
+	}
+	if n := strings.Count(stderr, "empty"); n != 1 {
+		t.Errorf("bad: the error mentions the command %d times, want 1; stderr: %q", n, stderr)
+	}
+}
+
+// TestCLICacheSaveFailureIsWarning: a cache that cannot be saved is reported
+// as a plain "warning:" line, not a timestamped log record.
+func TestCLICacheSaveFailureIsWarning(t *testing.T) {
+	home, cwd, env := newCLIDirs(t)
+	modules := strings.TrimPrefix(env[3], "FUTI_MODULES_DIR=")
+	if err := os.WriteFile(filepath.Join(modules, "good.yaml"), []byte("cmd: echo ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The cache dir is put under a regular file, so it cannot be made.
+	// os.UserCacheDir: XDG_CACHE_HOME on Linux, $HOME/Library/Caches on macOS.
+	var blocker string
+	switch runtime.GOOS {
+	case "linux":
+		blocker = filepath.Join(home, "blocker")
+		env[2] = "XDG_CACHE_HOME=" + filepath.Join(blocker, "xdg")
+	case "darwin":
+		blocker = filepath.Join(home, "Library")
+	default:
+		t.Skipf("cache dir location on %s is not redirected by this test", runtime.GOOS)
+	}
+	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, code := runFutiEnv(t, cwd, env, "good")
+	if code != 0 {
+		t.Fatalf("good: code = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stderr, "warning: modulecache: refresh: save: ") {
+		t.Errorf("stderr lacks the save warning: %q", stderr)
+	}
+	if regexp.MustCompile(`(?m)^\d{4}/\d\d/\d\d `).MatchString(stderr) {
+		t.Errorf("stderr has a timestamped log line: %q", stderr)
 	}
 }

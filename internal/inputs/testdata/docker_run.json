@@ -1,0 +1,26 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "extra": {
+      "description": "(passed to the tool verbatim)",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "image": {
+      "minLength": 1,
+      "not": {
+        "pattern": "^-"
+      },
+      "type": "string"
+    },
+    "rm": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "image"
+  ],
+  "type": "object"
+}

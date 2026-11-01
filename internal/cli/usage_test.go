@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,24 +75,27 @@ func TestUsageStreams(t *testing.T) {
 	}
 }
 
-// Примеры в usage не должны учить небезопасным шаблонам: значение без quote
-// и пайп (исполнение идёт без shell).
+// The usage text describes the current module format: no removed constructs
+// (quote, {{.args}}, shlex, --param), no pipes (execution is
+// without a shell), and the template variables of the module.
 func TestUsageExamplesAreSafe(t *testing.T) {
 	var buf bytes.Buffer
 	printUsage(&buf)
 	usage := buf.String()
-	if !strings.Contains(usage, "{{quote .msg}}") {
-		t.Errorf("usage не показывает {{quote .msg}}")
+	if !strings.Contains(usage, "{{.msg}}") {
+		t.Errorf("usage does not show {{.msg}}")
 	}
-	if strings.Contains(usage, "| tr") {
-		t.Errorf("usage содержит пример с пайпом (без shell он не работает)")
+	for _, removed := range []string{"{{quote", "{{.args", "shlex", "| tr", "--param"} {
+		if strings.Contains(usage, removed) {
+			t.Errorf("usage still mentions %q", removed)
+		}
 	}
 	if strings.Contains(usage, `"{{.msg}}"`) {
-		t.Errorf("usage советует оборачивать значение в кавычки вместо quote")
+		t.Errorf("usage advises wrapping a value in quotes")
 	}
-	for _, name := range []string{"{{.module_root}}", "{{.module_name}}"} {
+	for _, name := range []string{"{{.module_root}}", "{{.module_name}}", "args:", "flags:"} {
 		if !strings.Contains(usage, name) {
-			t.Errorf("usage не упоминает %s", name)
+			t.Errorf("usage does not mention %s", name)
 		}
 	}
 }
@@ -111,6 +115,32 @@ func TestRunHelpRootPrintsUsageToStdout(t *testing.T) {
 	}
 }
 
+// The usage text names every place where the command path ends.
+func TestUsageDescribesPathEnd(t *testing.T) {
+	var buf bytes.Buffer
+	printUsage(&buf)
+	text := strings.Join(strings.Fields(buf.String()), " ")
+	for _, want := range []string{`at "--"`, "that is not a child"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("usage does not mention %q where the path ends", want)
+		}
+	}
+}
+
+// The usage text must describe the current format only: no old-format
+// template syntax, and no claim that completion offers values of bool flags
+// (a bool flag takes no separate value, so nothing is suggested after it).
+func TestUsageHasNoStaleClaims(t *testing.T) {
+	var buf bytes.Buffer
+	printUsage(&buf)
+	text := strings.Join(strings.Fields(buf.String()), " ")
+	for _, bad := range []string{"{{quote", "{{.args", "args_list", "boolean values (true/false)"} {
+		if strings.Contains(text, bad) {
+			t.Errorf("usage still mentions %q", bad)
+		}
+	}
+}
+
 // Модуль, который не загрузился, в list не теряет причину: описание
 // заменяется пометкой (error: ...), строка модуля остаётся.
 func TestPrintChildrenLoadError(t *testing.T) {
@@ -119,7 +149,7 @@ func TestPrintChildrenLoadError(t *testing.T) {
 	writeMainTestFile(t, filepath.Join(dir, "good.yaml"), "name: good\ndescription: Fine module\ncmd: echo x\n")
 
 	var buf bytes.Buffer
-	if err := runList(&buf, discovery.NewGlobalSource(dir), "", false, false, nil); err != nil {
+	if err := runList(&buf, io.Discard, discovery.NewGlobalSource(dir), "", false, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	var badLine string
@@ -148,7 +178,7 @@ func TestUsageDescriptionsAligned(t *testing.T) {
 	col := -1
 	var sawDryRun bool
 	for _, line := range strings.Split(buf.String(), "\n") {
-		if strings.HasPrefix(line, "The last positional") {
+		if strings.HasPrefix(line, "The path is read") {
 			break
 		}
 		m := re.FindStringSubmatch(line)

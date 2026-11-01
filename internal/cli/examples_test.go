@@ -47,34 +47,35 @@ func TestExamplesValid(t *testing.T) {
 	}
 }
 
-// Каждый пример собирает ожидаемый argv; пользовательские значения проходят
-// через {{quote}} и остаются одним токеном.
+// Каждый пример собирает ожидаемый argv; значения пользователя остаются
+// отдельными элементами argv.
 func TestExamplesRender(t *testing.T) {
 	src := discovery.NewGlobalSource(examplesDir)
 	tests := []struct {
-		name     string
-		ns, cmd  string
-		params   map[string]string
-		argsList []string
-		want     []string
+		name    string
+		ns, cmd string
+		inputs  map[string]any
+		want    []string
 	}{
-		{"git switch", "git", "switch", map[string]string{"branch": "feat/x"}, nil,
+		{"git switch", "git", "switch", map[string]any{"branch": "feat/x"},
 			[]string{"git", "switch", "--", "feat/x"}},
-		{"git switch: значение с пробелом и флагом", "git", "switch", map[string]string{"branch": "--force x"}, nil,
+		{"git switch: значение с пробелом и флагом", "git", "switch", map[string]any{"branch": "--force x"},
 			[]string{"git", "switch", "--", "--force x"}},
-		{"git log: default count", "git", "log", map[string]string{}, nil,
+		{"git log: default count", "git", "log", nil,
 			[]string{"git", "log", "--oneline", "-n", "10"}},
 		{"docker logs: follow и tail", "docker", "logs",
-			map[string]string{"container": "web", "follow": "true", "tail": "50"}, nil,
-			[]string{"docker", "logs", "--tail", "50", "--follow", "--", "web"}},
-		{"files large: size склеен в один токен", "files", "large", map[string]string{"size": "100M"}, nil,
+			map[string]any{"container": "web", "follow": "true", "tail": "50"},
+			[]string{"docker", "logs", "--tail=50", "--follow", "--", "web"}},
+		{"docker ps: без --all", "docker", "ps", nil,
+			[]string{"docker", "ps"}},
+		{"files large: size склеен в один элемент", "files", "large", map[string]any{"size": "100M"},
 			[]string{"find", ".", "-type", "f", "-size", "+100M"}},
-		{"files count: позиционные не разбираются повторно", "files", "count", nil, []string{"a b", "c"},
+		{"files count: значения не режутся", "files", "count", map[string]any{"files": []string{"a b", "c"}},
 			[]string{"wc", "-l", "--", "a b", "c"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p, err := prepareExample(src, tt.ns, tt.cmd, tt.params, tt.argsList)
+			p, err := prepareExample(src, tt.ns, tt.cmd, tt.inputs)
 			if err != nil {
 				t.Fatalf("Prepare: %v", err)
 			}
@@ -86,21 +87,25 @@ func TestExamplesRender(t *testing.T) {
 }
 
 // prepareExample resolves, validates and renders a module command without running it.
-func prepareExample(src discovery.Source, ns, cmd string, params map[string]string, argsList []string) (*modulerunner.Prepared, error) {
-	r, err := modulerunner.Resolve(src, nil, ns, cmd)
+func prepareExample(src discovery.Source, ns, cmd string, inputs map[string]any) (*modulerunner.Prepared, error) {
+	words := strings.Split(ns, ".")
+	if cmd != "" {
+		words = append(words, cmd)
+	}
+	r, _, err := modulerunner.ResolveWords(src, nil, words)
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := r.Validate(params, argsList)
+	vals, err := r.Validate(inputs)
 	if err != nil {
 		return nil, err
 	}
-	return r.Prepare(resolved, argsList)
+	return r.Prepare(vals)
 }
 
 func TestExamplesRenderBackup(t *testing.T) {
 	src := discovery.NewGlobalSource(examplesDir)
-	p, err := prepareExample(src, "backup", "", map[string]string{"src": "my docs", "dest": "/tmp/out"}, nil)
+	p, err := prepareExample(src, "backup", "", map[string]any{"src": "my docs", "dest": "/tmp/out"})
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

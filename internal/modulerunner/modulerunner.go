@@ -4,13 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
-	"strings"
 
+	"github.com/tivjnb/futi/internal/argvtmpl"
 	"github.com/tivjnb/futi/internal/discovery"
 	"github.com/tivjnb/futi/internal/execmodule"
-
-	"github.com/google/shlex"
+	"github.com/tivjnb/futi/internal/inputs"
 )
 
 // ModuleLoader загружает модуль из манифеста по пути.
@@ -55,6 +55,7 @@ func LoadModuleVerified(loader ModuleLoader, manifestPath, moduleRoot string) (*
 // Prepared — команда, готовая к исполнению.
 type Prepared struct {
 	Argv       []string // argv[0] — исполняемый файл
+	Args       []argvtmpl.Arg
 	ModuleName string
 	ModuleRoot string
 }
@@ -70,15 +71,12 @@ func (p *Prepared) Env() []string {
 }
 
 // Resolved — найденная команда модуля: сама команда, модуль и его расположение.
-// Модуль загружается один раз в Resolve; Validate и Prepare его не перечитывают.
+// Модуль загружается один раз в ResolveWords; Validate и Prepare его не перечитывают.
 type Resolved struct {
 	Command      *execmodule.Command
 	Module       *execmodule.Module
 	ModuleRoot   string
 	ManifestPath string // нужен для имени модуля по умолчанию (execmodule.EffectiveName)
-
-	// label — namespace + command для текста ошибки shlex.
-	label string
 }
 
 // ModuleName — эффективное имя модуля.
@@ -86,115 +84,39 @@ func (r *Resolved) ModuleName() string {
 	return execmodule.EffectiveName(r.Module.Name, r.ManifestPath)
 }
 
-// Validate проверяет параметры и минимум позиционных аргументов (после "--")
-// и возвращает значения параметров с применёнными значениями по умолчанию.
-func (r *Resolved) Validate(params map[string]string, argsList []string) (map[string]string, error) {
-	resolved, err := r.Command.Validate(params)
-	if err != nil {
-		return nil, fmt.Errorf("modulerunner: %w", err)
-	}
-	if err := r.Command.ValidatePositional(argsList); err != nil {
-		return nil, fmt.Errorf("modulerunner: %w", err)
-	}
-	return resolved, nil
+// Validate binds the given inputs (string, bool, []string or []any of
+// strings, keyed by input name) to the schema of the command and returns the
+// values for the template, with defaults applied.
+func (r *Resolved) Validate(given map[string]any) (map[string]argvtmpl.Value, error) {
+	return inputs.Bind(r.Command.Args, r.Command.Flags, given)
 }
 
-// Prepare рендерит cmd-шаблон и разбирает результат в argv, ничего не исполняя.
-// {{.args}} — argsList, склеенный через пробел; {{.args_list}} — сам массив.
-func (r *Resolved) Prepare(resolved map[string]string, argsList []string) (*Prepared, error) {
+// Prepare evaluates the cmd template to argv, without running anything, and
+// applies the dash guard: an element starting with "-" whose first character
+// comes from an input value is a *argvtmpl.DashError.
+func (r *Resolved) Prepare(vals map[string]argvtmpl.Value) (*Prepared, error) {
+	tmpl, err := r.Command.Cmd.Template()
+	if err != nil {
+		return nil, fmt.Errorf("modulerunner: cmd: %w", err)
+	}
+	specs := inputs.TemplateInputs(r.Command.Args, r.Command.Flags)
 	moduleName := r.ModuleName()
-	rendered, err := r.Command.Render(resolved, strings.Join(argsList, " "), argsList,
-		execmodule.ModuleRef{Name: moduleName, Root: r.ModuleRoot})
+	args, err := tmpl.Eval(specs, argvtmpl.Values{Inputs: vals, ModuleName: moduleName, ModuleRoot: r.ModuleRoot})
 	if err != nil {
 		return nil, fmt.Errorf("modulerunner: %w", err)
 	}
-
-	parts, err := shlex.Split(rendered)
-	if err != nil {
-		// Отрендеренную строку не выводим: в ней могут быть значения секретов
-		// ({{.env.X}}, параметры); причина shlex сохраняется.
-		return nil, fmt.Errorf("modulerunner: command %q: split rendered cmd: %w", r.label, err)
+	if len(args) == 0 {
+		return nil, fmt.Errorf("modulerunner: command rendered to empty argv")
 	}
-	if len(parts) == 0 {
-		return nil, fmt.Errorf("modulerunner: empty command after render")
+	argv := argvtmpl.Argv(args)
+	if err := argvtmpl.CheckDash(args, specs, filepath.Base(argv[0])); err != nil {
+		return nil, err // the *argvtmpl.DashError text is fixed by the spec
 	}
-
-	return &Prepared{Argv: parts, ModuleName: moduleName, ModuleRoot: r.ModuleRoot}, nil
+	return &Prepared{Argv: argv, Args: args, ModuleName: moduleName, ModuleRoot: r.ModuleRoot}, nil
 }
 
-// ErrModuleNotFound — ни один префикс пути не резолвится в модуль.
+// ErrModuleNotFound is the class of an unknown first word of a command path.
 var ErrModuleNotFound = errors.New("module not found")
-
-// ErrNoDefaultCommand — модуль найден, но у него нет default cmd, а команда не указана.
-var ErrNoDefaultCommand = errors.New("has no default command; specify one")
-
-// Resolve — progressive resolution: пробует резолвить модуль от длиннейшего
-// namespace к коротчайшему, остаток = command path. command="" — default cmd
-// модуля. Модуль грузится через LoadModuleVerified (строгая проверка
-// свежести/аутентичности, как при исполнении).
-func Resolve(
-	source discovery.Source,
-	loader ModuleLoader,
-	namespace, command string,
-) (*Resolved, error) {
-	// Реконструкция positional args из namespace + command.
-	// Непустой namespace всегда делится по ".", в т.ч. при command=="":
-	// `futi docker.build` даёт namespace "docker.build" без команды.
-	var positional []string
-	if namespace != "" {
-		positional = strings.Split(namespace, ".")
-	}
-	if namespace == "" || command != "" {
-		positional = append(positional, command)
-	}
-
-	label := strings.TrimSpace(namespace + " " + command)
-
-	// i=len(positional) → ns=все, commandPath=[] (default cmd случай).
-	// i>=1: пустой namespace (i=0) модулем не является.
-	for i := len(positional); i >= 1; i-- {
-		ns := strings.Join(positional[:i], ".")
-		commandPath := positional[i:]
-
-		manifestPath, moduleRoot, err := source.Resolve(ns)
-		if err != nil {
-			if errors.Is(err, discovery.ErrNotFound) {
-				continue
-			}
-			return nil, fmt.Errorf("modulerunner: %w", err)
-		}
-
-		mod, err := LoadModuleVerified(loader, manifestPath, moduleRoot)
-		if err != nil {
-			return nil, fmt.Errorf("modulerunner: %w", err)
-		}
-
-		// commandPath пустой → default cmd модуля (со схемой: params/positional).
-		if len(commandPath) == 0 {
-			if mod.Cmd == "" {
-				return nil, fmt.Errorf("modulerunner: module %q %w", ns, ErrNoDefaultCommand)
-			}
-			return &Resolved{
-				Command: &execmodule.Command{
-					Cmd:        mod.Cmd,
-					Params:     mod.Params,
-					Positional: mod.Positional,
-				},
-				Module:       mod,
-				ModuleRoot:   moduleRoot,
-				ManifestPath: manifestPath,
-				label:        label,
-			}, nil
-		}
-		cmd, err := mod.ResolveCommand(commandPath)
-		if err != nil {
-			return nil, fmt.Errorf("modulerunner: %w", err)
-		}
-		return &Resolved{Command: cmd, Module: mod, ModuleRoot: moduleRoot, ManifestPath: manifestPath, label: label}, nil
-	}
-
-	return nil, fmt.Errorf("modulerunner: %w for %v", ErrModuleNotFound, positional)
-}
 
 // CommandInfo описывает команду модуля для листинга.
 type CommandInfo struct {

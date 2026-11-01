@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/tivjnb/futi/internal/completion"
+	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/metayaml"
 	"github.com/tivjnb/futi/internal/termtext"
 )
@@ -34,15 +35,14 @@ func validateModuleName(name string) error {
 	return nil
 }
 
-// checkReservedSegments отвергает путь, в котором любой сегмент (разделитель
-// sep) — зарезервированное слово корня: такой модуль перехватывался бы
-// builtin-командами и не был бы вызван. Проверяются только новые пути
-// (init/install); уже установленные модули не трогаются.
+// checkReservedSegments rejects a path whose top-level segment (separator
+// sep) is a reserved word: builtin commands are recognized as the first word,
+// so such a module would never run. Deeper segments are ordinary names. Only
+// new paths are checked (init/install); installed modules are left alone.
 func checkReservedSegments(path, sep string) error {
-	for _, seg := range strings.Split(path, sep) {
-		if completion.IsReservedName(seg) {
-			return fmt.Errorf("%q is a reserved name, choose a different module name", seg)
-		}
+	top, _, _ := strings.Cut(path, sep)
+	if completion.IsReservedName(top) {
+		return fmt.Errorf("%q is a reserved name, choose a different module name", top)
 	}
 	return nil
 }
@@ -190,8 +190,8 @@ type attachGate struct {
 // Отказ пользователя — errAttachNotConfirmed. Без терминала на stdin ответ
 // не читается: молчаливый отказ скрыл бы причину, а чтение из пайпа
 // подтвердило бы хук данными, не предназначенными для этого вопроса.
-func (g attachGate) allow(attach, name, dir string) (bool, error) {
-	if attach == "" || g.skip {
+func (g attachGate) allow(attach execmodule.CmdSpec, name, dir string) (bool, error) {
+	if attach.IsZero() || g.skip {
 		return false, nil
 	}
 	if g.yes {
@@ -203,7 +203,7 @@ func (g attachGate) allow(attach, name, dir string) (bool, error) {
 	// Показываем сырой шаблон: в отрендеренном могли бы оказаться значения
 	// {{.env.X}}. Управляющие символы из чужого манифеста — вырезаем.
 	fmt.Fprintf(g.errW, "Module %s runs an attach hook (in %s):\n", termtext.Line(name), termtext.Line(dir))
-	for _, line := range strings.Split(termtext.Block(attach), "\n") {
+	for _, line := range strings.Split(termtext.Block(attach.Display()), "\n") {
 		if strings.TrimSpace(line) != "" {
 			fmt.Fprintf(g.errW, "  %s\n", line)
 		}
@@ -229,7 +229,7 @@ func (g attachGate) allow(attach, name, dir string) (bool, error) {
 // Отказ — errUpdateNotConfirmed. attach — хук нового модуля: если он будет
 // запущен (не пуст и нет --skip-attach), к подсказке про --yes добавляется
 // предупреждение, что --yes подтвердит и хук, который здесь не показан.
-func (g attachGate) allowReplace(label, dir, attach string, diff metayaml.TreeDiff) error {
+func (g attachGate) allowReplace(label, dir string, attach execmodule.CmdSpec, diff metayaml.TreeDiff) error {
 	fmt.Fprintf(g.errW, "Module %s will change (%s):\n", termtext.Line(label), termtext.Line(dir))
 	// Порядок D, M, A: потеря файлов важнее, длинный список добавлений не
 	// должен прятать удаления за «... and N more».
@@ -254,7 +254,7 @@ func (g attachGate) allowReplace(label, dir, attach string, diff metayaml.TreeDi
 		return nil
 	}
 	hint := ""
-	if attach != "" && !g.skip {
+	if !attach.IsZero() && !g.skip {
 		hint = " (--yes also runs the attach hook; add --skip-attach to skip it)"
 	}
 	if !g.p.Interactive() {

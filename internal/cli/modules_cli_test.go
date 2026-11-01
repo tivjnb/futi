@@ -293,7 +293,7 @@ func TestParseInstallArgs(t *testing.T) {
 		{"all flags", []string{"--local", "--skip-attach", "--yes", "--from-git", "--ref=v1", "--namespace", "a.b", "src"},
 			modules.InstallOptions{Source: "src", Local: true, SkipAttach: true, Yes: true, FromGit: true, Ref: "v1", Namespace: "a.b"}, ""},
 		{"namespace equals form", []string{"src", "--namespace=ns"}, modules.InstallOptions{Source: "src", Namespace: "ns"}, ""},
-		{"reserved namespace", []string{"src", "--namespace", "a.list"}, modules.InstallOptions{}, "--namespace: "},
+		{"reserved namespace", []string{"src", "--namespace", "list.a"}, modules.InstallOptions{}, "--namespace: "},
 		{"ref with leading dash", []string{"src", "--ref", "-x"}, modules.InstallOptions{}, `must not start with "-"`},
 		{"missing source", []string{"--yes"}, modules.InstallOptions{}, "usage: futi modules install <source> [flags]"},
 		{"two sources", []string{"a", "b"}, modules.InstallOptions{}, "expected one source argument, got 2"},
@@ -342,7 +342,7 @@ func TestFutiUpdateInterruptPrintsErrorOnce(t *testing.T) {
 		t.Fatalf("install: %v\n%s", err, out)
 	}
 	writeFile(t, filepath.Join(src, "config.yaml"),
-		"name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
+		"name: a\nattach: [sh, -c, \"kill -INT $$\"]\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	stderr, err := run("modules", "update", "--yes")
 	if err == nil {
@@ -380,7 +380,7 @@ func TestFutiModulesUpdateDiesFromSignalWhenAttachInterrupted(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 	writeFile(t, filepath.Join(src, "config.yaml"),
-		"name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
+		"name: a\nattach: [sh, -c, \"kill -INT $$\"]\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	cmd, err := run("modules", "update", "--yes")
 	if err == nil {

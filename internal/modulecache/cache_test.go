@@ -78,7 +78,7 @@ func TestCacheReturnsSamePointerForSamePath(t *testing.T) {
 	manifestPath := filepath.Join(dir, "echo_mod.yaml")
 	writeFile(t, manifestPath, `
 name: echo_mod
-cmd: "echo {{.args}}"
+cmd: "echo hi"
 `)
 
 	cache := newTestCache()
@@ -1345,7 +1345,7 @@ func TestCacheConcurrentLoadModuleAndRefresh(t *testing.T) {
 	dir := t.TempDir()
 	modPath := filepath.Join(dir, "echo_mod.yaml")
 	writeFile(t, modPath, `name: echo_mod
-cmd: "echo {{.args}}"`)
+cmd: "echo hi"`)
 
 	src := discovery.NewGlobalSource(dir)
 	cache := newTestCache()
@@ -1380,7 +1380,7 @@ func TestCacheLoadModuleConcurrent(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "echo_mod.yaml")
 	writeFile(t, manifestPath, `name: echo_mod
-cmd: "echo {{.args}}"`)
+cmd: "echo hi"`)
 
 	cache := newTestCache()
 
@@ -1456,8 +1456,8 @@ func TestLoadModuleVerifiedReloadsWhenFileChanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first verified load: %v", err)
 	}
-	if mod1.Cmd != "echo v1" {
-		t.Fatalf("expected cmd v1, got %q", mod1.Cmd)
+	if mod1.Cmd.Text != "echo v1" {
+		t.Fatalf("expected cmd v1, got %+v", mod1.Cmd)
 	}
 
 	// Меняем содержимое файла.
@@ -1467,8 +1467,8 @@ func TestLoadModuleVerifiedReloadsWhenFileChanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second verified load: %v", err)
 	}
-	if mod2.Cmd != "echo v2" {
-		t.Fatalf("expected reloaded cmd v2, got %q", mod2.Cmd)
+	if mod2.Cmd.Text != "echo v2" {
+		t.Fatalf("expected reloaded cmd v2, got %+v", mod2.Cmd)
 	}
 	if mod1 == mod2 {
 		t.Fatal("expected a different *Module after file change (reload from disk)")
@@ -1526,7 +1526,7 @@ func TestLoadModuleVerifiedReloadsWhenCacheTampered(t *testing.T) {
 	}
 
 	// Подмена кэша: вставляем чужой Module с Cmd атакующего и заведомо неверным Hash.
-	evil := &execmodule.Module{Name: "m", Cmd: "echo PWNED", Root: dir}
+	evil := &execmodule.Module{Name: "m", Root: dir, Command: execmodule.Command{Cmd: execmodule.CmdSpec{Text: "echo PWNED"}}}
 	cache.mu.Lock()
 	cache.entries[manifestPath] = entry{Module: evil, Hash: []byte("deadbeef")}
 	cache.mu.Unlock()
@@ -1535,8 +1535,8 @@ func TestLoadModuleVerifiedReloadsWhenCacheTampered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verified load after tamper: %v", err)
 	}
-	if mod.Cmd != "echo legit" {
-		t.Fatalf("expected legit cmd from disk, got %q (cache not trusted)", mod.Cmd)
+	if mod.Cmd.Text != "echo legit" {
+		t.Fatalf("expected legit cmd from disk, got %+v (cache not trusted)", mod.Cmd)
 	}
 	if mod == evil {
 		t.Fatal("returned the tampered module; expected reload from disk")
@@ -1602,7 +1602,7 @@ func TestDiskStorageClearMissingFile(t *testing.T) {
 func TestCacheFileOfPreviousVersionDoesNotBypassValidate(t *testing.T) {
 	dir := t.TempDir()
 	manifest := filepath.Join(dir, "m.yaml")
-	writeFile(t, manifest, "name: m\ncmd: \"echo env={{.env}}\"\nparams:\n  - name: env\n")
+	writeFile(t, manifest, "name: m\ncmd: \"echo {{.env}}\"\nargs:\n  - name: env\n")
 	h, err := hashFile(manifest)
 	if err != nil {
 		t.Fatalf("hashFile: %v", err)
@@ -1613,7 +1613,7 @@ func TestCacheFileOfPreviousVersionDoesNotBypassValidate(t *testing.T) {
 	if err := storage.Save(cacheFile{
 		Version: 1, // версия до ужесточения Validate (F75)
 		Entries: map[string]entry{manifest: {
-			Module: &execmodule.Module{Name: "m", Cmd: "echo env={{.env}}"},
+			Module: &execmodule.Module{Name: "m", Command: execmodule.Command{Cmd: execmodule.CmdSpec{Text: "echo {{.env}}"}}},
 			Hash:   h,
 		}},
 	}); err != nil {
@@ -1657,7 +1657,7 @@ func TestStartStaleBinaryReloadsModuleFromDisk(t *testing.T) {
 			stale := cacheFile{
 				Version: cacheFileVersion,
 				Entries: map[string]entry{manifest: {
-					Module:  &execmodule.Module{Name: "m", Cmd: "echo stale"},
+					Module:  &execmodule.Module{Name: "m", Command: execmodule.Command{Cmd: execmodule.CmdSpec{Text: "echo stale"}}},
 					ModTime: info.ModTime(),
 					Size:    info.Size(),
 					Hash:    h,
@@ -1676,15 +1676,15 @@ func TestStartStaleBinaryReloadsModuleFromDisk(t *testing.T) {
 			if err != nil {
 				t.Fatalf("LoadModule: %v", err)
 			}
-			if mod.Cmd != "echo disk" {
-				t.Fatalf("LoadModule: Cmd = %q, want %q (module from stale cache)", mod.Cmd, "echo disk")
+			if mod.Cmd.Text != "echo disk" {
+				t.Fatalf("LoadModule: Cmd = %+v, want %q (module from stale cache)", mod.Cmd, "echo disk")
 			}
 			mod, err = cache.LoadModuleVerified(manifest, dir)
 			if err != nil {
 				t.Fatalf("LoadModuleVerified: %v", err)
 			}
-			if mod.Cmd != "echo disk" {
-				t.Fatalf("LoadModuleVerified: Cmd = %q, want %q (module from stale cache)", mod.Cmd, "echo disk")
+			if mod.Cmd.Text != "echo disk" {
+				t.Fatalf("LoadModuleVerified: Cmd = %+v, want %q (module from stale cache)", mod.Cmd, "echo disk")
 			}
 		})
 	}
@@ -1999,5 +1999,27 @@ func TestCacheRefreshRereadsWhenModuleRootChanged(t *testing.T) {
 	cache.mu.RUnlock()
 	if got != rootB {
 		t.Fatalf("Root в кэше = %q, want %q", got, rootB)
+	}
+}
+
+// TestCacheRefreshWarnSink: storage problems go to the warn sink, a module
+// that does not load stays silent (it is listed in SkippedModules and reports
+// its own error when run).
+func TestCacheRefreshWarnSink(t *testing.T) {
+	defer suppressLog(t)()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "bad.yaml"), "name: bad\ncommands:\n  empty: {}\n")
+	cache := New(&fakeStorage{saveErr: errSaveForTest}, AlwaysPolicy{})
+	var got []string
+	cache.SetWarn(func(m string) { got = append(got, m) })
+	res, err := cache.Refresh(discovery.NewGlobalSource(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Skipped != 1 {
+		t.Fatalf("Skipped = %d, want 1", res.Skipped)
+	}
+	if len(got) != 1 || !strings.HasPrefix(got[0], "modulecache: refresh: save: ") {
+		t.Errorf("warnings = %q, want only the save failure", got)
 	}
 }

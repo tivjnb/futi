@@ -40,6 +40,20 @@ type Cache struct {
 	entries         map[string]entry // in-memory: ALL (global + local)
 	persistentPaths map[string]bool  // set путей глобальных модулей
 	lastRefresh     time.Time        // для every_t_min политики и cacheFile
+	warnFn          func(string)     // sink for non-fatal problems; nil: the log package
+}
+
+// SetWarn sets the sink for non-fatal problems (an unreadable or unwritable
+// cache file, an unreadable manifest). Without it they go to the log package.
+func (c *Cache) SetWarn(fn func(string)) { c.warnFn = fn }
+
+// warnf reports a non-fatal problem.
+func (c *Cache) warnf(format string, args ...any) {
+	if c.warnFn != nil {
+		c.warnFn(fmt.Sprintf(format, args...))
+		return
+	}
+	log.Printf(format, args...)
 }
 
 // New создаёт Cache с заданными Storage и RefreshPolicy (DI).
@@ -185,7 +199,7 @@ func hashFile(path string) ([]byte, error) {
 func (c *Cache) Load() cacheFile {
 	cf, err := c.storage.Load()
 	if err != nil {
-		log.Printf("modulecache: load: %v", err)
+		c.warnf("modulecache: load: %v", err)
 		return cacheFile{}
 	}
 	c.mu.Lock()
@@ -226,7 +240,7 @@ func (c *Cache) Start(globalSource discovery.Source) error {
 		snapshot := c.buildCacheFile()
 		c.mu.Unlock()
 		if err := c.storage.Save(snapshot); err != nil {
-			log.Printf("modulecache: start: save: %v", err)
+			c.warnf("modulecache: start: save: %v", err)
 		}
 	}
 
@@ -312,7 +326,7 @@ func (c *Cache) Refresh(globalSource discovery.Source) (RefreshResult, error) {
 				Path:   child.ManifestPath,
 				Reason: fmt.Sprintf("stat: %v", err),
 			})
-			log.Printf("modulecache: refresh: stat %q: %v", child.ManifestPath, err)
+			c.warnf("modulecache: refresh: stat %q: %v", child.ManifestPath, err)
 			c.dropEntry(child.ManifestPath)
 			continue
 		}
@@ -335,7 +349,7 @@ func (c *Cache) Refresh(globalSource discovery.Source) (RefreshResult, error) {
 				Path:   child.ManifestPath,
 				Reason: fmt.Sprintf("hash: %v", err),
 			})
-			log.Printf("modulecache: refresh: hash %q: %v", child.ManifestPath, err)
+			c.warnf("modulecache: refresh: hash %q: %v", child.ManifestPath, err)
 			c.dropEntry(child.ManifestPath)
 			continue
 		}
@@ -347,7 +361,8 @@ func (c *Cache) Refresh(globalSource discovery.Source) (RefreshResult, error) {
 				Path:   child.ManifestPath,
 				Reason: fmt.Sprintf("load: %v", err),
 			})
-			log.Printf("modulecache: refresh: load %q: %v", child.ManifestPath, err)
+			// Not reported here: the reason is in SkippedModules, and running
+			// the module reports its own error.
 			c.dropEntry(child.ManifestPath)
 			continue
 		}
@@ -387,7 +402,7 @@ func (c *Cache) Refresh(globalSource discovery.Source) (RefreshResult, error) {
 
 	// Save вне лока — I/O не блокирует LoadModule.
 	if err := c.storage.Save(cf); err != nil {
-		log.Printf("modulecache: refresh: save: %v", err)
+		c.warnf("modulecache: refresh: save: %v", err)
 	}
 
 	return result, listErr

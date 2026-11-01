@@ -6,7 +6,7 @@ commands:
     cmd: "git status --short --branch"
   log:
     description: Compact commit history
-    params:
+    flags:
       - name: count
         type: int
         default: "10"
@@ -14,11 +14,11 @@ commands:
     cmd: "git log --oneline -n {{.count}}"
   switch:
     description: Switch to an existing branch
-    params:
+    flags:
       - name: branch
         required: true
         description: Branch name
-    cmd: "git switch -- {{quote .branch}}"
+    cmd: "git switch -- {{.branch}}"
   amend-noedit:
     description: Add staged changes to the last commit, keeping its message
     cmd: "git commit --amend --no-edit"

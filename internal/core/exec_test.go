@@ -16,7 +16,6 @@ import (
 
 	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/execmodule"
-	"github.com/tivjnb/futi/internal/modulerunner"
 )
 
 func TestResolveTarget(t *testing.T) {
@@ -29,11 +28,11 @@ func TestResolveTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tgt, err := rt.Resolve("m", "c")
+	tgt, _, err := rt.ResolveWords([]string{"m", "c"})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if got := tgt.Command().Cmd; got != "echo hi" {
+	if got := tgt.Command().Cmd.Text; got != "echo hi" {
 		t.Errorf("Command().Cmd = %q, want %q", got, "echo hi")
 	}
 	if got := tgt.ModuleName(); got != "mod" {
@@ -52,32 +51,44 @@ func TestResolveErrorClasses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src, err := rt.Source()
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	cases := []struct {
-		name, ns, cmd string
-		want          error
+		name  string
+		words []string
+		want  error
+		text  string
 	}{
-		{"missing module", "nope", "c", core.ErrNotFound},
-		{"missing command", "nodef", "zzz", core.ErrNotFound},
-		{"no default command", "nodef", "", core.ErrInvalidInput},
-		{"invalid namespace", "a..b", "c", core.ErrInvalidInput},
-		{"group requires subcommand", "group", "g", core.ErrInvalidInput},
+		{"missing module", []string{"nope", "c"}, core.ErrNotFound, `unknown command "nope" for "futi"`},
+		{"missing command", []string{"nodef", "zzz"}, core.ErrNotFound, `unknown command "zzz" for "futi nodef" (available: c)`},
+		{"module without cmd", []string{"nodef"}, core.ErrInvalidInput, `"futi nodef" requires a subcommand (available: c)`},
+		{"group requires subcommand", []string{"group", "g"}, core.ErrInvalidInput, `"futi group g" requires a subcommand (available: leaf)`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := rt.Resolve(tc.ns, tc.cmd)
+			_, _, err := rt.ResolveWords(tc.words)
 			if !errors.Is(err, tc.want) {
-				t.Fatalf("Resolve(%q, %q) err = %v, want class %v", tc.ns, tc.cmd, err, tc.want)
+				t.Fatalf("ResolveWords(%q) err = %v, want class %v", tc.words, err, tc.want)
 			}
-			_, base := modulerunner.Resolve(src, nil, tc.ns, tc.cmd)
-			if base == nil || err.Error() != base.Error() {
-				t.Errorf("text = %q, want %v", err, base)
+			if err.Error() != tc.text {
+				t.Errorf("text = %q, want %q", err, tc.text)
 			}
 		})
+	}
+}
+
+func TestResolveWordsRest(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "m.yaml"), "name: mod\ncommands:\n  c:\n    cmd: echo hi\n")
+	rt, err := core.NewRuntime(core.Options{ModulesDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tgt, rest, err := rt.ResolveWords([]string{"m.c", "--x", "1", "--", "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tgt.Command().Cmd.Text != "echo hi" || !reflect.DeepEqual(rest, []string{"--x", "1", "--", "a"}) {
+		t.Errorf("cmd = %q, rest = %q", tgt.Command().Cmd.Text, rest)
 	}
 }
 
@@ -91,7 +102,7 @@ func newExecRT(t *testing.T, opts core.Options, cmd string) (*core.Runtime, *cor
 	if err != nil {
 		t.Fatal(err)
 	}
-	tgt, err := rt.Resolve("m", "c")
+	tgt, _, err := rt.ResolveWords([]string{"m", "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,12 +261,12 @@ func TestExecuteDryRun(t *testing.T) {
 
 func TestExecuteValidationIsInvalidInput(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "m.yaml"), "name: m\ncommands:\n  c:\n    cmd: echo {{.x}}\n    params:\n      - name: x\n        required: true\n")
+	writeFile(t, filepath.Join(dir, "m.yaml"), "name: m\ncommands:\n  c:\n    cmd: echo {{.x}}\n    args:\n      - name: x\n        required: true\n")
 	rt, err := core.NewRuntime(core.Options{ModulesDir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	tgt, err := rt.Resolve("m", "c")
+	tgt, _, err := rt.ResolveWords([]string{"m", "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +274,7 @@ func TestExecuteValidationIsInvalidInput(t *testing.T) {
 	if !errors.Is(err, core.ErrInvalidInput) {
 		t.Fatalf("err = %v, want ErrInvalidInput", err)
 	}
-	if want := `modulerunner: execmodule: required param "x" missing`; err.Error() != want {
+	if want := "missing argument <x>"; err.Error() != want {
 		t.Errorf("text = %q, want %q", err, want)
 	}
 }
@@ -360,7 +371,7 @@ func TestResolveExecuteLoadsModuleOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tgt, err := rt.Resolve("m", "c")
+	tgt, _, err := rt.ResolveWords([]string{"m", "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +400,7 @@ func TestExecuteOutputLimitParallelStreams(t *testing.T) {
 func TestExecuteConcurrent(t *testing.T) {
 	skipWindows(t)
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "m.yaml"), "name: m\ncommands:\n  c:\n    cmd: echo {{.i}}\n    params:\n      - name: i\n        required: true\n")
+	writeFile(t, filepath.Join(dir, "m.yaml"), "name: m\ncommands:\n  c:\n    cmd: echo {{.i}}\n    args:\n      - name: i\n        required: true\n")
 	rt, err := core.NewRuntime(core.Options{ModulesDir: dir, Exec: core.CLIExecPolicy})
 	if err != nil {
 		t.Fatal(err)
@@ -399,14 +410,14 @@ func TestExecuteConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			tgt, err := rt.Resolve("m", "c")
+			tgt, _, err := rt.ResolveWords([]string{"m", "c"})
 			if err != nil {
 				t.Error(err)
 				return
 			}
 			var out bytes.Buffer
 			want := strconv.Itoa(i)
-			if _, err := rt.Execute(context.Background(), tgt, core.ExecuteRequest{Params: map[string]string{"i": want}, Stdout: &out}); err != nil {
+			if _, err := rt.Execute(context.Background(), tgt, core.ExecuteRequest{Inputs: map[string]any{"i": want}, Stdout: &out}); err != nil {
 				t.Error(err)
 				return
 			}
@@ -416,4 +427,112 @@ func TestExecuteConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// writeScenarioModules writes the k8s and files modules of the scenario corpus.
+func writeScenarioModules(t *testing.T) *core.Runtime {
+	t.Helper()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "k8s.yaml"), `
+name: k8s
+commands:
+  logs:
+    args:
+      - {name: pod, required: true}
+    flags:
+      - {name: follow, type: bool, short: f}
+      - {name: tail, type: int, default: "100"}
+    cmd: "kubectl logs {{if .follow}}-f{{end}} --tail={{.tail}} -- {{.pod}}"
+`)
+	writeFile(t, filepath.Join(dir, "files.yaml"), `
+name: files
+commands:
+  cp:
+    args:
+      - {name: src, required: true}
+      - {name: dst, required: true}
+    cmd: "cp {{.src}} {{.dst}}"
+  copy:
+    args:
+      - {name: src, required: true, variadic: true}
+      - {name: dst, required: true}
+    cmd: "cp -- {{.src}} {{.dst}}"
+`)
+	rt, err := core.NewRuntime(core.Options{ModulesDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rt
+}
+
+func TestExecuteInputs(t *testing.T) {
+	rt := writeScenarioModules(t)
+	tests := []struct {
+		name    string
+		words   []string
+		inputs  map[string]any
+		argv    []string
+		wantErr string // substring; empty: success
+		invalid bool   // the error is ErrInvalidInput
+	}{
+		{"defaults apply", []string{"k8s", "logs"}, map[string]any{"pod": "mypod"},
+			[]string{"kubectl", "logs", "--tail=100", "--", "mypod"}, "", false},
+		{"bool and int", []string{"k8s", "logs"}, map[string]any{"pod": "mypod", "follow": true, "tail": "50"},
+			[]string{"kubectl", "logs", "-f", "--tail=50", "--", "mypod"}, "", false},
+		{"value with space is one element", []string{"k8s", "logs"}, map[string]any{"pod": "my pod"},
+			[]string{"kubectl", "logs", "--tail=100", "--", "my pod"}, "", false},
+		{"variadic list", []string{"files", "copy"}, map[string]any{"src": []string{"a.txt", "b.txt"}, "dst": "dir/"},
+			[]string{"cp", "--", "a.txt", "b.txt", "dir/"}, "", false},
+		{"missing required", []string{"k8s", "logs"}, nil, nil, "missing argument <pod>", true},
+		{"unknown input", []string{"k8s", "logs"}, map[string]any{"pod": "x", "nope": "1"}, nil, `unknown input "nope"`, true},
+		{"bad int", []string{"k8s", "logs"}, map[string]any{"pod": "x", "tail": "many"}, nil, `invalid int value "many" for --tail`, true},
+		{"dash value is refused", []string{"files", "cp"}, map[string]any{"src": "-rf", "dst": "d"}, nil,
+			`value "-rf" for <src> starts with "-" and would be read as an option by cp`, true},
+		{"dash value after literal -- is fine", []string{"k8s", "logs"}, map[string]any{"pod": "-weird"},
+			[]string{"kubectl", "logs", "--tail=100", "--", "-weird"}, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tgt, _, err := rt.ResolveWords(tt.words)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := rt.Execute(context.Background(), tgt, core.ExecuteRequest{Inputs: tt.inputs, DryRun: true})
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+				}
+				if errors.Is(err, core.ErrInvalidInput) != tt.invalid {
+					t.Errorf("errors.Is(err, ErrInvalidInput) = %v, want %v", !tt.invalid, tt.invalid)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if !reflect.DeepEqual(res.Argv, tt.argv) {
+				t.Errorf("Argv = %q, want %q", res.Argv, tt.argv)
+			}
+		})
+	}
+}
+
+func TestExecuteEmptyArgv(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "m.yaml"), "name: m\ncommands:\n  c:\n    args:\n      - name: x\n    cmd: \"{{.x}}\"\n")
+	rt, err := core.NewRuntime(core.Options{ModulesDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tgt, _, err := rt.ResolveWords([]string{"m", "c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = rt.Execute(context.Background(), tgt, core.ExecuteRequest{DryRun: true})
+	if err == nil || !strings.Contains(err.Error(), "command rendered to empty argv") {
+		t.Fatalf("err = %v, want 'command rendered to empty argv'", err)
+	}
+	if errors.Is(err, core.ErrInvalidInput) {
+		t.Errorf("err = %v, an empty argv is not an input error", err)
+	}
 }

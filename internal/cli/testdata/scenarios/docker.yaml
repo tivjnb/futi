@@ -1,0 +1,21 @@
+name: docker
+cmd: "docker ps"
+commands:
+  build:
+    args:
+      - name: context
+        default: "."
+    flags:
+      - name: tag
+        required: true
+        short: t
+      - name: file
+        default: Dockerfile
+    cmd: "docker build --file={{.file}} --tag={{.tag}} -- {{.context}}"
+  run:
+    args:
+      - name: image
+        required: true
+      - name: docker_args
+        rest: true
+    cmd: "docker run {{.image}} {{.docker_args}}"

@@ -38,14 +38,20 @@ commands:
     cmd: "docker ps"
   build:
     description: Build image
-    params:
+    flags:
       - name: tag
         type: string
         required: true
       - name: force
         type: bool
         default: false
-    cmd: "docker build -t {{.tag}}"
+    cmd: "docker build -t {{.tag}} {{if .force}}-f{{end}}"
+  run:
+    description: Run container
+    args:
+      - {name: image, required: true}
+      - {name: docker_args, rest: true}
+    cmd: "docker run {{.image}} {{.docker_args}}"
 `)
 	writeFile(t, filepath.Join(dir, "git.yaml"), `
 name: git
@@ -68,7 +74,7 @@ func TestRunCompleteOutputFormat(t *testing.T) {
 	}
 
 	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	if len(lines) != 5 {
+	if len(lines) != 4 {
 		t.Fatalf("unexpected lines: %v", lines)
 	}
 	if lines[0] != "build\tBuild image" {
@@ -86,8 +92,8 @@ func TestRunCompleteDirectiveDefault(t *testing.T) {
 	src := testSourceBuilder(t)
 	var out bytes.Buffer
 
-	// После "--" — directive Default (0), подсказок нет.
-	err := runComplete(&out, nil, src, nil, []string{"docker", "ps", "--", "x"})
+	// Inside the rest arg the tokens are not ours: directive Default (0), no matches.
+	err := runComplete(&out, nil, src, nil, []string{"docker", "run", "nginx", ""})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -266,10 +272,10 @@ func TestRunCompleteSanitizesSpecialChars(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// 4 builtin (cache/completion/list/modules) + normal + weird + directive.
+	// 5 builtin (cache/completion/help/list/modules) + normal + weird + directive.
 	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	if len(lines) != 7 {
-		t.Fatalf("expected 7 lines (4 builtins + 2 modules + directive), got %d: %q", len(lines), out.String())
+	if len(lines) != 8 {
+		t.Fatalf("expected 8 lines (5 builtins + 2 modules + directive), got %d: %q", len(lines), out.String())
 	}
 	for _, ln := range lines {
 		if strings.Contains(ln, "\r") {

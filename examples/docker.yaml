@@ -3,14 +3,14 @@ description: Docker shortcuts
 commands:
   ps:
     description: List containers
-    params:
+    flags:
       - name: all
         type: bool
         description: Include stopped containers
-    cmd: "docker ps{{if .all}} --all{{end}}"
+    cmd: "docker ps {{if .all}}--all{{end}}"
   logs:
     description: Show container logs
-    params:
+    flags:
       - name: container
         required: true
         description: Container name or ID
@@ -21,7 +21,7 @@ commands:
         type: int
         default: "100"
         description: Number of lines from the end of the logs
-    cmd: "docker logs --tail {{.tail}}{{if .follow}} --follow{{end}} -- {{quote .container}}"
+    cmd: "docker logs --tail={{.tail}} {{if .follow}}--follow{{end}} -- {{.container}}"
   prune:
     description: "Remove ALL stopped containers, unused networks, dangling images and build cache. IRREVERSIBLE: removed data cannot be restored"
     cmd: "docker system prune --force"

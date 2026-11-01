@@ -1,0 +1,12 @@
+name: db
+commands:
+  migrate:
+    args:
+      - name: steps
+        type: int
+    cmd: "db-migrate {{if .steps}}--steps={{.steps}}{{end}}"
+    commands:
+      up:
+        cmd: "db-migrate up"
+      down:
+        cmd: "db-migrate down"
