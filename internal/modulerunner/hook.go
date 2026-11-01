@@ -2,10 +2,12 @@ package modulerunner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tivjnb/futi/internal/argvtmpl"
 	"github.com/tivjnb/futi/internal/execmodule"
@@ -40,9 +42,19 @@ func RunHook(ctx context.Context, hook execmodule.CmdSpec, moduleRoot, moduleNam
 	}
 	args, err := tmpl.Eval(nil, argvtmpl.Values{ModuleName: moduleName, ModuleRoot: moduleRoot})
 	if err != nil {
+		var terr *argvtmpl.Error
+		if errors.As(err, &terr) && terr.Msg == argvtmpl.EmptyArgvMsg {
+			return errors.New("modulerunner: hook rendered to empty argv")
+		}
 		return fmt.Errorf("modulerunner: %w", err)
 	}
 	argv := argvtmpl.Argv(args)
+	// A program path with a separator is relative to the module root, like
+	// the cwd of the hook; the executor would resolve it against futi's cwd.
+	// A bare name is still looked up in PATH.
+	if prog := argv[0]; !filepath.IsAbs(prog) && strings.ContainsAny(prog, `/`+string(filepath.Separator)) {
+		argv[0] = filepath.Join(moduleRoot, prog)
+	}
 
 	env := os.Environ()
 	env = append(env,

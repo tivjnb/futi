@@ -36,25 +36,14 @@ func raiseInterrupt(err error) {
 }
 
 // formatRunError форматирует ошибку выполнения команды для вывода в stderr.
-// Для *execmodule.TemplateError (ошибка парсинга/выполнения cmd-шаблона) даёт
-// дружелюбное многострочное сообщение без длинной цепочки обёрток и технического
-// трейса text/template. Для остальных ошибок — "run: <err>" как раньше.
 func formatRunError(err error) string {
-	var tmplErr *execmodule.TemplateError
-	if errors.As(err, &tmplErr) {
-		return fmt.Sprintf(
-			"error: failed to render template.\n  Template: %s\n  Cause: %v",
-			tmplErr.Cmd, tmplErr.Cause,
-		)
-	}
 	return fmt.Sprintf("run: %v", err)
 }
 
 // runErrorText — текст ошибки запуска: короткий, если причина уже напечатана
-// предупреждением, иначе formatRunError. Ошибки шаблона не сокращаются.
+// предупреждением, иначе formatRunError.
 func runErrorText(err error, path []string) string {
-	var tmplErr *execmodule.TemplateError
-	if !errors.As(err, &tmplErr) && coveredByWarning(err) {
+	if coveredByWarning(err) {
 		return coveredReadMessage("run", strings.Join(path, "."))
 	}
 	return formatRunError(err)

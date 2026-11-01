@@ -51,6 +51,10 @@ func Argv(args []Arg) []string {
 	return out
 }
 
+// EmptyArgvMsg is the Msg of the error for a template that rendered to no
+// argv elements.
+const EmptyArgvMsg = "command rendered to empty argv"
+
 // Eval evaluates the template to argv. It does not require a prior Check: a
 // template that Check rejects evaluates to something unspecified, but
 // without a panic.
@@ -74,7 +78,7 @@ func (t *Template) Eval(inputs []Input, v Values) ([]Arg, error) {
 		e.flush()
 	}
 	if len(e.out) == 0 {
-		return nil, &Error{Msg: "command rendered to empty argv"}
+		return nil, &Error{Msg: EmptyArgvMsg}
 	}
 	return e.out, nil
 }

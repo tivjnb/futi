@@ -163,3 +163,42 @@ func TestRunHookInputRefFails(t *testing.T) {
 		t.Fatal("expected error for an input reference in a hook")
 	}
 }
+
+// A relative program path is resolved from the module root, not from the cwd
+// of futi: a same-named script in the caller's cwd must not run.
+func TestRunHookRelativeProgramFromModuleRoot(t *testing.T) {
+	module, foreign := t.TempDir(), t.TempDir()
+	script := func(dir, text string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "setup.sh"), []byte("#!/bin/sh\necho "+text+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script(module, "module")
+	script(foreign, "foreign")
+	if err := os.MkdirAll(filepath.Join(module, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(module, "setup.sh"), filepath.Join(module, "scripts", "x.sh")); err != nil {
+		t.Fatal(err)
+	}
+	script(module, "module")
+	t.Chdir(foreign)
+	for _, prog := range []string{"./setup.sh", "scripts/x.sh"} {
+		var out bytes.Buffer
+		if err := RunHook(context.Background(), hookList(prog), module, "m", nil, &out, &out, executor.GroupIsolateWithoutTTY, true); err != nil {
+			t.Fatalf("RunHook(%s): %v", prog, err)
+		}
+		if got := strings.TrimSpace(out.String()); got != "module" {
+			t.Fatalf("RunHook(%s) ran %q, want the module script", prog, got)
+		}
+	}
+}
+
+func TestRunHookEmptyArgv(t *testing.T) {
+	t.Setenv("FUTI_TEST_EMPTY", "")
+	err := RunHook(context.Background(), hookText("{{.env.FUTI_TEST_EMPTY}}"), t.TempDir(), "m", nil, io.Discard, io.Discard, executor.GroupIsolateWithoutTTY, true)
+	if err == nil || err.Error() != "modulerunner: hook rendered to empty argv" {
+		t.Fatalf("err = %v, want hook rendered to empty argv", err)
+	}
+}

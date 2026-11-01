@@ -796,7 +796,7 @@ $ echo $?
 - a module with neither `cmd` nor `commands`
 - a command with neither `cmd` nor `commands` (a useless command); a `cmd` consisting only of spaces counts as empty
 - `params` or `positional.min` without `cmd` — at any level (module, command); parameters are not inherited by subcommands
-- a template syntax error in `cmd`, `attach`, `detach` (only parsing is checked, not variable names)
+- a template error in `cmd`, `attach`, `detach`; hooks may refer only to `env`, `module_root` and `module_name`
 - an invalid command name in `commands`: empty, starts with `-`, contains `.`, whitespace or control characters
 - duplicate `params` names in a command
 - a parameter `type` outside `{string, bool, int}` (empty = `string`)
@@ -808,6 +808,7 @@ $ echo $?
 
 - a command with `commands` but without `cmd` — calling without a subcommand fails at runtime
 - a command with subcommands and a positional string arg — a word equal to a subcommand name is taken as the subcommand; pass such a value after `--`
+- a hook with a separate `&&`, `||`, `|`, `>`, `<` or `>>` word — hooks run without a shell, so it is passed to the program as an argument; use `[sh, -c, "…"]`
 
 Validation is recursive over all nested `commands`. The order of errors is deterministic: unknown keys, then `attach`/`detach` and the empty module, then `(default)`, then commands in alphabetical order (a parent before its nested commands). On a regular call (`futi <ns> <cmd>`) validation runs automatically when the module is loaded; `futi modules validate <ns>` is needed to see **all** errors in one pass and the warnings (which are not shown at runtime).
 

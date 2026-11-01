@@ -12,29 +12,7 @@ import (
 	"testing"
 
 	"github.com/tivjnb/futi/internal/core"
-	"github.com/tivjnb/futi/internal/execmodule"
 )
-
-func TestFormatRunErrorTemplate(t *testing.T) {
-	tmplErr := &execmodule.TemplateError{
-		Cmd:   "echo {{index .args_list 0}}",
-		Cause: errors.New("slice index out of range"),
-	}
-	out := formatRunError(tmplErr)
-	if !strings.Contains(out, "failed to render template") {
-		t.Fatalf("expected friendly header, got: %q", out)
-	}
-	if !strings.Contains(out, "Template: echo {{index .args_list 0}}") {
-		t.Fatalf("expected template shown, got: %q", out)
-	}
-	if !strings.Contains(out, "Cause: slice index out of range") {
-		t.Fatalf("expected cause shown, got: %q", out)
-	}
-	// Длинная цепочка обёрток не должна появляться.
-	if strings.Contains(out, "modulerunner:") || strings.Contains(out, "execmodule:") {
-		t.Fatalf("expected no wrapper chain, got: %q", out)
-	}
-}
 
 func TestFormatRunErrorGeneric(t *testing.T) {
 	err := errors.New("some other error")
