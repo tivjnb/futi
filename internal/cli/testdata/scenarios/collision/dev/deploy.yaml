@@ -1,0 +1,12 @@
+name: deploy
+commands:
+  run:
+    args:
+      - name: target
+        required: true
+    flags:
+      - name: dry
+        type: bool
+      - name: dry_run
+        type: bool
+    cmd: "deploy.sh {{if .dry}}--dry{{end}} {{if .dry_run}}--dry-run{{end}} {{.target}}"

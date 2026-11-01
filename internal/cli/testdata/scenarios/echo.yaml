@@ -1,0 +1,5 @@
+name: echo
+args:
+  - name: words
+    variadic: true
+cmd: "echo {{.words}}"

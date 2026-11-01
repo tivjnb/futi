@@ -1,0 +1,24 @@
+name: files
+commands:
+  copy:
+    args:
+      - name: src
+        required: true
+        variadic: true
+      - name: dst
+        required: true
+    flags:
+      - name: force
+        type: bool
+    cmd: "cp {{if .force}}-f{{end}} -- {{.src}} {{.dst}}"
+  grep:
+    args:
+      - name: pattern
+        required: true
+      - name: paths
+        variadic: true
+    flags:
+      - name: ignore_case
+        type: bool
+        short: i
+    cmd: "grep {{if .ignore_case}}-i{{end}} -- {{.pattern}} {{.paths}}"
