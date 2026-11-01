@@ -686,3 +686,14 @@ func TestInitDefaultsDescription(t *testing.T) {
 		t.Fatalf("manifest lacks default description:\n%s", data)
 	}
 }
+
+func TestInitRejectsTemplateCommandName(t *testing.T) {
+	t.Chdir(t.TempDir())
+	err := Init(io.Discard, io.Discard, InitOptions{Path: "m", Commands: []string{"a{{b"}})
+	if err == nil || !strings.Contains(err.Error(), `"{{"`) {
+		t.Fatalf("err = %v, want an error naming \"{{\"", err)
+	}
+	if _, statErr := os.Stat(".futi"); statErr == nil {
+		t.Fatal(".futi must not be created")
+	}
+}

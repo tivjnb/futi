@@ -151,7 +151,7 @@ func TestParseArgsHelpHelpIsFutiHelp(t *testing.T) {
 
 func TestParseArgsFlagsBeforePathIsUsageError(t *testing.T) {
 	_, err := parseArgs([]string{"--tag", "x", "docker", "build"})
-	if err == nil || !strings.HasPrefix(err.Error(), "usage: ") || !strings.Contains(err.Error(), "path goes before flags") {
+	if err == nil || !strings.HasPrefix(err.Error(), "usage: ") || !strings.Contains(err.Error(), "put the full command path before flags") {
 		t.Fatalf("err = %v, want usage error with path hint", err)
 	}
 	if errors.Is(err, errHelp) {
@@ -174,7 +174,7 @@ func TestParseArgsEmptyPathHintOnlyWithFlags(t *testing.T) {
 	if err == nil || !strings.HasPrefix(err.Error(), "usage: ") {
 		t.Fatalf("err = %v, want usage error", err)
 	}
-	if strings.Contains(err.Error(), "path goes before flags") {
+	if strings.Contains(err.Error(), "put the full command path before flags") {
 		t.Fatalf("err = %q, must not mention flags when none given", err)
 	}
 }

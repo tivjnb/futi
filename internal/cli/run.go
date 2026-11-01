@@ -95,19 +95,41 @@ func runParsed(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, r
 	return runTarget(ctx, stdin, stdout, stderr, rt, t, path, rest, pa.dryRun)
 }
 
-// withSubcommandHint appends the path hint to a parse error when a token
-// before "--" names a subcommand of cmd: the user put flags before the path
-// (futi db --verbose migrate).
+// withSubcommandHint appends the path hint to a parse error when a word
+// naming a subcommand of cmd follows a chain of flags that take no value:
+// the user put flags before the path (futi db --verbose migrate). A word that
+// is the value of a flag, or that follows a positional, is not a path word.
 func withSubcommandHint(msg string, cmd *execmodule.Command, rest []string) string {
-	for _, tok := range rest {
+	for i := 0; i < len(rest); i++ {
+		tok := rest[i]
 		if tok == "--" {
 			break
 		}
-		if _, ok := cmd.Commands[tok]; ok {
-			return msg + " (put the full command path before flags)"
+		if !modulerunner.IsFlagToken(tok) {
+			if _, ok := cmd.Commands[tok]; ok && i > 0 {
+				return msg + " (" + modulerunner.PathBeforeFlagsHint + ")"
+			}
+			break
+		}
+		if flagTakesValue(cmd, tok) {
+			i++ // the next token is the value
 		}
 	}
 	return msg
+}
+
+// flagTakesValue reports that tok is a declared non-bool flag written without
+// "=": its value is the next token.
+func flagTakesValue(cmd *execmodule.Command, tok string) bool {
+	for _, f := range cmd.Flags {
+		if f.Type == "bool" {
+			continue
+		}
+		if tok == "--"+strings.ReplaceAll(f.Name, "_", "-") || (f.Short != "" && tok == "-"+f.Short) {
+			return true
+		}
+	}
+	return false
 }
 
 // runTarget runs an already resolved target reached by path: parsing of the

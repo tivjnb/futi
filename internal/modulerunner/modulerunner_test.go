@@ -1568,8 +1568,8 @@ func TestPrepareDashGuard(t *testing.T) {
 			if !errors.As(err, &dash) {
 				t.Fatalf("err = %v, want *argvtmpl.DashError", err)
 			}
-			if dash.Error() != tt.want {
-				t.Errorf("DashError = %q, want %q", dash.Error(), tt.want)
+			if err.Error() != tt.want {
+				t.Errorf("err = %q, want exactly %q", err.Error(), tt.want)
 			}
 		})
 	}

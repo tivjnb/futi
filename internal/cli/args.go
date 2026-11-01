@@ -61,7 +61,7 @@ func parseArgs(args []string) (*parsedArgs, error) {
 		}
 		usage := "usage: futi <namespace...> <command> [flags] [args]"
 		if len(flags) > 0 {
-			usage += " (" + pathBeforeFlagsHint + ")"
+			usage += " (" + modulerunner.PathBeforeFlagsHint + ")"
 		}
 		return nil, errors.New(usage)
 	}
@@ -107,9 +107,6 @@ func splitInputs(rest []string) (flags, argsList []string) {
 	}
 	return flags, nil
 }
-
-// pathBeforeFlagsHint — подсказка про порядок: путь команды до флагов.
-const pathBeforeFlagsHint = "the command path goes before flags"
 
 func hasHelpFlag(flags []string) bool {
 	for _, f := range flags {

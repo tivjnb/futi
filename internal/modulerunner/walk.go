@@ -279,7 +279,7 @@ func noCommandError(source discovery.Source, node *Node, rest []string) error {
 			break // what follows "--" are command args, not a misplaced path
 		}
 		if slices.Contains(children, w) {
-			err.msg += " (put the full command path before flags)"
+			err.msg += " (" + PathBeforeFlagsHint + ")"
 			break
 		}
 	}
@@ -311,6 +311,9 @@ func available(names []string) string {
 	}
 	return " (available: " + strings.Join(names, ", ") + ")"
 }
+
+// PathBeforeFlagsHint is the hint for flags put before the command path.
+const PathBeforeFlagsHint = "put the full command path before flags"
 
 // IsFlagToken reports a token starting with "-" and longer than one character
 // ("--" included): the token that ends a command path.

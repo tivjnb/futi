@@ -255,7 +255,8 @@ TEMPLATING
     {{.name}}                       Value of an arg or flag
     {{.env.FOO}}                    Environment variable FOO (error if unset)
     {{if .follow}}...{{end}}        Conditional: a bool flag is true, any
-                                    other input is set (also .env.FOO)
+                                    other input is set; .env.FOO is set
+                                    and non-empty
     {{range .files}}...{{.}}...{{end}}  Repeat for each value of a variadic input
     {{.module_root}}                Directory of the module
     {{.module_name}}                Name of the module
@@ -263,9 +264,10 @@ TEMPLATING
   Commands run without a shell, and a value is never split again: it is
   exactly one argument, whatever it contains:
     cmd: "echo {{.msg}}"            --msg "hello world" is passed as one argument
-  An argument that starts with a value beginning with "-" is refused (the
-  program would read it as an option), unless it comes after a literal "--"
-  in cmd or the input has "allow_dash: true".
+  An argument whose first character comes from a value starting with "-" is
+  refused (the program would read it as an option), unless the input has
+  "allow_dash: true", or cmd has a literal "--" before it and every argument
+  after that "--" is exactly one input, with no literal characters.
   Shell features (pipes, redirects, globs) are not available in "cmd".
 
 FLAGS

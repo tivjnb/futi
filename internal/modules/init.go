@@ -155,6 +155,12 @@ func Init(out, errOut io.Writer, opts InitOptions) error {
 		return err
 	}
 
+	for _, c := range opts.Commands {
+		if err := checkCommandName(c); err != nil {
+			return err
+		}
+	}
+
 	name := filepath.Base(opts.Path)
 	name = strings.TrimSuffix(name, ".yaml")
 	name = strings.TrimSuffix(name, ".yml")

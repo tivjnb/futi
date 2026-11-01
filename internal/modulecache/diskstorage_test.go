@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tivjnb/futi/internal/execmodule"
 )
 
 // TestDiskStorageLoadMissingFileReturnsEmpty проверяет, что отсутствующий
@@ -380,5 +382,34 @@ func TestDiskStorageLoadOldVersionIsSilentRebuild(t *testing.T) {
 	}
 	if len(cf.Entries) != 0 {
 		t.Fatalf("Load version 2: got %d entries, want 0", len(cf.Entries))
+	}
+}
+
+// TestDiskStorageKeepsEmptyDefault: `default: ""` survives the gob round trip.
+// A pointer to an empty string would decode as nil (unset input), and the
+// cached module is not re-checked.
+func TestDiskStorageKeepsEmptyDefault(t *testing.T) {
+	dir := t.TempDir()
+	mod, err := execmodule.ParseManifest([]byte("name: m\nflags:\n  - {name: x, default: \"\"}\n  - {name: y}\ncmd: \"echo {{.x}} {{.y}}\"\n"), "m.yaml", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewDiskStorage(filepath.Join(dir, "cache.gob"))
+	if err := s.Save(cacheFile{Version: cacheFileVersion, Entries: map[string]entry{"m.yaml": {Module: mod}}}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cf, err := s.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s.binaryID == "" {
+		t.Skip("binary identity unavailable")
+	}
+	flags := cf.Entries["m.yaml"].Module.Flags
+	if flags[0].Default == nil || *flags[0].Default != "" {
+		t.Errorf("x.Default = %v, want pointer to empty string", flags[0].Default)
+	}
+	if flags[1].Default != nil {
+		t.Errorf("y.Default = %v, want nil", flags[1].Default)
 	}
 }

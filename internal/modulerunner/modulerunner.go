@@ -110,7 +110,7 @@ func (r *Resolved) Prepare(vals map[string]argvtmpl.Value) (*Prepared, error) {
 	}
 	argv := argvtmpl.Argv(args)
 	if err := argvtmpl.CheckDash(args, specs, filepath.Base(argv[0])); err != nil {
-		return nil, fmt.Errorf("modulerunner: %w", err)
+		return nil, err // the *argvtmpl.DashError text is fixed by the spec
 	}
 	return &Prepared{Argv: argv, Args: args, ModuleName: moduleName, ModuleRoot: r.ModuleRoot}, nil
 }

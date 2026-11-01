@@ -292,6 +292,47 @@ func TestParseErrorKeepsPathHint(t *testing.T) {
 	}
 }
 
+// The path hint only follows flags that take no value: a word equal to a
+// subcommand name is a flag value or a positional elsewhere.
+func TestParseErrorPathHintNotFalse(t *testing.T) {
+	mods := t.TempDir()
+	writeFile(t, filepath.Join(mods, "db.yaml"), `name: db
+commands:
+  migrate:
+    args:
+      - {name: steps}
+    flags:
+      - {name: name}
+      - {name: force, type: bool, short: f}
+    cmd: "echo {{.steps}} {{.name}} {{if .force}}f{{end}}"
+    commands:
+      up:
+        cmd: echo up
+`)
+	const hint = "put the full command path before flags"
+	for _, tt := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"subcommand name as flag value", []string{"db", "migrate", "--name", "up", "--bad"}, false},
+		{"subcommand name as short flag value", []string{"db", "migrate", "-f", "--bad"}, false},
+		{"subcommand name after a positional", []string{"db", "migrate", "5", "up"}, false},
+		{"subcommand name after a bool flag", []string{"db", "migrate", "--bad", "up"}, true},
+		{"subcommand name after a bool flag, known", []string{"db", "migrate", "-f", "up", "x"}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, stderr, code := runFutiBinary(t, mods, tt.args...)
+			if code != 1 {
+				t.Fatalf("code = %d, stderr = %q, want 1", code, stderr)
+			}
+			if got := strings.Contains(stderr, hint); got != tt.want {
+				t.Errorf("hint present = %v, want %v; stderr = %q", got, tt.want, stderr)
+			}
+		})
+	}
+}
+
 func TestRunSystemHelpPartialListing(t *testing.T) {
 	dirA := t.TempDir()
 	dirB := filepath.Join(t.TempDir(), "missing")
