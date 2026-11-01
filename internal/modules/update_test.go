@@ -1030,3 +1030,23 @@ func TestUpdateWarnsNewShadowing(t *testing.T) {
 		})
 	}
 }
+
+// Declining the replacement leaves the old tree, so the warning about the new
+// shadowing subcommand (which would not be there) must not be printed.
+func TestUpdateDeclineDoesNotWarnAboutShadowing(t *testing.T) {
+	src, dest := installForUpdate(t)
+	setStdinTerminal(t, true)
+	writeFile(t, filepath.Join(dest, "config.yaml"), shadowV1)
+	writeFile(t, filepath.Join(src, "config.yaml"), shadowV2)
+
+	_, stderr, err := runUpdateQR(t, strings.NewReader("n\n"))
+	if !errors.Is(err, errUpdateNotConfirmed) {
+		t.Fatalf("err = %v, want update not confirmed", err)
+	}
+	if !strings.Contains(stderr, "Replace module files? [y/N] ") {
+		t.Fatalf("stderr = %q, want the replace question", stderr)
+	}
+	if strings.Contains(stderr, "Warning: module") {
+		t.Errorf("stderr = %q, want no shadowing warning", stderr)
+	}
+}

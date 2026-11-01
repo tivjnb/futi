@@ -273,3 +273,21 @@ func TestListCollisionWithPartialListing(t *testing.T) {
 		t.Errorf("Children = %+v, Warnings = %q, want the namespace and module children and the collision", res.Children, res.Warnings)
 	}
 }
+
+// Child names of `list <ns>` are relative to ns: the loaded modules must get
+// the full address, or a collision of a nested module is not found.
+func TestListNestedNamespaceCollisionWarning(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "ns", "a.yaml"), "name: a\ncommands:\n  b:\n    cmd: echo\n")
+	writeFile(t, filepath.Join(dir, "ns", "a", "b.yaml"), "name: b\ncmd: echo\n")
+	src := discovery.NewGlobalSource(dir)
+	for _, recurse := range []bool{false, true} {
+		res, err := core.ListIn(src, nil, "ns", recurse)
+		if err != nil {
+			t.Fatalf("ListIn(recurse=%v) err = %v", recurse, err)
+		}
+		if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], `path "ns a b" is ambiguous`) {
+			t.Errorf("ListIn(ns, recurse=%v).Warnings = %q, want one collision of \"ns a b\"", recurse, res.Warnings)
+		}
+	}
+}

@@ -8,7 +8,14 @@ import (
 )
 
 func TestBatchCheck(t *testing.T) {
-	found := func(string) (string, error) { return `C:/x/deploy.cmd`, nil }
+	// The lookup finds only argv0: a check that looks up another word (an
+	// argument, the module name) gets "not found" and the test fails.
+	found := func(name string) (string, error) {
+		if name != "deploy" {
+			return "", errors.New("looked up " + name + ", want deploy")
+		}
+		return `C:/x/deploy.cmd`, nil
+	}
 	missing := func(string) (string, error) { return "", errors.New("not found") }
 	unsafe := []argvtmpl.Arg{{Value: "a&b", Users: []string{"name"}}}
 	literal := []argvtmpl.Arg{{Value: "a&b"}}

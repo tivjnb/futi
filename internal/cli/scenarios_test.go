@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/tivjnb/futi/internal/argvtmpl"
+	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/inputs"
 )
 
@@ -246,39 +247,47 @@ func TestScenarioS25Completion(t *testing.T) {
 }
 
 // S26: an MCP-style call binds JSON inputs to the template; the schema
-// guards the pod name.
+// guards the pod name. The schemas and templates are those of the fixtures.
 func TestScenarioS26JSONInputs(t *testing.T) {
-	logsArgs := []inputs.Spec{{Name: "pod", Required: true}}
-	logsFlags := []inputs.Spec{
-		{Name: "follow", Type: "bool", Short: "f", Flag: true},
-		{Name: "tail", Type: "int", Default: "100", HasDefault: true, Flag: true},
+	mods := scenarioModules(t)
+	load := func(file string, path ...string) *execmodule.Command {
+		t.Helper()
+		mod, err := execmodule.LoadModule(filepath.Join(mods, file), mods)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := &mod.Command
+		for _, name := range path {
+			if cmd = cmd.Commands[name]; cmd == nil {
+				t.Fatalf("%s: no command %q", file, name)
+			}
+		}
+		return cmd
 	}
-	runArgs := []inputs.Spec{{Name: "image", Required: true}, {Name: "docker_args", Rest: true}}
+	logs := load("k8s.yaml", "logs")
+	run := load("docker.yaml", "run")
 
 	tests := []struct {
-		name        string
-		args, flags []inputs.Spec
-		cmd         string
-		given       map[string]any
-		want        []string
+		name  string
+		cmd   *execmodule.Command
+		given map[string]any
+		want  []string
 	}{
-		{"k8s logs", logsArgs, logsFlags,
-			"kubectl logs {{if .follow}}-f{{end}} --tail={{.tail}} -- {{.pod}}",
+		{"k8s logs", logs,
 			map[string]any{"pod": "mypod", "follow": true},
 			[]string{"kubectl", "logs", "-f", "--tail=100", "--", "mypod"}},
-		{"docker run with arbitrary arguments", runArgs, nil,
-			"docker run {{.image}} {{.docker_args}}",
+		{"docker run with arbitrary arguments", run,
 			map[string]any{"image": "nginx", "docker_args": []any{"-it", "--rm"}},
 			[]string{"docker", "run", "nginx", "-it", "--rm"}},
 	}
 	for _, c := range tests {
 		t.Run(c.name, func(t *testing.T) {
-			tpl, err := argvtmpl.Parse(c.cmd)
+			tpl, err := c.cmd.Cmd.Template()
 			if err != nil {
 				t.Fatal(err)
 			}
-			ti := inputs.TemplateInputs(c.args, c.flags)
-			values, err := inputs.Bind(c.args, c.flags, c.given)
+			ti := inputs.TemplateInputs(c.cmd.Args, c.cmd.Flags)
+			values, err := inputs.Bind(c.cmd.Args, c.cmd.Flags, c.given)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -292,15 +301,24 @@ func TestScenarioS26JSONInputs(t *testing.T) {
 		})
 	}
 
-	// The k8s pod property carries the dash guard of the schema.
-	tpl, err := argvtmpl.Parse("kubectl logs {{.pod}} {{if .follow}}-f{{end}} --tail={{.tail}}")
-	if err != nil {
-		t.Fatal(err)
+	// The fixture puts the pod after `--`, so the schema needs no dash guard;
+	// a template that puts it right after the program does.
+	ti := inputs.TemplateInputs(logs.Args, logs.Flags)
+	podOf := func(cmd string) map[string]any {
+		t.Helper()
+		tpl, err := argvtmpl.Parse(cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		schema := inputs.Schema(logs.Args, logs.Flags, func(name string) bool { return tpl.Guarded(ti, name) })
+		props, _ := schema["properties"].(map[string]any)
+		pod, _ := props["pod"].(map[string]any)
+		return pod
 	}
-	ti := inputs.TemplateInputs(logsArgs, logsFlags)
-	schema := inputs.Schema(logsArgs, logsFlags, func(name string) bool { return tpl.Guarded(ti, name) })
-	props, _ := schema["properties"].(map[string]any)
-	pod, _ := props["pod"].(map[string]any)
+	if pod := podOf("kubectl logs {{if .follow}}-f{{end}} --tail={{.tail}} -- {{.pod}}"); pod["not"] != nil || pod["type"] != "string" {
+		t.Fatalf("schema of pod behind -- = %v, want a plain string", pod)
+	}
+	pod := podOf("kubectl logs {{.pod}} {{if .follow}}-f{{end}} --tail={{.tail}}")
 	if !reflect.DeepEqual(pod["not"], map[string]any{"pattern": "^-"}) || pod["type"] != "string" {
 		t.Fatalf("schema of pod = %v, want a string with not pattern ^-", pod)
 	}
