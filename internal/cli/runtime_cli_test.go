@@ -201,12 +201,21 @@ func TestCLICacheSaveFailureIsWarning(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(modules, "good.yaml"), []byte("cmd: echo ok\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// XDG_CACHE_HOME points under a regular file: the cache dir cannot be made.
-	blocker := filepath.Join(home, "blocker")
+	// The cache dir is put under a regular file, so it cannot be made.
+	// os.UserCacheDir: XDG_CACHE_HOME on Linux, $HOME/Library/Caches on macOS.
+	var blocker string
+	switch runtime.GOOS {
+	case "linux":
+		blocker = filepath.Join(home, "blocker")
+		env[2] = "XDG_CACHE_HOME=" + filepath.Join(blocker, "xdg")
+	case "darwin":
+		blocker = filepath.Join(home, "Library")
+	default:
+		t.Skipf("cache dir location on %s is not redirected by this test", runtime.GOOS)
+	}
 	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	env[2] = "XDG_CACHE_HOME=" + filepath.Join(blocker, "xdg")
 	_, stderr, code := runFutiEnv(t, cwd, env, "good")
 	if code != 0 {
 		t.Fatalf("good: code = %d, stderr = %q", code, stderr)
