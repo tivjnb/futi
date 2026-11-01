@@ -22,13 +22,17 @@ import (
 // Иначе — показывает непосредственных детей namespace, или всё поддерево при recurse.
 // При verbose=true добавляет колонку PATH.
 // loader используется для загрузки модулей (с кэшем или без).
-func runList(w io.Writer, source discovery.Source, namespace string, verbose, recurse bool, loader modulerunner.ModuleLoader) error {
+// Коллизии путей печатаются в errw строками "Warning: …", листинг выводится.
+func runList(w, errw io.Writer, source discovery.Source, namespace string, verbose, recurse bool, loader modulerunner.ModuleLoader) error {
 	res, err := core.ListIn(source, loader, namespace, recurse)
 	// Частичный листинг: результат валиден, выводим его и возвращаем ошибку,
 	// чтобы вызывающий показал предупреждения.
 	var partial *discovery.PartialError
 	if err != nil && !errors.As(err, &partial) {
 		return err
+	}
+	for _, warning := range res.Warnings {
+		_, _ = fmt.Fprintf(errw, "Warning: %s\n", termtext.Line(warning))
 	}
 	if res.Kind == core.ListNamespace {
 		if len(res.Children) == 0 {

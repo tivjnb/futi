@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -103,7 +104,7 @@ func unreadableNamespace(t *testing.T) (discovery.Source, string) {
 
 func TestListErrorShortWhenCoveredByWarning(t *testing.T) {
 	src, _ := unreadableNamespace(t)
-	err := runList(&bytes.Buffer{}, src, "a", false, false, nil)
+	err := runList(&bytes.Buffer{}, io.Discard, src, "a", false, false, nil)
 	if err == nil {
 		t.Fatal("runList: ожидалась ошибка")
 	}

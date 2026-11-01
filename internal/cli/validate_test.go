@@ -223,3 +223,27 @@ func TestRunValidateModuleNotFound(t *testing.T) {
 }
 
 // --- #39: -v/-r flags don't pollute inputs for regular commands ---
+
+func TestRunValidateCollision(t *testing.T) {
+	source := writeCollisionModules(t)
+	var buf bytes.Buffer
+	err := runValidate(&buf, source, "dev")
+	if err == nil || err.Error() != `validate: module "dev" has 1 error(s)` {
+		t.Fatalf("err = %v, want 1 error", err)
+	}
+	if !strings.HasPrefix(buf.String(), "ERROR: path \"dev deploy\" is ambiguous: ") {
+		t.Errorf("output = %q, want ERROR: collision line", buf.String())
+	}
+}
+
+func TestRunValidateShadowWarningOnce(t *testing.T) {
+	dir := t.TempDir()
+	writeMainTestFile(t, filepath.Join(dir, "db.yaml"), "name: db\nargs:\n  - name: target\ncmd: \"echo {{.target}}\"\ncommands:\n  migrate:\n    cmd: \"echo m\"\n")
+	var buf bytes.Buffer
+	if err := runValidate(&buf, discovery.NewGlobalSource(dir), "db"); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(buf.String(), "are subcommands"); n != 1 {
+		t.Errorf("shadow warning printed %d times:\n%s", n, buf.String())
+	}
+}

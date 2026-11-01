@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -134,7 +135,7 @@ func TestPrintChildrenLoadError(t *testing.T) {
 	writeMainTestFile(t, filepath.Join(dir, "good.yaml"), "name: good\ndescription: Fine module\ncmd: echo x\n")
 
 	var buf bytes.Buffer
-	if err := runList(&buf, discovery.NewGlobalSource(dir), "", false, false, nil); err != nil {
+	if err := runList(&buf, io.Discard, discovery.NewGlobalSource(dir), "", false, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	var badLine string

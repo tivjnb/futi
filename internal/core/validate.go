@@ -30,6 +30,11 @@ func ValidateIn(src discovery.Source, namespace string) (ValidateReport, error) 
 	}
 
 	errs, warnings := mod.Validate()
+	collisions, err := PathCollisions(src, nil, namespace)
+	if err != nil {
+		return ValidateReport{}, classify(fmt.Errorf("validate: %w", err))
+	}
+	errs = append(errs, collisions...)
 	return ValidateReport{Errors: errs, Warnings: warnings}, nil
 }
 

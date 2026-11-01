@@ -41,6 +41,9 @@ type ListResult struct {
 	HasDefault bool           // ListModule: module has cmd; ListSubcommands: command has cmd
 	Commands   []CommandEntry // sorted by Name
 	Children   []ChildEntry   // ListNamespace: in discovery order
+	Warnings   []string       // path collisions found in the listed subtree (error texts)
+
+	moduleNs string // ListSubcommands: namespace of the module owning the command
 }
 
 // ListIn lists namespace in src: a module's commands, a command's
@@ -49,6 +52,17 @@ type ListResult struct {
 // *discovery.PartialError. Other errors are classified.
 func ListIn(src discovery.Source, loader modulerunner.ModuleLoader, namespace string, recurse bool) (ListResult, error) {
 	res, err := listIn(src, loader, namespace, recurse)
+	if err == nil || errors.As(err, new(*discovery.PartialError)) {
+		// Collisions of the listed subtree are warnings: the listing is still shown.
+		// For a command's subcommands the module is the namespace prefix.
+		collisionNs := namespace
+		if res.Kind == ListSubcommands {
+			collisionNs = res.moduleNs
+		}
+		if errs, cerr := PathCollisions(src, loader, collisionNs); cerr == nil {
+			res.Warnings = collisionTexts(errs)
+		}
+	}
 	return res, classifyUnlessPartial(err)
 }
 
@@ -91,7 +105,9 @@ func listIn(src discovery.Source, loader modulerunner.ModuleLoader, namespace st
 			}
 
 			if len(cmd.Commands) > 0 {
-				return commandsResult(ListSubcommands, cmd.Commands, manifestPath, !cmd.Cmd.IsZero()), nil
+				res := commandsResult(ListSubcommands, cmd.Commands, manifestPath, !cmd.Cmd.IsZero())
+				res.moduleNs = ns
+				return res, nil
 			}
 
 			return ListResult{}, fmt.Errorf("list: command %q has no subcommands", strings.Join(commandPath, " "))

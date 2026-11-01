@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,7 +108,7 @@ func TestRunListShowsConflict(t *testing.T) {
 	writeMainTestFile(t, filepath.Join(dir, "x", "config.yaml"), "name: x\ndescription: Описание-из-пакета\ncmd: echo x\n")
 
 	var buf bytes.Buffer
-	if err := runList(&buf, discovery.NewGlobalSource(dir), "", false, false, nil); err != nil {
+	if err := runList(&buf, io.Discard, discovery.NewGlobalSource(dir), "", false, false, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	out := buf.String()
@@ -131,7 +132,7 @@ func TestRunListShowsConflict(t *testing.T) {
 	writeMainTestFile(t, filepath.Join(nested, "ns", "x", "config.yaml"), "name: x\ncmd: echo x\n")
 
 	buf.Reset()
-	if err := runList(&buf, discovery.NewGlobalSource(nested), "", false, true, nil); err != nil {
+	if err := runList(&buf, io.Discard, discovery.NewGlobalSource(nested), "", false, true, nil); err != nil {
 		t.Fatalf("list -r: unexpected error: %v", err)
 	}
 	out = buf.String()
@@ -165,7 +166,7 @@ commands:
 	source := discovery.NewGlobalSource(dir)
 
 	var buf bytes.Buffer
-	err := runList(&buf, source, "db.migrate", false, false, nil)
+	err := runList(&buf, io.Discard, source, "db.migrate", false, false, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -200,7 +201,7 @@ commands:
 	source := discovery.NewGlobalSource(dir)
 
 	var buf bytes.Buffer
-	err := runList(&buf, source, "db", false, false, nil)
+	err := runList(&buf, io.Discard, source, "db", false, false, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -235,7 +236,7 @@ commands:
 	source := discovery.NewGlobalSource(dir)
 
 	var buf bytes.Buffer
-	err := runList(&buf, source, "db.migrate.up", false, false, nil)
+	err := runList(&buf, io.Discard, source, "db.migrate.up", false, false, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -261,7 +262,7 @@ commands:
 	source := discovery.NewGlobalSource(dir)
 
 	var buf bytes.Buffer
-	err := runList(&buf, source, "db.status", false, false, nil)
+	err := runList(&buf, io.Discard, source, "db.status", false, false, nil)
 	if err == nil {
 		t.Fatal("expected error for listing a leaf command")
 	}
@@ -370,7 +371,7 @@ commands:
 	}
 
 	var buf bytes.Buffer
-	if err := runList(&buf, source, "db.migrate", false, false, spy); err != nil {
+	if err := runList(&buf, io.Discard, source, "db.migrate", false, false, spy); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -378,8 +379,9 @@ commands:
 	if !strings.Contains(output, "spy_sub") {
 		t.Fatalf("expected spy_sub in output (loader used), got:\n%s", output)
 	}
-	if spy.calls != 1 {
-		t.Fatalf("expected exactly 1 loader call, got %d", spy.calls)
+	// One load for the listing, one for the collision check (cached in production).
+	if spy.calls != 2 {
+		t.Fatalf("expected 2 loader calls, got %d", spy.calls)
 	}
 }
 
@@ -455,7 +457,7 @@ commands:
 `)
 	source := discovery.NewGlobalSource(dir)
 	var buf bytes.Buffer
-	if err := runList(&buf, source, "db.migrate", false, false, nil); err != nil {
+	if err := runList(&buf, io.Discard, source, "db.migrate", false, false, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	output := buf.String()
@@ -483,7 +485,7 @@ func TestRunListConflictInSubnamespaceReturnsError(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := runList(&buf, discovery.NewGlobalSource(dir), "a.b", false, false, nil)
+	err := runList(&buf, io.Discard, discovery.NewGlobalSource(dir), "a.b", false, false, nil)
 	if err == nil {
 		t.Fatalf("expected conflict error, got output:\n%s", buf.String())
 	}
@@ -509,7 +511,7 @@ func TestRunListConflictInProgressiveResolveReturnsError(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := runList(&buf, discovery.NewGlobalSource(dir), "a.b.c", false, false, nil)
+	err := runList(&buf, io.Discard, discovery.NewGlobalSource(dir), "a.b.c", false, false, nil)
 	if err == nil {
 		t.Fatalf("expected conflict error, got output:\n%s", buf.String())
 	}
@@ -536,7 +538,7 @@ func TestRunListEmptyNamespaceListsRoot(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			err := runList(&buf, discovery.NewGlobalSource(dir), "", tc.verbose, tc.recurse, nil)
+			err := runList(&buf, io.Discard, discovery.NewGlobalSource(dir), "", tc.verbose, tc.recurse, nil)
 			if err != nil {
 				t.Fatalf("runList: %v", err)
 			}
@@ -559,7 +561,7 @@ func TestRunListEmptyNamespaceOnProdSourceChain(t *testing.T) {
 	source := discovery.NewLayeredSource(discovery.NewCompositeSource(cfg), discovery.NewGlobalSource(t.TempDir()))
 
 	var buf bytes.Buffer
-	if err := runList(&buf, source, "", false, false, nil); err != nil {
+	if err := runList(&buf, io.Discard, source, "", false, false, nil); err != nil {
 		t.Fatalf("runList: %v", err)
 	}
 	if !strings.Contains(buf.String(), "a") {
@@ -580,7 +582,7 @@ func partialSource(t *testing.T) (src discovery.Source, dirA, dirB string) {
 func TestRunListPartialListingReturnsPartialError(t *testing.T) {
 	src, _, _ := partialSource(t)
 	var buf bytes.Buffer
-	err := runList(&buf, src, "", false, false, nil)
+	err := runList(&buf, io.Discard, src, "", false, false, nil)
 	var pe *discovery.PartialError
 	if !errors.As(err, &pe) {
 		t.Fatalf("runList err = %v, want *discovery.PartialError", err)
@@ -629,7 +631,7 @@ func TestRunListErrorsHaveSingleListPrefix(t *testing.T) {
 
 	for _, ns := range []string{"nope", "a.nope", "c"} {
 		var buf bytes.Buffer
-		err := runList(&buf, discovery.NewGlobalSource(dir), ns, false, false, nil)
+		err := runList(&buf, io.Discard, discovery.NewGlobalSource(dir), ns, false, false, nil)
 		if err == nil {
 			t.Fatalf("runList(%q) err = nil, want ошибка", ns)
 		}
@@ -650,7 +652,7 @@ func TestRunListStripsControlChars(t *testing.T) {
 
 	for _, ns := range []string{"", "evil"} {
 		var buf bytes.Buffer
-		if err := runList(&buf, source, ns, false, false, nil); err != nil {
+		if err := runList(&buf, io.Discard, source, ns, false, false, nil); err != nil {
 			t.Fatalf("runList(%q): %v", ns, err)
 		}
 		out := buf.String()
@@ -679,11 +681,36 @@ func TestRunListVerboseStripsControlCharsInPath(t *testing.T) {
 
 	for _, ns := range []string{"", "ev\x1b[2Jil"} {
 		var buf bytes.Buffer
-		if err := runList(&buf, source, ns, true, false, nil); err != nil {
+		if err := runList(&buf, io.Discard, source, ns, true, false, nil); err != nil {
 			t.Fatalf("runList(%q): %v", ns, err)
 		}
 		if strings.Contains(buf.String(), "\x1b") {
 			t.Fatalf("runList(%q) -v output contains ESC: %q", ns, buf.String())
 		}
+	}
+}
+
+func writeCollisionModules(t *testing.T) discovery.Source {
+	t.Helper()
+	global, local := t.TempDir(), t.TempDir()
+	writeMainTestFile(t, filepath.Join(global, "dev.yaml"), "name: dev\ncommands:\n  deploy:\n    cmd: \"echo deploy\"\n")
+	if err := os.MkdirAll(filepath.Join(local, "dev"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMainTestFile(t, filepath.Join(local, "dev", "deploy.yaml"), "name: deploy\ncmd: \"echo module\"\n")
+	return discovery.NewLayeredSource(discovery.NewGlobalSource(local), discovery.NewGlobalSource(global))
+}
+
+func TestRunListCollisionWarningToStderr(t *testing.T) {
+	source := writeCollisionModules(t)
+	var out, errw bytes.Buffer
+	if err := runList(&out, &errw, source, "", false, false, nil); err != nil {
+		t.Fatalf("runList: %v", err)
+	}
+	if !strings.Contains(out.String(), "dev") || strings.Contains(out.String(), "ambiguous") {
+		t.Errorf("stdout = %q, want the listing without the warning", out.String())
+	}
+	if got := errw.String(); !strings.HasPrefix(got, "Warning: path \"dev deploy\" is ambiguous: ") || strings.Count(got, "\n") != 1 {
+		t.Errorf("stderr = %q, want one Warning: line about \"dev deploy\"", got)
 	}
 }

@@ -176,7 +176,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer, version stri
 				fmt.Fprintf(stderr, "source: %v\n", err)
 				return 1
 			}
-			if listErr := runList(stdout, source, listReq.namespace, listReq.verbose, listReq.recurse, cache); listErr != nil && !printPartialWarnings(stderr, listErr) {
+			if listErr := runList(stdout, stderr, source, listReq.namespace, listReq.verbose, listReq.recurse, cache); listErr != nil && !printPartialWarnings(stderr, listErr) {
 				fmt.Fprintln(stderr, listErrorText(listErr, listReq.namespace))
 				return 1
 			}

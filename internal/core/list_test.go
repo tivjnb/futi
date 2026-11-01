@@ -159,8 +159,9 @@ func TestRuntimeListUsesRuntimeLoader(t *testing.T) {
 	if got := names(res.Commands); !reflect.DeepEqual(got, []string{"spied"}) {
 		t.Errorf("names = %v", got)
 	}
-	if spy.calls != 1 {
-		t.Errorf("calls = %d, want 1", spy.calls)
+	// The listing and the collision check both load through the runtime loader.
+	if spy.calls == 0 {
+		t.Errorf("calls = 0, want the runtime loader to be used")
 	}
 }
 
@@ -206,5 +207,35 @@ func TestListInConflictFileVsConfigYaml(t *testing.T) {
 	}
 	if spy.calls != 0 {
 		t.Errorf("loader calls = %d, want 0", spy.calls)
+	}
+}
+
+func TestListCollisionWarning(t *testing.T) {
+	src, global, local := collisionSource(t)
+	want := `path "dev deploy" is ambiguous: command "deploy" of module dev (` + filepath.Join(global, "dev.yaml") +
+		`) and module dev.deploy (` + filepath.Join(local, "dev", "deploy.yaml") + `)`
+	for _, ns := range []string{"", "dev"} {
+		res, err := core.ListIn(src, nil, ns, false)
+		if err != nil {
+			t.Fatalf("ListIn(%q) err = %v", ns, err)
+		}
+		if !reflect.DeepEqual(res.Warnings, []string{want}) {
+			t.Errorf("ListIn(%q).Warnings = %q, want [%q]", ns, res.Warnings, want)
+		}
+	}
+	// The listing itself is still produced.
+	res, _ := core.ListIn(src, nil, "dev", false)
+	if got := names(res.Commands); !reflect.DeepEqual(got, []string{"deploy"}) {
+		t.Errorf("Commands = %v, want [deploy]", got)
+	}
+}
+
+func TestListNoCollisionNoWarnings(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "dev.yaml"), "name: dev\ncommands:\n  build:\n    cmd: echo\n")
+	writeFile(t, filepath.Join(dir, "dev", "deploy.yaml"), "name: deploy\ncmd: echo\n")
+	res, err := core.ListIn(discovery.NewGlobalSource(dir), nil, "", false)
+	if err != nil || len(res.Warnings) != 0 {
+		t.Errorf("Warnings = %q, err = %v, want none", res.Warnings, err)
 	}
 }
