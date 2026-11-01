@@ -438,7 +438,7 @@ futi docker run --rm nginx -it             # --rm is the flag of "run"; the tool
 futi docker run nginx -- -it               # the same as: futi docker run nginx -it
 ```
 
-The rest starts right after the token that filled the last arg before it (or, when `rest` is the only arg, at the first token that is not a flag, or after `--`). Flags of the command go **before** it. The first `--` inside the rest is consumed unless a `--` was already consumed; later ones are values (`futi docker run -- nginx -- -it` gives `nginx -- -it`). Before the rest starts, an unknown flag is an error, after it everything is the rest — so adding a flag to a command never changes the meaning of a line that was valid before. The rest is not checked for a leading `-`.
+The rest starts right after the token that filled the last arg before it (or, when `rest` is the only arg, at the first token that is not a flag, or after `--`). Flags of the command go **before** it. A `--` is consumed only when it is the very first token of the rest and no `--` was consumed before; any later `--` is a value: `futi docker run nginx -- -it` gives `-it`, `futi docker run nginx -it -- x` gives `-it -- x`, and `futi docker run -- nginx -- -it` gives `nginx -- -it`. Before the rest starts, an unknown flag is an error, after it everything is the rest — so adding a flag to a command never changes the meaning of a line that was valid before. The rest is not checked for a leading `-`.
 
 ### Templating
 
@@ -544,10 +544,10 @@ commands:
       - name: text
         required: true
         allow_dash: true         # the value goes to "$1", sh does not read it as an option
-    cmd: [sh, -c, 'echo "$1" | tr a-z A-Z', sh, "{{.text}}"]
+    cmd: [sh, -c, 'printf "%s\n" "$1" | tr a-z A-Z', sh, "{{.text}}"]
 ```
 
-`allow_dash` is needed because the item `"{{.text}}"` is a whole value and `-n` would otherwise be refused; here it is safe, since `sh` takes everything after the script as its parameters. Inside the script always quote `"$1"` and use `--` before it where the called program supports it.
+`allow_dash` is needed because the item `"{{.text}}"` is a whole value and `-n` would otherwise be refused. `sh` does not read `$1` as an option (it takes everything after the script as parameters), but a command inside the script may: that is why the script uses `printf "%s\n" "$1"` and not `echo "$1"` (`echo` would take `-n` or `-e` as its own option). Inside the script always quote `"$1"` and use `--` or `printf` where the called program supports it.
 
 ---
 
@@ -1248,7 +1248,7 @@ commands:
       - name: text
         required: true
         allow_dash: true       # goes to "$1": sh does not read it as an option
-    cmd: [sh, -c, 'echo "$1" | tr a-z A-Z', sh, "{{.text}}"]
+    cmd: [sh, -c, 'printf "%s\n" "$1" | tr a-z A-Z', sh, "{{.text}}"]
   repeat:
     description: Repeat the text N times
     args:
@@ -1260,7 +1260,7 @@ commands:
         type: int
         short: n
         required: true
-    cmd: [sh, -c, 'for i in $(seq 1 "$2"); do echo "$1"; done', sh, "{{.text}}", "{{.count}}"]
+    cmd: [sh, -c, 'for i in $(seq 1 "$2"); do printf "%s\n" "$1"; done', sh, "{{.text}}", "{{.count}}"]
 ```
 
 ```bash
