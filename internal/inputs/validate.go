@@ -54,7 +54,7 @@ func Validate(args, flags []Spec) []error {
 		if isBool && s.Required {
 			fail("required is not allowed for bool")
 		}
-		if s.Required && s.HasDefault && s.Default != "" {
+		if s.Required && s.HasDefault {
 			fail("required and default are mutually exclusive")
 		}
 

@@ -212,7 +212,7 @@ An input (an item of `args` or `flags`) is an object with a `name`; there is no 
 |---|---|---|---|
 | `name` | both | — | Required. `[a-z][a-z0-9_]*`, unique among the args and flags of the node. On the command line `_` becomes `-` (`ignore_case` is `--ignore-case`); in a template it is `{{.ignore_case}}`. The names `help`, `env`, `module_root`, `module_name` are reserved |
 | `type` | both | `string` | `string`, `int` or `bool`; `bool` only for flags |
-| `required` | both, not bool | `false` | The input must be given. Together with a non-empty `default` it is a schema error. For variadic/rest — at least one value |
+| `required` | both, not bool | `false` | The input must be given. Together with any `default` (even an empty one) it is a schema error. For variadic/rest — at least one value |
 | `default` | both, not variadic/rest | — | A string; for `int` an integer, for `bool` one of `true/false/1/0/yes/no/on/off` |
 | `description` | both | — | Shown in help and completion |
 | `short` | flags | — | One Latin letter, case matters (`-f` is not `-F`), unique in the node; `h` is reserved. Allowed for variadic flags |
@@ -890,7 +890,7 @@ $ echo $?
 - a module with neither `cmd` nor `commands`
 - a command with neither `cmd` nor `commands` (a useless command); a `cmd` consisting only of spaces counts as empty
 - `args` or `flags` without `cmd` — at any level (module, command); inputs are not inherited by subcommands
-- an input schema error: a `type` outside `{string, int, bool}`, `bool` with `required`/`variadic`/`allow_dash`, `required` together with a non-empty `default`, a `default` of the wrong type, a duplicate name among the args and flags of a node, a name that does not match `[a-z][a-z0-9_]*`, a reserved name (`help`, `env`, `module_root`, `module_name`), an invalid `short` (not one Latin letter, duplicate, `h`), `rest` not on the last arg, and an invalid form of the args (only `required… optional…`, `required… variadic required…` or `required… rest` are allowed)
+- an input schema error: a `type` outside `{string, int, bool}`, `bool` with `required`/`variadic`/`allow_dash`, `required` together with a `default` (even an empty one), a `default` of the wrong type, a duplicate name among the args and flags of a node, a name that does not match `[a-z][a-z0-9_]*`, a reserved name (`help`, `env`, `module_root`, `module_name`), an invalid `short` (not one Latin letter, duplicate, `h`), `rest` not on the last arg, and an invalid form of the args (only `required… optional…`, `required… variadic required…` or `required… rest` are allowed)
 - a template error in `cmd`, `attach`, `detach`: syntax, a construct that is not allowed (see [`cmd` vs `text/template`](#cmd-vs-texttemplate)), a reference to an undeclared input, a bool outside a condition, a variadic/rest in a concatenation without `range`, `range` over a non-variadic input; hooks may refer only to `env`, `module_root` and `module_name`
 - an input that `cmd` never mentions (`input "port" is not used in cmd`)
 - a dangling flag: a literal `--tail` followed by an argument that may disappear (`"--tail" would be left without its value when "tail" is unset; use {{if .tail}}--tail {{.tail}}{{end}} or --tail={{.tail}}`); not checked for variadic/rest

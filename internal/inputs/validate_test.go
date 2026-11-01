@@ -110,8 +110,9 @@ func TestValidate(t *testing.T) {
 			want: []string{`arg "x": required and default are mutually exclusive`},
 		},
 		{
-			name: "required with empty default is fine",
+			name: "required with empty default",
 			args: []Spec{{Name: "x", Required: true, Default: "", HasDefault: true}},
+			want: []string{`arg "x": required and default are mutually exclusive`},
 		},
 		{
 			name: "int default not a number",
