@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/tivjnb/futi/internal/discovery"
-	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/inputs"
 	"github.com/tivjnb/futi/internal/modulerunner"
 )
@@ -122,57 +121,172 @@ var modulesUninstallFlags = []string{"--force", "--skip-detach", "--strict-detac
 // modulesUpdateFlags — флаги `futi modules update`.
 var modulesUpdateFlags = []string{"--skip-attach", "--yes"}
 
-// helpKeyword — системная команда справки, подсказывается на уровнях
-// модуля/команды/subcommand. help НЕ зарезервирован: если в модуле есть
-// команда "help", она уже входит в commandMatches; здесь добавляем системную
-// только если её нет.
-const helpKeyword = "help"
+// helpKeyword and listKeyword are the builtin commands whose arguments are
+// command paths: `futi help <path>`, `futi list <path>`.
+const (
+	helpKeyword = "help"
+	listKeyword = "list"
+)
 
-// listKeyword — системная команда списка, подсказывается там, где
-// `futi <path> list` выполняется успешно: namespace, модуль, ветка с
-// subcommands. На листовой команде list даёт ошибку — не подсказываем.
-// Имя "list" в командах модуля запрещено схемой, но дубль всё равно исключаем.
-const listKeyword = "list"
-
-// Complete возвращает подсказки для заданной позиции ввода.
+// Complete returns suggestions for the given input position.
 //
-// Вход:
-//   - source — глобальный + локальный (layered) источник модулей;
-//   - loader — загрузчик модулей с кэшем (обычно *modulecache.Cache), nil допустим;
-//   - args — позиционные аргументы без `futi` и без toComplete (уже введённые слова);
-//   - toComplete — текущее слово под курсором (может быть "").
+// Input:
+//   - source — the layered (global + local) module source;
+//   - loader — module loader with a cache (usually *modulecache.Cache), may be nil;
+//   - args — the words already typed, without `futi` and without toComplete;
+//   - toComplete — the word under the cursor (may be "").
 //
-// Логика повторяет progressive resolution из modulerunner.Run: модуль ищется
-// от длиннейшего namespace к коротчайшему, остаток трактуется как command path.
+// It follows the grammar of the command line: the command path is walked over
+// the merged tree (modulerunner.Walk), the words after it are scanned like the
+// real parser does (inputs.Scan). A module that cannot be loaded or a path
+// collision give no suggestions.
 func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []string, toComplete string) ([]Match, Directive) {
-	// После `--` начинаются args команды — их значения user-supplied,
-	// подсказывать нечего. Разрешаем shell дополнять файлы (Default).
-	for _, a := range args {
-		if a == "--" {
-			return nil, ShellCompDirectiveDefault
-		}
-	}
-
-	// Ведущий глобальный --dry-run — не часть пути: снимаем до разбора
-	// positionals (иначе токен с "-" сочтётся началом флагов).
+	// A leading global --dry-run is not a part of the path.
 	dryRunGiven := len(args) > 0 && args[0] == "--dry-run"
 	if dryRunGiven {
 		args = args[1:]
 	}
 
-	// На позиции 0 слово с "-" — глобальный флаг futi.
+	// At position 0 a word with "-" is a global flag of futi.
 	if len(args) == 0 && strings.HasPrefix(toComplete, "-") {
 		flags := globalFlags
 		if dryRunGiven {
-			// --dry-run уже введён, а --help/--version с ним невозможны.
+			// --dry-run is already typed, and --help/--version cannot go with it.
 			flags = nil
 		}
 		return filterMatches(strMatches(flags), toComplete), ShellCompDirectiveNoFileComp
 	}
 
-	// Путь (namespace + command) — слова от начала до первого флагового токена,
-	// как в parseArgs (cmd/futi/main.go): флаг — токен с "-" и длиннее 1 символа.
-	// Всё после первого флага — флаги и их значения, не слова пути.
+	// The first reserved word is a builtin: the CLI runs it before resolving
+	// modules, so a module of the same name is not suggested. With --dry-run
+	// builtins are not allowed at all.
+	if len(args) > 0 && IsReservedName(args[0]) {
+		switch {
+		case dryRunGiven:
+			return nil, ShellCompDirectiveNoFileComp
+		case args[0] == helpKeyword || args[0] == listKeyword:
+			return helpPathMatches(source, loader, args[1:], toComplete)
+		}
+		return builtinMatches(source, args, toComplete)
+	}
+
+	return pathMatches(source, loader, args, toComplete, dryRunGiven)
+}
+
+// pathMatches suggests what can follow args: the flags of the node reached by
+// the path, its subcommands or nothing.
+func pathMatches(source discovery.Source, loader modulerunner.ModuleLoader, args []string, toComplete string, dryRun bool) ([]Match, Directive) {
+	// Verified loading: a stale cache entry must not hide the current flags
+	// and subcommands of a module (TestComplete*ReloadsChangedManifest).
+	node, n, err := modulerunner.Walk(source, loader, args, modulerunner.WalkOptions{Verified: true})
+	if err != nil || (n == 0 && len(args) > 0) {
+		return nil, ShellCompDirectiveNoFileComp
+	}
+	rest := args[n:]
+
+	var argSpecs, flagSpecs []inputs.Spec
+	if node.Command != nil {
+		argSpecs, flagSpecs = node.Command.Args, node.Command.Flags
+	}
+	state := inputs.Scan(argSpecs, flagSpecs, rest)
+
+	switch {
+	case state.InRest:
+		// The tokens of the rest arg are not ours: let the shell complete files.
+		return nil, ShellCompDirectiveDefault
+	case state.AfterDD, state.Pending != nil:
+		// A value of a flag or an arg: free text.
+		return nil, ShellCompDirectiveNoFileComp
+	case strings.HasPrefix(toComplete, "-"):
+		if strings.Contains(toComplete, "=") {
+			return nil, ShellCompDirectiveNoFileComp
+		}
+		return filterMatches(flagSpecMatches(flagSpecs, state.Used), toComplete), ShellCompDirectiveNoFileComp
+	case len(rest) == 0:
+		matches := childMatches(source, loader, node, n == 0)
+		if dryRun && n == 0 {
+			matches = slices.DeleteFunc(matches, func(m Match) bool { return IsReservedName(m.Text) })
+		}
+		return filterMatches(matches, toComplete), ShellCompDirectiveNoFileComp
+	}
+	return nil, ShellCompDirectiveNoFileComp
+}
+
+// helpPathMatches suggests the path words after `futi help` / `futi list`.
+func helpPathMatches(source discovery.Source, loader modulerunner.ModuleLoader, words []string, toComplete string) ([]Match, Directive) {
+	node, n, err := modulerunner.Walk(source, loader, words, modulerunner.WalkOptions{Verified: true})
+	if err != nil || n != len(words) || strings.HasPrefix(toComplete, "-") {
+		return nil, ShellCompDirectiveNoFileComp
+	}
+	return filterMatches(childMatches(source, loader, node, false), toComplete), ShellCompDirectiveNoFileComp
+}
+
+// childMatches lists the children of node: the subcommands of its command and
+// the modules and namespaces below it. At the root a builtin wins over a
+// module of the same name; builtins adds them to the list.
+func childMatches(source discovery.Source, loader modulerunner.ModuleLoader, node *modulerunner.Node, builtins bool) []Match {
+	var matches []Match
+	root := len(node.Path) == 0
+	if root && builtins {
+		for _, b := range rootBuiltins() {
+			matches = append(matches, Match{Text: b})
+		}
+	}
+	if node.Command != nil {
+		for name, cmd := range node.Command.Commands {
+			matches = append(matches, Match{Text: name, Description: cmd.Description})
+		}
+	}
+
+	// A missing namespace or an unreadable listing gives no children; a
+	// partial listing (some sources unreadable) is a valid result.
+	children, err := source.ListChildren(node.Namespace)
+	var partial *discovery.PartialError
+	if err != nil && !errors.As(err, &partial) {
+		return matches
+	}
+	for _, c := range children {
+		if root && IsReservedName(c.Name) {
+			continue
+		}
+		m := Match{Text: c.Name}
+		if c.Type == "module" && !c.Conflict { // a conflicting module is not loaded
+			// The module description (zsh); the error is ignored.
+			if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err == nil {
+				m.Description = mod.Description
+			}
+		}
+		matches = append(matches, m)
+	}
+	return matches
+}
+
+// flagSpecMatches lists the flags of a command (--name and -s) and --help.
+// A flag already used is skipped unless it is variadic. Each flag carries a
+// hint: "(required)" or "(default: X)" — zsh shows it next to the flag.
+func flagSpecMatches(flags []inputs.Spec, used map[string]bool) []Match {
+	matches := []Match{{Text: "--help", Description: "Show help"}}
+	for _, f := range flags {
+		if used[f.Name] && !f.Variadic {
+			continue
+		}
+		matches = append(matches, Match{Text: "--" + cliName(f.Name), Description: paramHint(f)})
+		if f.Short != "" {
+			matches = append(matches, Match{Text: "-" + f.Short, Description: paramHint(f)})
+		}
+	}
+	return matches
+}
+
+// builtinMatches suggests for `futi cache|completion|modules|__complete …`.
+func builtinMatches(source discovery.Source, args []string, toComplete string) ([]Match, Directive) {
+	// After `--` the words are user data: let the shell complete files.
+	if slices.Contains(args, "--") {
+		return nil, ShellCompDirectiveDefault
+	}
+
+	// The words up to the first flag token are the builtin and its subcommand,
+	// as in the CLI parser: a flag is a token with "-" longer than one character.
 	positionals := args
 	var flagArgs []string
 	for i, a := range args {
@@ -182,55 +296,23 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 		}
 	}
 
-	// С --dry-run builtins (cache, modules, list, ...) недопустимы: ни их
-	// самих, ни их подкоманд не подсказываем.
-	if dryRunGiven && len(positionals) > 0 && IsReservedName(positionals[0]) {
-		return nil, ShellCompDirectiveNoFileComp
-	}
-
-	// Резолвим модуль progressive-ом. commandPath — остаток после namespace.
-	// Зарезервированное первое слово — builtin: CLI исполнит его до резолва
-	// модулей, поэтому одноимённый модуль не подсказываем.
-	var (
-		manifest, root string
-		moduleFound    bool
-		commandPath    []string
-	)
-	if len(positionals) == 0 || !IsReservedName(positionals[0]) {
-		manifest, root, moduleFound, commandPath = resolveModule(source, positionals)
-	}
-
-	// Случай: предыдущее слово — флаг без "=", а текущее — не флаг. Bool-флаг
-	// значения не берёт (парсер: "--force true" — ошибка), поэтому после него
-	// подсказываем оставшиеся флаги (ниже). Значение string/int-флага
-	// user-supplied: разрешаем шеллу файловое дополнение (пути в значениях).
-	// В будущем ограничим параметрами типа path (ROADMAP в README).
+	// The previous word is a flag without "=" and the current one is not a flag.
+	// A bool flag takes no value (the parser: "--force true" is an error), so
+	// the remaining flags follow. The value of a string flag is user-supplied:
+	// the shell may complete files.
 	if len(args) > 0 && strings.HasPrefix(args[len(args)-1], "--") && !strings.Contains(args[len(args)-1], "=") && !strings.HasPrefix(toComplete, "--") {
-		if !moduleFound {
-			if !modulesBoolFlagNext(positionals, flagArgs) {
-				return nil, ShellCompDirectiveDefault
-			}
-			// Булев флаг `futi modules <sub>`: подсказываем оставшиеся флаги.
-			flags := ModulesFlags(positionals[1])
-			return filterMatches(withoutUsed(flagMatches(flags, toComplete), flagArgs), toComplete), ShellCompDirectiveNoFileComp
-		}
-		if !isBoolFlag(loader, manifest, root, commandPath, flagName(args[len(args)-1])) {
+		if !modulesBoolFlagNext(positionals, flagArgs) {
 			return nil, ShellCompDirectiveDefault
 		}
+		flags := ModulesFlags(positionals[1])
+		return filterMatches(withoutUsed(flagMatches(flags, toComplete), flagArgs), toComplete), ShellCompDirectiveNoFileComp
 	}
 
-	// Случай: toComplete начинается с "--" — подсказываем имена параметров.
 	if strings.HasPrefix(toComplete, "--") {
-		// `--param=val` — значение user-supplied: разрешаем файлы (пути).
+		// `--flag=val`: the value is user-supplied, files are allowed.
 		if strings.Contains(toComplete, "=") {
 			return nil, ShellCompDirectiveDefault
 		}
-		if moduleFound {
-			if cmd, err := currentCommand(loader, manifest, root, commandPath); err == nil {
-				return filterMatches(withoutUsed(paramMatches(cmd, toComplete), flagArgs), toComplete), ShellCompDirectiveNoFileComp
-			}
-		}
-		// Флаги `futi modules <sub>` (модуль не задействован).
 		if len(positionals) >= 2 && positionals[0] == "modules" {
 			if flags := ModulesFlags(positionals[1]); flags != nil {
 				return filterMatches(withoutUsed(flagMatches(flags, toComplete), flagArgs), toComplete), ShellCompDirectiveNoFileComp
@@ -239,28 +321,23 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 		return nil, ShellCompDirectiveNoFileComp
 	}
 
-	// После первого флага слова пути невозможны: только оставшиеся флаги
-	// листовой команды (без help — после флагов это уже не команда).
+	// After the first flag no path words are possible.
 	if len(flagArgs) > 0 {
-		if moduleFound {
-			if cmd, err := currentCommand(loader, manifest, root, commandPath); err == nil && len(cmd.Commands) == 0 {
-				return filterMatches(withoutUsed(paramMatches(cmd, ""), flagArgs), toComplete), ShellCompDirectiveNoFileComp
-			}
-		}
 		return nil, ShellCompDirectiveNoFileComp
 	}
 
-	// Случай: модуль зарезолвен — подсказываем команды/subcommands.
-	if moduleFound {
-		return moduleMatches(loader, manifest, root, commandPath, toComplete)
+	var names []string
+	switch {
+	case len(positionals) == 1 && positionals[0] == "cache":
+		names = cacheSubcommands
+	case len(positionals) == 1 && positionals[0] == "completion":
+		names = completionShells
+	case len(positionals) == 1 && positionals[0] == "modules":
+		names = modulesSubcommands
+	case len(positionals) == 2 && positionals[0] == "modules" && positionals[1] == "validate":
+		return validateMatches(source, toComplete), ShellCompDirectiveNoFileComp
 	}
-
-	// Модуль не зарезолвен — подсказываем children namespace и/или builtins.
-	matches, dir := namespaceMatches(source, loader, positionals, toComplete)
-	if dryRunGiven && len(positionals) == 0 {
-		matches = slices.DeleteFunc(matches, func(m Match) bool { return IsReservedName(m.Text) })
-	}
-	return matches, dir
+	return filterMatches(strMatches(names), toComplete), ShellCompDirectiveNoFileComp
 }
 
 // modulesBoolFlagNext сообщает, что последний токен flagArgs — булев флаг
@@ -323,200 +400,6 @@ func withoutUsed(matches []Match, flagArgs []string) []Match {
 	return out
 }
 
-// isBoolFlag сообщает, что name — bool-параметр текущей команды.
-func isBoolFlag(loader modulerunner.ModuleLoader, manifest, root string, commandPath []string, name string) bool {
-	cmd, err := currentCommand(loader, manifest, root, commandPath)
-	if err != nil {
-		return false
-	}
-	for _, p := range cmd.Flags {
-		if cliName(p.Name) == name && p.Type == "bool" {
-			return true
-		}
-	}
-	return false
-}
-
-// resolveModule ищет модуль progressive-ом от длиннейшего namespace к коротчайшему.
-// Возвращает путь манифеста, корень, флаг найденности и оставшийся command path.
-// Слова пути делятся по "." (audit F83): `docker.build` = `docker build`.
-func resolveModule(source discovery.Source, positionals []string) (manifest, root string, found bool, commandPath []string) {
-	var segs []string
-	for _, p := range positionals {
-		segs = append(segs, strings.Split(p, ".")...)
-	}
-	positionals = segs
-	for i := len(positionals); i >= 0; i-- {
-		ns := strings.Join(positionals[:i], ".")
-		mp, mr, err := source.Resolve(ns)
-		if err == nil {
-			return mp, mr, true, positionals[i:]
-		}
-	}
-	return "", "", false, nil
-}
-
-// trimCommandPath обрезает commandPath до первой неизвестной команды.
-// Слова после флагов (их значения, например "--out file.png" → "file.png")
-// не должны резолвиться как subcommands — они отсекаются.
-func trimCommandPath(mod *execmodule.Module, commandPath []string) []string {
-	level := mod.Commands
-	known := 0
-	for _, seg := range commandPath {
-		next, ok := level[seg]
-		if !ok {
-			break
-		}
-		known++
-		level = next.Commands
-	}
-	return commandPath[:known]
-}
-
-// currentCommand загружает модуль и возвращает команду по commandPath.
-// При пустом commandPath возвращает default-команду модуля (cmd + params),
-// если она есть (модуль-однокоманда); иначе notFoundError.
-func currentCommand(loader modulerunner.ModuleLoader, manifest, root string, commandPath []string) (*execmodule.Command, error) {
-	mod, err := modulerunner.LoadModuleVerified(loader, manifest, root)
-	if err != nil {
-		return nil, err
-	}
-	commandPath = trimCommandPath(mod, commandPath)
-	if len(commandPath) == 0 {
-		if mod.Cmd.IsZero() {
-			return nil, &notFoundError{"module has no default command"}
-		}
-		return &mod.Command, nil
-	}
-	return mod.ResolveCommandPath(commandPath)
-}
-
-// notFoundError — вспомогательная ошибка "нечего подсказывать".
-type notFoundError struct{ msg string }
-
-func (e *notFoundError) Error() string { return e.msg }
-
-// moduleMatches формирует подсказки для зарезолвленного модуля.
-func moduleMatches(loader modulerunner.ModuleLoader, manifest, root string, commandPath []string, toComplete string) ([]Match, Directive) {
-	mod, err := modulerunner.LoadModuleVerified(loader, manifest, root)
-	if err != nil {
-		// Невалидный/незагружаемый модуль — не падаем, просто ничего не подсказываем
-		// (консистентно с runList через ParseModule).
-		return nil, ShellCompDirectiveNoFileComp
-	}
-
-	// Обрезаем commandPath до первой неизвестной команды: значения флагов
-	// ("--out file.png") не резолвятся как subcommands.
-	commandPath = trimCommandPath(mod, commandPath)
-
-	// commandPath пуст → подсказываем команды модуля (+ системную help).
-	// Модуль-однокоманда (без commands, с default cmd) — листовая:
-	// подсказываем параметры default-команды.
-	if len(commandPath) == 0 {
-		if len(mod.Commands) == 0 && !mod.Cmd.IsZero() {
-			return filterMatches(withList(withHelp(paramMatches(&mod.Command, ""))), toComplete), ShellCompDirectiveNoFileComp
-		}
-		return filterMatches(withList(withHelp(commandMatches(mod.Commands))), toComplete), ShellCompDirectiveNoFileComp
-	}
-
-	cmd, err := mod.ResolveCommandPath(commandPath)
-	if err != nil {
-		// Команда не найдена или путь оборван — дальше не спускаемся.
-		return nil, ShellCompDirectiveNoFileComp
-	}
-
-	// Ветка с subcommands → подсказываем их (+ системную help).
-	if len(cmd.Commands) > 0 {
-		return filterMatches(withList(withHelp(commandMatches(cmd.Commands))), toComplete), ShellCompDirectiveNoFileComp
-	}
-
-	// Листовая команда — подсказываем все параметры (--name) даже без
-	// ввода "--", плюс системную help. Пометки "(required)" / "(default: X)"
-	// выводятся в zsh; в bash/fish не загрязняют ввод.
-	return filterMatches(withHelp(paramMatches(cmd, "")), toComplete), ShellCompDirectiveNoFileComp
-}
-
-// withHelp добавляет системную подсказку "help" к matches, если там ещё нет
-// команды с именем "help" (user-defined help уже в списке — не дублируем).
-func withHelp(matches []Match) []Match {
-	for _, m := range matches {
-		if m.Text == helpKeyword {
-			return matches
-		}
-	}
-	return append(matches, Match{Text: helpKeyword, Description: "Show help"})
-}
-
-// withList добавляет системную подсказку "list" (без дубля).
-func withList(matches []Match) []Match {
-	for _, m := range matches {
-		if m.Text == listKeyword {
-			return matches
-		}
-	}
-	return append(matches, Match{Text: listKeyword, Description: "List commands"})
-}
-
-// namespaceMatches формирует подсказки, когда модуль не зарезолвлен:
-// builtins (корень) + children namespace.
-func namespaceMatches(source discovery.Source, loader modulerunner.ModuleLoader, positionals []string, toComplete string) ([]Match, Directive) {
-	// Builtins корня с собственными подсказками. Остальные зарезервированные
-	// слова (list, __complete) и позиции глубже — подсказывать нечего.
-	if len(positionals) > 0 && IsReservedName(positionals[0]) {
-		var names []string
-		switch {
-		case len(positionals) == 1 && positionals[0] == "cache":
-			names = cacheSubcommands
-		case len(positionals) == 1 && positionals[0] == "completion":
-			names = completionShells
-		case len(positionals) == 1 && positionals[0] == "modules":
-			names = modulesSubcommands
-		case len(positionals) == 2 && positionals[0] == "modules" && positionals[1] == "validate":
-			return validateMatches(source, toComplete), ShellCompDirectiveNoFileComp
-		}
-		return filterMatches(strMatches(names), toComplete), ShellCompDirectiveNoFileComp
-	}
-
-	ns := strings.Join(positionals, ".")
-	var matches []Match
-
-	// Builtins только на корне (positionals пуст).
-	if len(positionals) == 0 {
-		for _, b := range rootBuiltins() {
-			matches = append(matches, Match{Text: b})
-		}
-	}
-
-	// Children namespace. Ошибку (несуществующий namespace) проглатываем —
-	// возвращаем пустой список, как и положено по протоколу. Частичный листинг
-	// (часть sources нечитаема) — валидный результат: подсказки молча из читаемых.
-	children, err := source.ListChildren(ns)
-	var partial *discovery.PartialError
-	if err == nil || errors.As(err, &partial) {
-		for _, c := range children {
-			// На корне имя builtin выигрывает у модуля/namespace: без дубля.
-			if len(positionals) == 0 && IsReservedName(c.Name) {
-				continue
-			}
-			m := Match{Text: c.Name}
-			if c.Type == "module" && !c.Conflict { // конфликтный модуль не загружаем
-				// Подтягиваем описание модуля (zsh); ошибку игнорируем.
-				if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err == nil {
-					m.Description = mod.Description
-				}
-			}
-			matches = append(matches, m)
-		}
-		// Существующий namespace ниже корня: `futi <ns> list` работает.
-		// На корне list уже среди builtins.
-		if len(positionals) > 0 {
-			matches = withList(matches)
-		}
-	}
-
-	return filterMatches(matches, toComplete), ShellCompDirectiveNoFileComp
-}
-
 // validateMatches — полные точечные имена модулей для `futi modules validate`.
 // Частичный листинг (*PartialError) — подсказки из читаемых источников.
 func validateMatches(source discovery.Source, toComplete string) []Match {
@@ -530,15 +413,6 @@ func validateMatches(source discovery.Source, toComplete string) []Match {
 		matches = append(matches, Match{Text: m.Name})
 	}
 	return filterMatches(matches, toComplete)
-}
-
-// commandMatches превращает map команд в подсказки (имя + описание).
-func commandMatches(commands map[string]*execmodule.Command) []Match {
-	matches := make([]Match, 0, len(commands))
-	for name, cmd := range commands {
-		matches = append(matches, Match{Text: name, Description: cmd.Description})
-	}
-	return matches
 }
 
 // strMatches превращает список строк в подсказки.
@@ -564,20 +438,6 @@ func flagMatches(flags []string, toComplete string) []Match {
 
 // cliName is the spelling of an input name on the command line.
 func cliName(name string) string { return strings.ReplaceAll(name, "_", "-") }
-
-// paramMatches отбирает флаги команды по префиксу toComplete (с "--").
-// Каждый параметр несёт пометку: "(required)" или "(default: X)" —
-// zsh показывает её рядом с флагом, bash/fish отрезают при выводе.
-func paramMatches(cmd *execmodule.Command, toComplete string) []Match {
-	prefix := strings.TrimPrefix(toComplete, "--")
-	matches := make([]Match, 0)
-	for _, p := range cmd.Flags {
-		if name := cliName(p.Name); strings.HasPrefix(name, prefix) {
-			matches = append(matches, Match{Text: "--" + name, Description: paramHint(p)})
-		}
-	}
-	return matches
-}
 
 // paramHint формирует компактную пометку параметра для подсказки.
 func paramHint(p inputs.Spec) string {

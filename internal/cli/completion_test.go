@@ -46,6 +46,12 @@ commands:
         type: bool
         default: false
     cmd: "docker build -t {{.tag}} {{if .force}}-f{{end}}"
+  run:
+    description: Run container
+    args:
+      - {name: image, required: true}
+      - {name: docker_args, rest: true}
+    cmd: "docker run {{.image}} {{.docker_args}}"
 `)
 	writeFile(t, filepath.Join(dir, "git.yaml"), `
 name: git
@@ -68,7 +74,7 @@ func TestRunCompleteOutputFormat(t *testing.T) {
 	}
 
 	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	if len(lines) != 5 {
+	if len(lines) != 4 {
 		t.Fatalf("unexpected lines: %v", lines)
 	}
 	if lines[0] != "build\tBuild image" {
@@ -86,8 +92,8 @@ func TestRunCompleteDirectiveDefault(t *testing.T) {
 	src := testSourceBuilder(t)
 	var out bytes.Buffer
 
-	// После "--" — directive Default (0), подсказок нет.
-	err := runComplete(&out, nil, src, nil, []string{"docker", "ps", "--", "x"})
+	// Inside the rest arg the tokens are not ours: directive Default (0), no matches.
+	err := runComplete(&out, nil, src, nil, []string{"docker", "run", "nginx", ""})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

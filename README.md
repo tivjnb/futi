@@ -1064,23 +1064,17 @@ futi completion fish > ~/.config/fish/completions/futi.fish
 
 ### What is completed
 
-- **Modules and namespaces** — `futi <TAB>`, `futi dev <TAB>`
-- **Commands and subcommands** — `futi docker <TAB>`, `futi docker migrate <TAB>`
-- **Parameter names** — `futi docker build --<TAB>` → `--tag`, `--force`
-- **All parameters on a command** — `futi docker build <TAB>` immediately shows all flags with marks: `--tag (required)`, `--force (default: false)` (the marks are visible in zsh; bash/fish cut them off)
-- **After a flag value** — `futi images qr make --out qr.png <TAB>` suggests the remaining flags (`--text`, `--scale`); a flag value does not break the hints. The path (namespace and command) always comes before the first flag, so after flags the path words and `help` are not offered
-- **Paths in flag values** — when typing the value of a non-bool flag (`--out ~/<TAB>`, `--out=~/<TAB>`), the shell offers files/directories; in the future only for parameters of type `path` (Roadmap)
-- **Parameters of the default command** — a single-command module (`cmd` + `params`, no `commands`) suggests its own flags: `futi meta <TAB>` → `--json`
-- **After a bool flag** — `futi docker build --force <TAB>` suggests the remaining (not yet entered) flags (`--tag`); the values `true`/`false` are not offered: a bool flag takes no value, and `false` is given as `--force=false`
-- **Global flags** — `futi --<TAB>` → `--dry-run`, `--help`, `--version`; after a leading `--dry-run` the hints are as for a regular call, but without builtins (`cache`, `completion`, `list`, `modules`): `futi --dry-run <TAB>` shows only modules and namespaces, `futi --dry-run dev <TAB>` works as usual
-- **Builtins** — `futi cache <TAB>` → `refresh`/`status`/`clear`; `futi completion <TAB>` → `bash`/`zsh`/`fish`
+- **Path words** — the children of the current node in the merged tree: `futi <TAB>` (modules, namespaces, builtins), `futi dev <TAB>`, `futi docker <TAB>`, `futi docker migrate <TAB>`. A subcommand is suggested only right after the path: once a flag or another word follows, the rest are the inputs of the node
+- **Flags** — only for a word starting with `-`: `futi k8s logs -<TAB>` → `--follow`, `-f`, `--tail`, `--help`; flags already used are not offered again (except variadic ones). The marks `(required)` and `(default: …)` are visible in zsh; bash/fish cut them off
+- **Values** — nothing is suggested for the value of a non-bool flag (`futi docker build --tag <TAB>`, `--tag=<TAB>`) or for a positional arg: the shell does not add files either (file completion is planned for `path`/`dir` inputs, see Roadmap). A bool flag takes no value, so `true`/`false` are not offered after it
+- **Rest arg** — once the rest arg has started (`futi docker run nginx <TAB>`), the tokens are passed to the tool as they are, and the shell completes files as usual. Everything after `--` is data: no flags or subcommands are suggested
+- **`help` and `list`** — these are builtins only as the first word; after them the command path is completed: `futi help do<TAB>` → `docker`, `futi list dev <TAB>`. Inside a path `help` and `list` are suggested only if the module defines such commands
+- **Global flags** — `futi --<TAB>` → `--dry-run`, `--help`, `--version`; after a leading `--dry-run` the hints are as for a regular call, but without builtins (`cache`, `completion`, `list`, `modules`): `futi --dry-run <TAB>` shows only modules and namespaces
+- **Builtins** — `futi cache <TAB>` → `refresh`/`status`/`clear`; `futi completion <TAB>` → `bash`/`zsh`/`fish`. At the root, `cache`, `completion`, `list`, `modules` are suggested as builtins even when a module has the same name (the CLI executes the builtin)
 - **Module validation** — `futi modules validate <TAB>` suggests full module names (`dev.deploy`), and no hints after the first argument
-- **Builtin priority** — at the root, `cache`, `completion`, `list`, `modules` are suggested as builtins even when a module has the same name (the CLI executes the builtin); `futi cache <TAB>` does not show the commands of such a module
-- **The `help` hint** — `help` is offered at every level (module/command/subcommand): `futi demo <TAB>`, `futi demo db <TAB>`, `futi demo greet <TAB>`. If the module already defines a (user-defined) `help` command, that one is offered and the system one is not duplicated.
-- **The `list` hint** — `list` is offered where `futi <path> list` works: in a namespace, a module, a branch with subcommands and a single-command module (`futi dev <TAB>`, `futi docker <TAB>`, `futi docker migrate <TAB>`); it is not offered on a leaf command (there `list` is an error)
 - **`modules` flags** — `futi modules add_command <module> --<TAB>` → `--cmd`, `--desc`; likewise for `init`, `install`, `uninstall`, `update`
 
-Values of string/numeric parameters (usually user-supplied, for example `--tag myapp`) are not guessed or completed. After `--` (the command's args) futi allows file completion.
+A module that cannot be loaded, or a path that addresses two entities (a path collision), gives no hints and no error output.
 
 zsh prints descriptions of commands/modules next to the hints.
 
