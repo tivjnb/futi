@@ -218,3 +218,46 @@ func TestValidateCollisionFromAncestorModule(t *testing.T) {
 		t.Errorf("Errors = %v, want the collision with the command of module dev", rep.Errors)
 	}
 }
+
+// A module with a string positional input and a child module: `futi dev deploy`
+// goes to the module, so the word cannot be a value.
+func TestValidateInWarnsChildModuleShadowsValue(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "dev.yaml"), "name: dev\nargs:\n  - {name: target}\ncmd: \"echo {{.target}}\"\n")
+	writeFile(t, filepath.Join(dir, "dev", "deploy.yaml"), "name: deploy\ncmd: echo deploy\n")
+	writeFile(t, filepath.Join(dir, "dev", "build.yaml"), "name: build\ncmd: echo build\n")
+	src := discovery.NewGlobalSource(dir)
+
+	rep, err := core.ValidateIn(src, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`command "dev": words build, deploy are subcommands; pass such a value after --`}
+	if len(rep.Errors) != 0 || strings.Join(rep.Warnings, "\n") != strings.Join(want, "\n") {
+		t.Errorf("Errors = %v, Warnings = %q, want no errors and %q", rep.Errors, rep.Warnings, want)
+	}
+
+	// The child module itself is not affected.
+	rep, err = core.ValidateIn(src, "dev.deploy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Warnings) != 0 {
+		t.Errorf("dev.deploy: Warnings = %q, want none", rep.Warnings)
+	}
+}
+
+// Only a string positional input can take the word; int-only and no-arg
+// modules are not warned about.
+func TestValidateInNoShadowWarningWithoutStringArg(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "dev.yaml"), "name: dev\nargs:\n  - {name: n, type: int}\ncmd: \"echo {{.n}}\"\n")
+	writeFile(t, filepath.Join(dir, "dev", "deploy.yaml"), "name: deploy\ncmd: echo deploy\n")
+	rep, err := core.ValidateIn(discovery.NewGlobalSource(dir), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Warnings) != 0 {
+		t.Errorf("Warnings = %q, want none", rep.Warnings)
+	}
+}

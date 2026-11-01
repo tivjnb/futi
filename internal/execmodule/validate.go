@@ -190,12 +190,20 @@ func ShadowWarnings(path string, c *Command) []string {
 
 // shadowWarning is the warning of the node itself, without descending.
 func shadowWarning(path string, c *Command) (string, bool) {
-	if len(c.Commands) == 0 {
+	return ShadowWarningFor(path, c, sortedNames(c.Commands))
+}
+
+// ShadowWarningFor is the warning for a node whose words (subcommands, or the
+// names of child modules) could be meant as a value: the node has a
+// positional string arg (variadic and rest included). ok is false without
+// words or without such an arg.
+func ShadowWarningFor(path string, c *Command, words []string) (string, bool) {
+	if len(words) == 0 {
 		return "", false
 	}
 	for _, a := range c.Args {
 		if a.Kind() == argvtmpl.String {
-			return fmt.Sprintf("command %q: words %s are subcommands; pass such a value after --", path, strings.Join(sortedNames(c.Commands), ", ")), true
+			return fmt.Sprintf("command %q: words %s are subcommands; pass such a value after --", path, strings.Join(words, ", ")), true
 		}
 	}
 	return "", false

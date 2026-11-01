@@ -1270,7 +1270,7 @@ futi echo_mod repeat hi -n 3         # hi\nhi\nhi
 futi echo_mod -- upper               # prints "upper": after "--" it is a word, not a subcommand
 ```
 
-`futi modules validate echo_mod` prints a warning here: the default command takes string words, and `upper`/`repeat` are subcommands, so such a word as the first one is read as a subcommand (the node help shows it too).
+`futi modules validate echo_mod` prints a warning here: the default command takes string words, and `upper`/`repeat` are subcommands, so such a word as the first one is read as a subcommand (the node help shows it too). The same warning is printed for a module with a string positional arg that has child modules (module `dev` with an arg and `dev/deploy.yaml`): `futi dev deploy` goes to the child module, and the warning lists the child module names.
 
 ### Git shortcuts
 
