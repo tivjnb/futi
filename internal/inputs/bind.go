@@ -60,12 +60,13 @@ func bindOne(s Spec, given map[string]any) (v argvtmpl.Value, set bool, err erro
 		if len(items) == 0 {
 			return bindUnset(s)
 		}
-		for _, it := range items {
-			if s.Required && it == "" {
-				return v, false, fmt.Errorf("empty value for %s", s.CLIName())
+		out := make([]string, len(items)) // do not modify the caller's slice
+		for i, it := range items {
+			if out[i], err = canonical(s, it); err != nil {
+				return v, false, err
 			}
 		}
-		return argvtmpl.Value{List: items}, true, nil
+		return argvtmpl.Value{List: out}, true, nil
 	}
 	str, err := asScalar(s, raw)
 	if err != nil {

@@ -73,6 +73,14 @@ func TestBind(t *testing.T) {
 		{"number for bool", k8sLogs, map[string]any{"pod": "p", "follow": float64(1)}, nil, `input "follow" must be a string`},
 		{"required with default takes the default", node{args: []Spec{{Name: "a", Required: true, Default: "x", HasDefault: true}}}, map[string]any{},
 			map[string]argvtmpl.Value{"a": sc("x")}, ""},
+		{"int variadic canonicalized", portsNode, map[string]any{"port": []string{"08", "-3"}},
+			map[string]argvtmpl.Value{"port": ls("8", "-3")}, ""},
+		{"int variadic from []any canonicalized", portsNode, map[string]any{"port": []any{"08"}},
+			map[string]argvtmpl.Value{"port": ls("8")}, ""},
+		{"int variadic invalid element", portsNode, map[string]any{"port": []string{"abc", "08"}}, nil, `invalid int value "abc" for --port`},
+		{"int variadic empty element", portsNode, map[string]any{"port": []any{"1", ""}}, nil, `empty value for --port`},
+		{"rest keeps strings as is", dockerRun, map[string]any{"image": "i", "extra": []string{"08", ""}},
+			map[string]argvtmpl.Value{"image": sc("i"), "extra": ls("08", ""), "rm": sc("false")}, ""},
 		{"unknown key wins over missing", k8sLogs, map[string]any{"nope": "1"}, nil, `unknown input "nope"`},
 	}
 	for _, tc := range tests {
@@ -91,5 +99,29 @@ func TestBind(t *testing.T) {
 				t.Fatalf("got %#v, want %#v", got, tc.want)
 			}
 		})
+	}
+}
+
+var portsNode = node{label: "futi ports", flags: []Spec{{Name: "port", Type: "int", Variadic: true, Flag: true}}}
+
+func TestParseThenBindIntVariadic(t *testing.T) {
+	res, err := Parse(portsNode.args, portsNode.flags, []string{"--port", "abc", "--port", "08"}, portsNode.label)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	_, err = Bind(portsNode.args, portsNode.flags, res.Values)
+	if err == nil || err.Error() != `invalid int value "abc" for --port` {
+		t.Fatalf("err = %v, want invalid int value", err)
+	}
+	res, err = Parse(portsNode.args, portsNode.flags, []string{"--port", "08", "--port", "9"}, portsNode.label)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got, err := Bind(portsNode.args, portsNode.flags, res.Values)
+	if err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	if want := ls("8", "9"); !reflect.DeepEqual(got["port"], want) {
+		t.Fatalf("port = %#v, want %#v", got["port"], want)
 	}
 }
