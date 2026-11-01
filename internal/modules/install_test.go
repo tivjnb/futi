@@ -116,7 +116,7 @@ func TestRunModulesInstallAttachFailureRollsBack(t *testing.T) {
 	t.Setenv("FUTI_MODULES_DIR", global)
 	t.Chdir(t.TempDir())
 
-	src := makeSourceModule(t, t.TempDir(), "qr", "attach: \"exit 3\"\n")
+	src := makeSourceModule(t, t.TempDir(), "qr", "attach: [sh, -c, \"exit 3\"]\n")
 
 	err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Yes: true})
 	if err == nil {
@@ -230,7 +230,7 @@ func TestRunModulesInstallLocalFlagHookAbsRoot(t *testing.T) {
 	cwd := t.TempDir()
 	t.Chdir(cwd)
 
-	attach := "attach: \"test -d {{.module_root}} && echo {{.module_root}} $FUTI_MODULE_ROOT > $FUTI_MODULE_ROOT/roots\"\n"
+	attach := "attach: [sh, -c, \"test -d {{.module_root}} && echo {{.module_root}} $FUTI_MODULE_ROOT > $FUTI_MODULE_ROOT/roots\"]\n"
 	src := makeSourceModule(t, t.TempDir(), "qr", attach)
 
 	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, Local: true, Yes: true}); err != nil {

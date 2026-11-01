@@ -64,8 +64,8 @@ func TestAddCommandPreservesCommentsAndFields(t *testing.T) {
 	if _, ok := mod.Commands["scan"]; !ok {
 		t.Fatal("command scan not found after edit")
 	}
-	if mod.Attach != "true" {
-		t.Fatalf("attach must survive edit, got %q", mod.Attach)
+	if mod.Attach.Text != "true" {
+		t.Fatalf("attach must survive edit, got %+v", mod.Attach)
 	}
 }
 

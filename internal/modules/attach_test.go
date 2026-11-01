@@ -124,6 +124,20 @@ func TestAttachPromptSkipsBlankLines(t *testing.T) {
 	}
 }
 
+func TestAttachPromptShowsListHook(t *testing.T) {
+	attachEnv(t)
+	setStdinTerminal(t, true)
+	src := makeSourceModule(t, t.TempDir(), "qr", "attach: [sh, -c, \"make && make install\"]\n")
+
+	prompt := captureStderr(t, func() {
+		_ = newTestManager(t, &bytes.Buffer{}, strings.NewReader("n\n")).Install(context.Background(), InstallOptions{Source: src})
+	})
+	want := "):\n  [sh, -c, \"make && make install\"]\nRun it?"
+	if !strings.Contains(prompt, want) {
+		t.Fatalf("prompt = %q, want it to contain %q", prompt, want)
+	}
+}
+
 func TestInstallAttachDeclinedLeavesNothing(t *testing.T) {
 	for _, answer := range []string{"n\n", "\n", "", "sure\n"} {
 		t.Run(strings.TrimSpace(answer), func(t *testing.T) {

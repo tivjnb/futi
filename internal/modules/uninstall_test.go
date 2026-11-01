@@ -88,7 +88,7 @@ func TestRunModulesUninstallStrictDetachAborts(t *testing.T) {
 
 	moduleDir := filepath.Join(global, "qr")
 	os.MkdirAll(moduleDir, 0o755)
-	body := "name: qr\ndetach: \"exit 2\"\ncommands:\n  run:\n    cmd: echo\n"
+	body := "name: qr\ndetach: [sh, -c, \"exit 2\"]\ncommands:\n  run:\n    cmd: echo\n"
 	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644)
 	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
 
@@ -108,7 +108,7 @@ func TestRunModulesUninstallDetachFailureWarns(t *testing.T) {
 
 	moduleDir := filepath.Join(global, "qr")
 	os.MkdirAll(moduleDir, 0o755)
-	body := "name: qr\ndetach: \"exit 2\"\ncommands:\n  run:\n    cmd: echo\n"
+	body := "name: qr\ndetach: [sh, -c, \"exit 2\"]\ncommands:\n  run:\n    cmd: echo\n"
 	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644)
 	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
 
@@ -244,7 +244,7 @@ func TestRunModulesUninstallInterruptedDetachKeepsModule(t *testing.T) {
 
 	moduleDir := filepath.Join(global, "qr")
 	os.MkdirAll(moduleDir, 0o755)
-	body := "name: qr\ndetach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo\n"
+	body := "name: qr\ndetach: [sh, -c, \"kill -INT $$\"]\ncommands:\n  run:\n    cmd: echo\n"
 	os.WriteFile(filepath.Join(moduleDir, "config.yaml"), []byte(body), 0o644)
 	metayaml.Write(filepath.Join(moduleDir, metayaml.FileName), &metayaml.Meta{})
 

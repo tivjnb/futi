@@ -40,7 +40,7 @@ func TestRunModulesUpdateStopsWhenHookCatchesSIGTERM(t *testing.T) {
 	ready := filepath.Join(t.TempDir(), "ready")
 	attach := `trap "exit 0" TERM; echo ready > ` + ready + `; i=0; while [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done`
 	writeFile(t, filepath.Join(srcA, "config.yaml"),
-		"name: a\nattach: '"+attach+"'\ncommands:\n  run:\n    cmd: echo v2\n")
+		"name: a\nattach: [sh, -c, '"+attach+"']\ncommands:\n  run:\n    cmd: echo v2\n")
 	writeFile(t, filepath.Join(srcB, "config.yaml"),
 		"name: b\ncommands:\n  run:\n    cmd: echo v2\n")
 

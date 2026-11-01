@@ -331,7 +331,7 @@ func TestParseModuleAttachDetach(t *testing.T) {
 name: qr
 description: QR codes
 attach: ".venv/bin/python -m pip install -r requirements.txt"
-detach: "rm -rf .venv"
+detach: [rm, -rf, .venv]
 commands:
   make:
     cmd: "echo make"
@@ -341,11 +341,11 @@ commands:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if mod.Attach != ".venv/bin/python -m pip install -r requirements.txt" {
-		t.Fatalf("unexpected attach: %q", mod.Attach)
+	if want := cmdText(".venv/bin/python -m pip install -r requirements.txt"); !reflect.DeepEqual(mod.Attach, want) {
+		t.Fatalf("unexpected attach: %+v", mod.Attach)
 	}
-	if mod.Detach != "rm -rf .venv" {
-		t.Fatalf("unexpected detach: %q", mod.Detach)
+	if want := (CmdSpec{List: []string{"rm", "-rf", ".venv"}, IsList: true}); !reflect.DeepEqual(mod.Detach, want) {
+		t.Fatalf("unexpected detach: %+v", mod.Detach)
 	}
 }
 
@@ -363,11 +363,11 @@ commands:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if mod.Attach != "" {
-		t.Fatalf("expected empty attach, got %q", mod.Attach)
+	if !mod.Attach.IsZero() {
+		t.Fatalf("expected empty attach, got %+v", mod.Attach)
 	}
-	if mod.Detach != "" {
-		t.Fatalf("expected empty detach, got %q", mod.Detach)
+	if !mod.Detach.IsZero() {
+		t.Fatalf("expected empty detach, got %+v", mod.Detach)
 	}
 }
 

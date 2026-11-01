@@ -907,12 +907,18 @@ A module can declare setup/teardown hooks — `futi` runs them on install/update
 
 ```yaml
 attach: ".venv/bin/python -m pip install -r requirements.txt"
-detach: "rm -rf .venv"
+detach: [rm, -rf, .venv]
 ```
 
-Hooks run in the module directory; `{{.module_name}}`/`FUTI_MODULE_NAME` is the same name as in `cmd` (the `name` field, or without it the module's directory/file name) on install, update and uninstall; `{{.module_name}}`, `{{.module_root}}`, `{{.env.FOO}}`, `{{quote ...}}` and the environment variables FUTI_MODULE_NAME / FUTI_MODULE_ROOT are available. Hooks inherit the stdin of futi and run without a timeout: a hung hook is interrupted with Ctrl+C. Without a controlling terminal (CI, cron, ssh without tty) a hook runs in its own process group: SIGINT, SIGQUIT, SIGTERM and SIGHUP received by futi are forwarded to all hook processes, including those spawned by a compound command (`sh -c`). With a controlling terminal the hook stays in the futi group (interactive hooks work), including when futi runs in the background (`&`) or with redirected input (`</dev/null`): redirection and background do not enable isolation; on a targeted `kill -TERM <futi>`, processes spawned by the hook may stay behind. An isolated hook (no controlling terminal) does not die from a signal sent to the futi group (`kill -9 -<pgid>`, `timeout -s KILL futi …`): its group is separate. A failed `attach` on install rolls the installation back (the module is removed); on update it is only a warning, and the new tree is kept. A failed `detach` on uninstall is a warning (or a refusal with `--strict-detach`).
+A hook is a template in the same two forms as `cmd` (a string split into words, or a list with one argument per item); it is evaluated to argv and executed without a shell, so `&&`, `|`, `>`, `;`, `$VAR` and globs are not interpreted: they reach the program as plain text. `futi modules validate` warns when a hook has a separate `&&`, `||`, `|`, `>`, `<` or `>>` word. A compound hook is written explicitly with a shell:
 
-The `attach` from a downloaded manifest is foreign code, so install and update ask for confirmation before running it (on stderr; the template is shown as is, without substituting values):
+```yaml
+attach: [sh, -c, "python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"]
+```
+
+Hooks run in the module directory; `{{.module_name}}`/`FUTI_MODULE_NAME` is the same name as in `cmd` (the `name` field, or without it the module's directory/file name) on install, update and uninstall; `{{.module_name}}`, `{{.module_root}}`, `{{.env.FOO}}` (there are no inputs and no `quote`) and the environment variables FUTI_MODULE_NAME / FUTI_MODULE_ROOT are available. Hooks inherit the stdin of futi and run without a timeout: a hung hook is interrupted with Ctrl+C. Without a controlling terminal (CI, cron, ssh without tty) a hook runs in its own process group: SIGINT, SIGQUIT, SIGTERM and SIGHUP received by futi are forwarded to all hook processes, including those spawned by a compound command (`[sh, -c, "…"]`). With a controlling terminal the hook stays in the futi group (interactive hooks work), including when futi runs in the background (`&`) or with redirected input (`</dev/null`): redirection and background do not enable isolation; on a targeted `kill -TERM <futi>`, processes spawned by the hook may stay behind. An isolated hook (no controlling terminal) does not die from a signal sent to the futi group (`kill -9 -<pgid>`, `timeout -s KILL futi …`): its group is separate. A failed `attach` on install rolls the installation back (the module is removed); on update it is only a warning, and the new tree is kept. A failed `detach` on uninstall is a warning (or a refusal with `--strict-detach`).
+
+The `attach` from a downloaded manifest is foreign code, so install and update ask for confirmation before running it (on stderr; the hook is shown as written, without substituting values; a list is shown as `[a, "b c"]`):
 
 ```
 Module qr runs an attach hook (in /home/user/.config/futi/modules/qr):

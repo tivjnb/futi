@@ -342,7 +342,7 @@ func TestFutiUpdateInterruptPrintsErrorOnce(t *testing.T) {
 		t.Fatalf("install: %v\n%s", err, out)
 	}
 	writeFile(t, filepath.Join(src, "config.yaml"),
-		"name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
+		"name: a\nattach: [sh, -c, \"kill -INT $$\"]\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	stderr, err := run("modules", "update", "--yes")
 	if err == nil {
@@ -380,7 +380,7 @@ func TestFutiModulesUpdateDiesFromSignalWhenAttachInterrupted(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 	writeFile(t, filepath.Join(src, "config.yaml"),
-		"name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
+		"name: a\nattach: [sh, -c, \"kill -INT $$\"]\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	cmd, err := run("modules", "update", "--yes")
 	if err == nil {

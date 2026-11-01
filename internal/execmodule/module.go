@@ -96,8 +96,8 @@ type Command struct {
 type Module struct {
 	Name   string
 	Root   string
-	Attach string // setup hook: futi modules install/update
-	Detach string // teardown hook: futi modules uninstall
+	Attach CmdSpec // setup hook: futi modules install/update
+	Detach CmdSpec // teardown hook: futi modules uninstall
 	Command
 
 	// schemaErrs holds the manifest schema errors (with line numbers) found
@@ -110,8 +110,8 @@ type moduleYAML struct {
 	Name        string                 `yaml:"name"`
 	Description string                 `yaml:"description"`
 	Cmd         CmdSpec                `yaml:"cmd"`
-	Attach      string                 `yaml:"attach"`
-	Detach      string                 `yaml:"detach"`
+	Attach      CmdSpec                `yaml:"attach"`
+	Detach      CmdSpec                `yaml:"detach"`
 	Args        []inputYAML            `yaml:"args"`
 	Flags       []inputYAML            `yaml:"flags"`
 	Commands    map[string]commandYAML `yaml:"commands"`

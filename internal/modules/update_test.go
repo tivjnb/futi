@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/metayaml"
 )
 
@@ -98,7 +99,7 @@ func TestRunModulesUpdateAttachFailureWarns(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 	// Источник изменился: новая версия с failing attach.
-	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\nattach: \"exit 5\"\ncommands:\n  run:\n    cmd: echo v2\n")
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\nattach: [sh, -c, \"exit 5\"]\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	if err := newTestManager(t, &bytes.Buffer{}, nil).Update(context.Background(), UpdateOptions{Name: "qr", Yes: true}); err != nil {
 		t.Fatalf("attach failure on update must be warning, not error: %v", err)
@@ -154,7 +155,7 @@ func TestRunModulesUpdateAllStopsOnInterrupt(t *testing.T) {
 			t.Fatalf("install: %v", err)
 		}
 	}
-	writeFile(t, filepath.Join(srcA, "config.yaml"), "name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
+	writeFile(t, filepath.Join(srcA, "config.yaml"), "name: a\nattach: [sh, -c, \"kill -INT $$\"]\ncommands:\n  run:\n    cmd: echo v2\n")
 	writeFile(t, filepath.Join(srcB, "config.yaml"), "name: b\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	err := newTestManager(t, &bytes.Buffer{}, nil).Update(context.Background(), UpdateOptions{Yes: true})
@@ -178,7 +179,7 @@ func TestRunModulesUpdateInterruptedAttachInvalidatesCache(t *testing.T) {
 	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, SkipAttach: true}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: qr\nattach: [sh, -c, \"kill -INT $$\"]\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	// Посторонняя запись в кэше — update должен её сбросить.
 	rt := newTestRuntime(t)
@@ -208,7 +209,7 @@ func TestRunModulesUpdateInterruptPrintsErrorOnce(t *testing.T) {
 	if err := newTestManager(t, &bytes.Buffer{}, nil).Install(context.Background(), InstallOptions{Source: src, SkipAttach: true}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	writeFile(t, filepath.Join(src, "config.yaml"), "name: a\nattach: \"kill -INT $$\"\ncommands:\n  run:\n    cmd: echo v2\n")
+	writeFile(t, filepath.Join(src, "config.yaml"), "name: a\nattach: [sh, -c, \"kill -INT $$\"]\ncommands:\n  run:\n    cmd: echo v2\n")
 
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -717,7 +718,7 @@ func TestUpdateChangeListDeletionsFirst(t *testing.T) {
 
 	var err error
 	stderr := captureStderr(t, func() {
-		err = attachGate{errW: os.Stderr, yes: true}.allowReplace("qr", "/m/qr", "", diff)
+		err = attachGate{errW: os.Stderr, yes: true}.allowReplace("qr", "/m/qr", execmodule.CmdSpec{}, diff)
 	})
 	if err != nil {
 		t.Fatalf("allowReplace: %v", err)

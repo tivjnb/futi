@@ -517,3 +517,16 @@ func (p *parser) fieldStart(n *parse.FieldNode) int {
 func isAlnum(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
+
+// Literals returns the argv elements that are literal text only, as written
+// (quotes of the string form included), in order of the text. Elements with
+// references and text inside if/range bodies are skipped.
+func (t *Template) Literals() []string {
+	var out []string
+	for _, r := range t.runs {
+		if len(r.pieces) == 1 && r.pieces[0].ref == refNone && r.pieces[0].top {
+			out = append(out, r.pieces[0].text)
+		}
+	}
+	return out
+}

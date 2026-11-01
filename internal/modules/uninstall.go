@@ -89,7 +89,7 @@ func (m *Manager) Uninstall(ctx context.Context, opts UninstallOptions) error {
 				return fmt.Errorf("cannot load manifest (strict), nothing deleted: %w", err)
 			}
 			fmt.Fprintf(m.s.Err, "Warning: cannot load manifest, detach skipped: %v\n", err)
-		} else if mod.Detach != "" {
+		} else if !mod.Detach.IsZero() {
 			policy := m.rt.Exec()
 			if err := modulerunner.RunHook(ctx, mod.Detach, moduleRoot, execmodule.EffectiveName(mod.Name, manifestPath), m.s.Stdin, m.s.Out, m.s.Err, policy.HookGroup, policy.ForwardSignals); err != nil {
 				if _, interrupted := executor.InterruptSignal(err); interrupted {

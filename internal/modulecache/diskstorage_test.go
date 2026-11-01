@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -411,5 +412,33 @@ func TestDiskStorageKeepsEmptyDefault(t *testing.T) {
 	}
 	if flags[1].Default != nil {
 		t.Errorf("y.Default = %v, want nil", flags[1].Default)
+	}
+}
+
+// TestDiskStorageKeepsHookForms: attach (string) and detach (list) survive
+// the gob round trip in the form they were written in.
+func TestDiskStorageKeepsHookForms(t *testing.T) {
+	dir := t.TempDir()
+	mod, err := execmodule.ParseManifest([]byte("name: m\nattach: make install\ndetach: [rm, -rf, \"a b\"]\ncmd: echo\n"), "m.yaml", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewDiskStorage(filepath.Join(dir, "cache.gob"))
+	if err := s.Save(cacheFile{Version: cacheFileVersion, Entries: map[string]entry{"m.yaml": {Module: mod}}}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cf, err := s.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s.binaryID == "" {
+		t.Skip("binary identity unavailable")
+	}
+	got := cf.Entries["m.yaml"].Module
+	if want := (execmodule.CmdSpec{Text: "make install"}); !reflect.DeepEqual(got.Attach, want) {
+		t.Errorf("Attach = %+v, want %+v", got.Attach, want)
+	}
+	if want := (execmodule.CmdSpec{List: []string{"rm", "-rf", "a b"}, IsList: true}); !reflect.DeepEqual(got.Detach, want) {
+		t.Errorf("Detach = %+v, want %+v", got.Detach, want)
 	}
 }

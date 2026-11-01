@@ -226,3 +226,35 @@ func TestParseNoPanicOnBrokenInput(t *testing.T) {
 		})
 	}
 }
+
+func TestLiterals(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		list []string // list form when non-nil
+		want []string
+	}{
+		{"string form words", `echo a && b`, nil, []string{"echo", "a", "&&", "b"}},
+		{"reference is not literal", `echo x{{.env.HOME}} y`, nil, []string{"echo", "y"}},
+		{"quoted keeps quotes", `echo "&&" '|'`, nil, []string{"echo", `"&&"`, `'|'`}},
+		{"inside if is skipped", `echo {{if .env.A}}&&{{end}} z`, nil, []string{"echo", "z"}},
+		{"list items", "", []string{"sh", "-c", "a && b", "&&"}, []string{"sh", "-c", "a && b", "&&"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var tmpl *Template
+			var err error
+			if tc.list != nil {
+				tmpl, err = ParseList(tc.list)
+			} else {
+				tmpl, err = Parse(tc.src)
+			}
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if got := tmpl.Literals(); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("Literals() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

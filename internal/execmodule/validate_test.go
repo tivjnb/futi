@@ -2,6 +2,7 @@ package execmodule
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -280,8 +281,8 @@ func TestValidateSchemaRules(t *testing.T) {
 		{"undeclared input", "commands:\n  b:\n    cmd: 'echo {{.msg}}'\n", `command "b": cmd: `},
 		{"unused input", "commands:\n  b:\n    cmd: echo\n    args:\n      - name: x\n", `command "b": cmd: `},
 		{"list form cmd", "commands:\n  b:\n    cmd: [echo, '{{.x}}']\n    args:\n      - name: x\n", ""},
-		{"broken attach", "attach: '{{.x'\ncmd: echo\n", `attach: invalid template:`},
-		{"broken detach", "detach: '{{.x'\ncmd: echo\n", `detach: invalid template:`},
+		{"broken attach", "attach: '{{.x'\ncmd: echo\n", `attach: 1: unclosed action`},
+		{"broken detach", "detach: '{{.x'\ncmd: echo\n", `detach: 1: unclosed action`},
 		{"name starts with dash", "commands:\n  -x:\n    cmd: echo\n", `command "-x": invalid command name`},
 		{"name with dot", "commands:\n  a.b:\n    cmd: echo\n", `command "a.b": invalid command name`},
 		{"name with space", "commands:\n  \"a b\":\n    cmd: echo\n", `command "a b": invalid command name`},
@@ -352,7 +353,7 @@ func TestValidateOrderIsDeterministic(t *testing.T) {
 
 func TestValidateOrderSectionsAndParentBeforeChildren(t *testing.T) {
 	mod := &Module{
-		Attach: "{{.x",
+		Attach: cmdText("echo {{.x"),
 		Command: Command{
 			Cmd:      cmdText("echo {{.p}}"),
 			Args:     []inputs.Spec{{Name: "p", Type: "float"}},
@@ -546,6 +547,64 @@ func TestShadowWarnings(t *testing.T) {
 				if got[i] != tt.want[i] {
 					t.Fatalf("ShadowWarnings[%d] = %q, want %q", i, got[i], tt.want[i])
 				}
+			}
+		})
+	}
+}
+
+func TestValidateHookInputRef(t *testing.T) {
+	mod := &Module{
+		Attach:  cmdText("echo {{.x}}"),
+		Detach:  CmdSpec{List: []string{"echo", "{{.y}}"}, IsList: true},
+		Command: Command{Cmd: cmdText("echo")},
+	}
+	errs, _ := mod.Validate()
+	var got []string
+	for _, e := range errs {
+		got = append(got, e.Error())
+	}
+	want := []string{`attach: 1:8: unknown input "x"`, `detach: [2] 1:3: unknown input "y"`}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("errors = %q, want %q", got, want)
+	}
+}
+
+func TestValidateHookAllowedRefs(t *testing.T) {
+	mod := &Module{
+		Attach:  cmdText("echo {{.module_name}} {{.module_root}} {{.env.HOME}}"),
+		Command: Command{Cmd: cmdText("echo")},
+	}
+	if errs, warns := mod.Validate(); len(errs) != 0 || len(warns) != 0 {
+		t.Fatalf("errors = %v, warnings = %q, want none", errs, warns)
+	}
+}
+
+func TestValidateHookShellWarning(t *testing.T) {
+	tests := []struct {
+		name   string
+		attach CmdSpec
+		detach CmdSpec
+		want   []string
+	}{
+		{"string &&", cmdText("make && make install"), CmdSpec{}, []string{`attach: "&&" is passed to the program as an argument (hooks run without a shell); use [sh, -c, "…"]`}},
+		{"list pipe in detach", CmdSpec{}, CmdSpec{List: []string{"cat", "|", "wc"}, IsList: true}, []string{`detach: "|" is passed to the program as an argument (hooks run without a shell); use [sh, -c, "…"]`}},
+		{"each operator once", cmdText("a > b > c || d"), CmdSpec{}, []string{
+			`attach: ">" is passed to the program as an argument (hooks run without a shell); use [sh, -c, "…"]`,
+			`attach: "||" is passed to the program as an argument (hooks run without a shell); use [sh, -c, "…"]`,
+		}},
+		{"sh -c is fine", CmdSpec{List: []string{"sh", "-c", "a && b"}, IsList: true}, CmdSpec{}, nil},
+		{"operator inside a word is fine", cmdText("echo a&&b"), CmdSpec{}, nil},
+		{"quoted operator is fine", cmdText(`echo "&&"`), CmdSpec{}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mod := &Module{Attach: tc.attach, Detach: tc.detach, Command: Command{Cmd: cmdText("echo")}}
+			errs, warns := mod.Validate()
+			if len(errs) != 0 {
+				t.Fatalf("errors = %v, want none", errs)
+			}
+			if !reflect.DeepEqual(warns, tc.want) {
+				t.Fatalf("warnings = %q, want %q", warns, tc.want)
 			}
 		})
 	}

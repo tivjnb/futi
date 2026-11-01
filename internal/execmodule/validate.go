@@ -2,9 +2,9 @@ package execmodule
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
-	"text/template"
 	"unicode"
 
 	"github.com/tivjnb/futi/internal/argvtmpl"
@@ -25,11 +25,14 @@ const defaultPath = "(default)"
 //   - ошибки схемы входов (inputs.Validate) с префиксом command "<path>"
 //   - ошибки шаблона cmd: синтаксис, запрещённые конструкции, ссылки на
 //     необъявленные входы, неупомянутые входы (argvtmpl.Check)
-//   - синтаксическая ошибка шаблона в attach, detach
+//   - ошибки шаблона в attach, detach: синтаксис, любой вход ({{.x}}); доступны
+//     только env, module_root, module_name
 //   - недопустимое имя команды (пустое, с "-" в начале, с точкой, пробелами, управляющими символами)
 //
 // Warnings (не блокируют, показываются в futi validate):
 //   - команда с commands, но без cmd (вызов без subcommand падает в runtime)
+//   - элемент хука attach/detach — оператор shell (&&, ||, |, >, <, >>): хуки
+//     идут без shell, он попадёт программе аргументом
 //   - подкоманда перекрывает значения позиционного string-входа (ShadowWarnings)
 //
 // Схема default-команды модуля (args/flags верхнего уровня)
@@ -43,8 +46,8 @@ const defaultPath = "(default)"
 func (m *Module) Validate() (errors []error, warnings []string) {
 	errors = append(errors, m.schemaErrs...)
 
-	validateHook("attach", m.Attach, &errors)
-	validateHook("detach", m.Detach, &errors)
+	validateHook("attach", m.Attach, &errors, &warnings)
+	validateHook("detach", m.Detach, &errors, &warnings)
 
 	if m.Cmd.IsZero() && len(m.Commands) == 0 {
 		errors = append(errors, fmt.Errorf("module has no cmd and no commands"))
@@ -60,10 +63,31 @@ func (m *Module) Validate() (errors []error, warnings []string) {
 	return errors, warnings
 }
 
-// validateHook проверяет синтаксис шаблона хука (attach/detach).
-func validateHook(name, tmpl string, errors *[]error) {
-	if _, err := template.New(name).Funcs(TemplateFuncs()).Parse(tmpl); err != nil {
-		*errors = append(*errors, fmt.Errorf("%s: invalid template: %w", name, err))
+// shellOperators are the words that mean something to a shell but are plain
+// arguments in a hook, which runs without one.
+var shellOperators = []string{"&&", "||", "|", ">", "<", ">>"}
+
+// validateHook checks the template of a hook (attach/detach) the way cmd is
+// checked, but with no inputs: only env, module_root and module_name are
+// available. A literal shell operator element is a warning.
+func validateHook(name string, hook CmdSpec, errors *[]error, warnings *[]string) {
+	if hook.IsZero() {
+		return
+	}
+	tmpl, err := hook.Template()
+	if err != nil {
+		*errors = append(*errors, fmt.Errorf("%s: %w", name, err))
+		return
+	}
+	for _, err := range tmpl.Check(nil) {
+		*errors = append(*errors, fmt.Errorf("%s: %w", name, err))
+	}
+	var seen []string
+	for _, lit := range tmpl.Literals() {
+		if slices.Contains(shellOperators, lit) && !slices.Contains(seen, lit) {
+			seen = append(seen, lit)
+			*warnings = append(*warnings, fmt.Sprintf("%s: %q is passed to the program as an argument (hooks run without a shell); use [sh, -c, \"…\"]", name, lit))
+		}
 	}
 }
 
