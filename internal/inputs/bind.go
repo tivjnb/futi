@@ -6,8 +6,10 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/tivjnb/futi/internal/argvtmpl"
+	"github.com/tivjnb/futi/internal/termtext"
 )
 
 func (s Spec) isList() bool { return s.Variadic || s.Rest }
@@ -110,7 +112,7 @@ func canonical(s Spec, str string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("invalid int value %q for %s", str, s.CLIName())
 		}
-		return strconv.Itoa(n), nil
+		return checkChoice(s, strconv.Itoa(n), str)
 	case argvtmpl.Bool:
 		b, ok := parseBool(str)
 		if !ok {
@@ -121,7 +123,23 @@ func canonical(s Spec, str string) (string, error) {
 	if s.Required && str == "" {
 		return "", fmt.Errorf("empty value for %s", s.CLIName())
 	}
-	return str, nil
+	return checkChoice(s, str, str)
+}
+
+// checkChoice returns str (the canonical form) if the input has no choices or str
+// is one of them; the error shows given, the value as the user wrote it.
+func checkChoice(s Spec, str, given string) (string, error) {
+	if len(s.Choices) == 0 {
+		return str, nil
+	}
+	valid := s.CanonicalChoices()
+	if slices.Contains(valid, str) {
+		return str, nil
+	}
+	for i, c := range valid {
+		valid[i] = termtext.Line(c)
+	}
+	return "", fmt.Errorf("invalid value %q for %s (valid: %s)", given, s.CLIName(), strings.Join(valid, ", "))
 }
 
 func asScalar(s Spec, raw any) (string, error) {

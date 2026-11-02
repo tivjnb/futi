@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -54,7 +55,7 @@ COMP_LINE='` + compLine + `'
 COMP_POINT=` + strconv.Itoa(compPoint) + `
 __futi_get_completion_results
 printf 'DIRECTIVE=%s\n' "$directive"
-printf 'REPLY=%s\n' "${COMPREPLY[*]}"
+printf 'REPLY=%s\n' "${COMPREPLY[@]}"
 `
 	cmd := exec.Command(bash, "--norc", "--noprofile", "-c", driver)
 	cmd.Env = append(os.Environ(), "SCRIPT="+scriptPath, "OUT="+outPath, "ARGS="+argsPath)
@@ -68,7 +69,7 @@ printf 'REPLY=%s\n' "${COMPREPLY[*]}"
 			directive = strings.TrimPrefix(l, "DIRECTIVE=")
 		case strings.HasPrefix(l, "REPLY="):
 			if r := strings.TrimPrefix(l, "REPLY="); r != "" {
-				reply = strings.Split(r, " ")
+				reply = append(reply, r)
 			}
 		}
 	}
@@ -142,6 +143,18 @@ func TestBashCompletionScript(t *testing.T) {
 			wordbreak: " ",
 		},
 		{
+			name:  "candidates are escaped for the shell",
+			words: `futi ""`, line: "futi ", point: 5, cword: 1,
+			out:      "us east\nplain\n:4",
+			wantArgs: []string{"__complete", ""}, wantReply: []string{`us\ east`, "plain"}, wantDir: "4",
+		},
+		{
+			name:  "prefix is stripped before escaping",
+			words: `futi mod --level=us`, line: "futi mod --level=us", point: 19, cword: 2,
+			out:      "--level=us east\n:4",
+			wantArgs: []string{"__complete", "mod", "--level=us"}, wantReply: []string{`us\ east`}, wantDir: "4",
+		},
+		{
 			name:  "курсор внутри слова: передаётся часть до курсора",
 			words: `futi dockxr ps`, line: "futi dockxr ps", point: 9, cword: 1,
 			out:      "docker\n:0\n",
@@ -199,5 +212,98 @@ echo "args=${__futi_args+SET}"
 	}
 	if string(got) != "cur=\nargs=\n" {
 		t.Errorf("переменные утекли в вызывающий shell: %q", got)
+	}
+}
+
+// TestBashCompletionStripsEqualsPrefix: "=" is in COMP_WORDBREAKS, so bash
+// replaces only the part after the last "=": candidates lose the prefix.
+func TestBashCompletionStripsEqualsPrefix(t *testing.T) {
+	cases := []struct {
+		name       string
+		withLib    bool
+		wordbreaks string
+		want       []string
+	}{
+		{"default wordbreaks", false, "", []string{"debug"}},
+		{"default wordbreaks with bash-completion", true, "", []string{"debug"}},
+		{"no equals in wordbreaks", false, " :", []string{"--level=debug"}},
+		{"no equals in wordbreaks with bash-completion", true, " :", []string{"--level=debug"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wb := tc.wordbreaks
+			if wb == "" {
+				wb = " =:"
+			}
+			_, reply, _ := runBashComplete(t, tc.withLib, "futi mod --level=de", "futi mod --level=de", 19, 2, "--level=debug\n:4", wb)
+			if !slices.Equal(reply, tc.want) {
+				t.Errorf("COMPREPLY = %q, want %q", reply, tc.want)
+			}
+		})
+	}
+}
+
+// TestBashCompletionDirsOnly: directive 16 offers directories only and
+// removes "-o default", otherwise bash would add files on an empty COMPREPLY.
+func TestBashCompletionDirsOnly(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not found")
+	}
+	tmp := t.TempDir()
+	for _, d := range []string{"sub", "my dir", "a:b"} {
+		if err := os.Mkdir(filepath.Join(tmp, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "f.txt"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(tmp, "futi.bash")
+	if err := os.WriteFile(scriptPath, []byte(bashCompletionScript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name  string
+		words string // COMP_WORDS elements after futi mk
+		line  string
+		want  []string
+	}{
+		{"empty word", `""`, "futi mk ", []string{"a:b", "my dir", "sub"}},
+		{"colon prefix is stripped", `"a:"`, "futi mk a:", []string{"b"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			compoptLog := filepath.Join(t.TempDir(), "compopt.txt")
+			// compopt only works inside a real completion, so it is replaced by a recorder.
+			driver := `source "$SCRIPT"
+futi() { printf ':16\n'; }
+compopt() { echo "$*" >> "$LOG"; }
+COMP_WORDS=(futi mk ` + tc.words + `); COMP_CWORD=2; COMP_LINE='` + tc.line + `'; COMP_POINT=${#COMP_LINE}
+_futi
+printf 'REPLY=%s\n' "${COMPREPLY[@]}"
+`
+			cmd := exec.Command(bash, "--norc", "--noprofile", "-c", driver)
+			cmd.Dir = tmp
+			cmd.Env = append(os.Environ(), "SCRIPT="+scriptPath, "LOG="+compoptLog)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("bash: %v\n%s", err, out)
+			}
+			var got []string
+			for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				got = append(got, strings.TrimSuffix(strings.TrimPrefix(l, "REPLY="), "/"))
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("COMPREPLY = %q, want %q", got, tc.want)
+			}
+			log, _ := os.ReadFile(compoptLog)
+			for _, w := range []string{"+o default", "-o filenames"} {
+				if !strings.Contains(string(log), w) {
+					t.Errorf("compopt calls %q lack %q", log, w)
+				}
+			}
+		})
 	}
 }

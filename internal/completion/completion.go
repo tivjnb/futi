@@ -194,12 +194,13 @@ func pathMatches(source discovery.Source, loader modulerunner.ModuleLoader, args
 	case state.InRest:
 		// The tokens of the rest arg are not ours: let the shell complete files.
 		return nil, ShellCompDirectiveDefault
-	case state.AfterDD, state.Pending != nil:
-		// A value of a flag or an arg: free text.
-		return nil, ShellCompDirectiveNoFileComp
+	case state.Pending != nil:
+		return valueCompletion([]*inputs.Spec{state.Pending}, toComplete)
+	case state.AfterDD:
+		return valueCompletion(state.Next, toComplete)
 	case strings.HasPrefix(toComplete, "-"):
 		if strings.Contains(toComplete, "=") {
-			return nil, ShellCompDirectiveNoFileComp
+			return flagValueMatches(flagSpecs, toComplete)
 		}
 		return filterMatches(flagSpecMatches(flagSpecs, state.Used), toComplete), ShellCompDirectiveNoFileComp
 	case len(rest) == 0:
@@ -208,14 +209,56 @@ func pathMatches(source discovery.Source, loader modulerunner.ModuleLoader, args
 			matches = slices.DeleteFunc(matches, func(m Match) bool { return IsReservedName(m.Text) })
 		}
 		matches = filterMatches(matches, toComplete)
-		// A node that takes the rest arg first and has no subcommands: the
-		// word is the first token of the rest, so let the shell complete files.
-		if len(matches) == 0 && len(argSpecs) > 0 && argSpecs[0].Rest {
-			return nil, ShellCompDirectiveDefault
+		if len(matches) > 0 {
+			return matches, ShellCompDirectiveNoFileComp
 		}
-		return matches, ShellCompDirectiveNoFileComp
+		// No subcommand fits the prefix: it is the first positional word.
+		return valueCompletion(state.Next, toComplete)
+	}
+	return valueCompletion(state.Next, toComplete)
+}
+
+// flagValueMatches completes the `--name=value` form: the choices of the flag
+// with the "--name=" prefix, nothing for other flags (their values are free
+// text; the shell does not complete a value glued to the flag).
+func flagValueMatches(flags []inputs.Spec, toComplete string) ([]Match, Directive) {
+	name := flagName(toComplete)
+	for _, f := range flags {
+		if cliName(f.Name) != name {
+			continue
+		}
+		var matches []Match
+		for _, c := range f.CanonicalChoices() {
+			matches = append(matches, Match{Text: "--" + name + "=" + c})
+		}
+		return filterMatches(matches, toComplete), ShellCompDirectiveNoFileComp
 	}
 	return nil, ShellCompDirectiveNoFileComp
+}
+
+// valueCompletion suggests a value for any of specs. The wider class wins: a
+// file input or the rest arg (its words belong to the wrapped program) lets the
+// shell complete files; else a dir input limits the shell to directories; else
+// the union of the choices is suggested; else there is nothing to suggest.
+func valueCompletion(specs []*inputs.Spec, toComplete string) ([]Match, Directive) {
+	var dirs bool
+	var matches []Match
+	for _, s := range specs {
+		switch {
+		case s.Rest || s.Type == "file":
+			return nil, ShellCompDirectiveDefault
+		case s.Type == "dir":
+			dirs = true
+		default:
+			for _, c := range s.CanonicalChoices() {
+				matches = append(matches, Match{Text: c})
+			}
+		}
+	}
+	if dirs {
+		return nil, ShellCompDirectiveFilterDirs
+	}
+	return filterMatches(matches, toComplete), ShellCompDirectiveNoFileComp
 }
 
 // helpPathMatches suggests the path words after `futi help` / `futi list`.

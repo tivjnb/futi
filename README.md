@@ -211,9 +211,10 @@ An input (an item of `args` or `flags`) is an object with a `name`; there is no 
 | Field | Where | Default | Description |
 |---|---|---|---|
 | `name` | both | — | Required. `[a-z][a-z0-9_]*`, unique among the args and flags of the node. On the command line `_` becomes `-` (`ignore_case` is `--ignore-case`); in a template it is `{{.ignore_case}}`. The names `help`, `env`, `module_root`, `module_name` are reserved |
-| `type` | both | `string` | `string`, `int` or `bool`; `bool` only for flags |
+| `type` | both | `string` | `string`, `int`, `bool`, `file` or `dir`; `bool` only for flags. `file` and `dir` are strings that hint at a path (completion, help): futi never checks that the path exists or what it points to, and does not change it |
 | `required` | both, not bool | `false` | The input must be given. Together with any `default` (even an empty one) it is a schema error. For variadic/rest — at least one value |
 | `default` | both, not variadic/rest | — | A string; for `int` an integer, for `bool` one of `true/false/1/0/yes/no/on/off` |
+| `choices` | both, `string`/`int` only | — | A non-empty list of allowed values (see [Choices](#choices)). Not for `bool`, `file`, `dir` or `rest` |
 | `description` | both | — | Shown in help and completion |
 | `short` | flags | — | One Latin letter, case matters (`-f` is not `-F`), unique in the node; `h` is reserved. Allowed for variadic flags |
 | `variadic` | both | `false` | Args: several words in a row. Flags: the flag may be repeated and the values are collected. Not for `bool` |
@@ -221,6 +222,28 @@ An input (an item of `args` or `flags`) is an object with a `name`; there is no 
 | `allow_dash` | both, not bool | `false` | Lifts the [protection against values starting with `-`](#values-starting-with--) |
 
 The args of a command have one of three forms: required then optional (`req* opt*`), required then one `variadic` then required (`req* variadic req*`), or required then one `rest` (`req* rest`). Only required args may stand before `variadic`/`rest`; an optional arg may follow required ones and may have a `default` (`context` above defaults to `.`).
+
+#### Choices
+
+`choices` restricts an input to a fixed set of values; it is allowed for `string` and `int` inputs (including variadic ones). The list must not be empty; for `int` every element must be an integer; duplicates (`1` and `01` count as the same integer) and control characters are a schema error. A `default` must be one of the choices.
+
+```yaml
+flags:
+  - name: level
+    choices: [debug, info, warn]
+    default: info
+args:
+  - name: env
+    choices: [dev, prod]
+```
+
+A value outside the list is an error; the comparison is exact and case-sensitive, and every element of a variadic input is checked:
+
+```
+ERROR: invalid value "Info" for --level (valid: debug, info, warn)
+```
+
+A choice that starts with `-` on an input under the [dash protection](#values-starting-with--) is a schema error: use `--opt={{.x}}`, a literal `--` in `cmd`, or `allow_dash: true`.
 
 ```yaml
 # meta.yaml — a module as a single command with a schema
@@ -824,7 +847,7 @@ flags:
   -h, --help
 ```
 
-A `variadic` input is shown with `...` (`[words...]`), a `rest` arg as `[docker_args...]` with the note `(passed verbatim)`. If a node has subcommands and a string arg, the help adds `words up, down are subcommands; pass such a value after --`. The template is not shown in the help; to see the assembled command use [`--dry-run`](#--dry-run).
+A flag with `choices` shows the values instead of the type (`--level debug|info|warn (default "info")`), an arg shows them as `(dev|prod)`; a `file` or `dir` flag shows its type (`--out file`). A `variadic` input is shown with `...` (`[words...]`), a `rest` arg as `[docker_args...]` with the note `(passed verbatim)`. If a node has subcommands and a string arg, the help adds `words up, down are subcommands; pass such a value after --`. The template is not shown in the help; to see the assembled command use [`--dry-run`](#--dry-run).
 
 A trailing `-h`/`--help` after the path is ignored (`futi help demo -h` = `futi help demo`); `futi help --help` shows the help of futi itself, like `futi -h`. Every word after `futi help` must be a path word: `futi help docker build extra` fails with `unknown command "extra" for "futi docker build"`. `help` is a builtin only as the first word: `futi demo help` calls the command `help` of the module `demo` as an ordinary command (flags, `-- args`, its stderr and exit code), and fails if there is no such command; `futi help demo help` shows the help of that command.
 
@@ -863,7 +886,7 @@ An invalid module prints a report with all errors and warnings in one pass:
 ```bash
 $ futi modules validate bad
 ERROR: line 10: "positional" was replaced by "args"/"flags" (see README)
-ERROR: command "build": flag "tag": invalid type "float" (valid: string, int, bool)
+ERROR: command "build": flag "tag": invalid type "float" (valid: string, int, bool, file, dir)
 ERROR: command "build": flag "tag": duplicate name "tag"
 ERROR: command "build": cmd: 1:14: "-t" would be left without its value when "tag" is unset; use {{if .tag}}-t {{.tag}}{{end}} or -t={{.tag}}
 ERROR: command "empty": must have cmd or commands
@@ -890,7 +913,7 @@ $ echo $?
 - a module with neither `cmd` nor `commands`
 - a command with neither `cmd` nor `commands` (a useless command); a `cmd` consisting only of spaces counts as empty
 - `args` or `flags` without `cmd` — at any level (module, command); inputs are not inherited by subcommands
-- an input schema error: a `type` outside `{string, int, bool}`, `bool` with `required`/`variadic`/`allow_dash`, `required` together with a `default` (even an empty one), a `default` of the wrong type, a duplicate name among the args and flags of a node, a name that does not match `[a-z][a-z0-9_]*`, a reserved name (`help`, `env`, `module_root`, `module_name`), an invalid `short` (not one Latin letter, duplicate, `h`), `rest` not on the last arg, and an invalid form of the args (only `required… optional…`, `required… variadic required…` or `required… rest` are allowed)
+- an input schema error: a `type` outside `{string, int, bool, file, dir}`, wrong `choices` (on `bool`, `file`, `dir` or `rest`, empty, duplicates, a non-integer for `int`, a `default` outside the list), `bool` with `required`/`variadic`/`allow_dash`, `required` together with a `default` (even an empty one), a `default` of the wrong type, a duplicate name among the args and flags of a node, a name that does not match `[a-z][a-z0-9_]*`, a reserved name (`help`, `env`, `module_root`, `module_name`), an invalid `short` (not one Latin letter, duplicate, `h`), `rest` not on the last arg, and an invalid form of the args (only `required… optional…`, `required… variadic required…` or `required… rest` are allowed)
 - a template error in `cmd`, `attach`, `detach`: syntax, a construct that is not allowed (see [`cmd` vs `text/template`](#cmd-vs-texttemplate)), a reference to an undeclared input, a bool outside a condition, a variadic/rest in a concatenation without `range`, `range` over a non-variadic input; hooks may refer only to `env`, `module_root` and `module_name`
 - an input that `cmd` never mentions (`input "port" is not used in cmd`)
 - a dangling flag: a literal `--tail` followed by an argument that may disappear (`"--tail" would be left without its value when "tail" is unset; use {{if .tail}}--tail {{.tail}}{{end}} or --tail={{.tail}}`); not checked for variadic/rest
@@ -1168,8 +1191,8 @@ futi completion fish > ~/.config/fish/completions/futi.fish
 
 - **Path words** — the children of the current node in the merged tree: `futi <TAB>` (modules, namespaces, builtins), `futi dev <TAB>`, `futi docker <TAB>`, `futi docker migrate <TAB>`. A subcommand is suggested only right after the path: once a flag or another word follows, the rest are the inputs of the node
 - **Flags** — only for a word starting with `-`: `futi k8s logs -<TAB>` → `--follow`, `-f`, `--tail`, `--help`; flags already used are not offered again (except variadic ones). The marks `(required)` and `(default: …)` are visible in zsh; bash/fish cut them off
-- **Values** — nothing is suggested for the value of a non-bool flag (`futi docker build --tag <TAB>`, `--tag=<TAB>`) or for an arg: the shell does not add files either (file completion is planned for `path`/`dir` inputs, see Roadmap). A bool flag takes no value, so nothing is offered after it
-- **Rest arg** — once the rest arg has started (`futi docker run nginx <TAB>`) or when it is the first input of a node without subcommands (`futi run <TAB>`), the tokens are passed to the tool as they are, and the shell completes files as usual. Everything after `--` is data: no flags or subcommands are suggested
+- **Values** — an input with `choices` suggests its choices; a `file` input suggests files and directories, a `dir` input suggests directories only. For any other input (`futi docker build --tag <TAB>`) nothing is suggested, and the shell does not add files either. After `--flag=<TAB>` only choices are completed, never paths. When a node has subcommands and its first arg has `choices`, the matching subcommands win; the choices are offered only if no subcommand matches. A bool flag takes no value, so nothing is offered after it
+- **Rest arg** — once the rest arg has started (`futi docker run nginx <TAB>`) or when it is the next input of a node (`futi run <TAB>`; on a node with subcommands, only if the typed prefix matches no subcommand), the tokens are passed to the tool as they are, and the shell completes files as usual. Everything after `--` is data: no flags or subcommands are suggested
 - **`help` and `list`** — these are builtins only as the first word; after them the command path is completed: `futi help do<TAB>` → `docker`, `futi list dev <TAB>`. Inside a path `help` and `list` are suggested only if the module defines such commands
 - **Global flags** — `futi --<TAB>` → `--dry-run`, `--help`, `--version`; after a leading `--dry-run` the hints are as for a regular call, but without builtins (`cache`, `completion`, `list`, `modules`): `futi --dry-run <TAB>` shows only modules and namespaces
 - **Builtins** — `futi cache <TAB>` → `refresh`/`status`/`clear`; `futi completion <TAB>` → `bash`/`zsh`/`fish`. At the root, `cache`, `completion`, `list`, `modules` are suggested as builtins even when a module has the same name (the CLI executes the builtin)
@@ -1397,7 +1420,7 @@ futi deploy rollback production
 
 futi is early-stage software (0.x): the module format may change between minor versions. Everything below is a plan, not a promise: none of it is implemented yet.
 
-- **Module schema** — richer input types (`file`, `json`, `secret`), `choices`, annotations. Path-style completion will then be offered only for `path`/`dir` inputs.
+- **Module schema** — richer input types (`json`, `secret`), annotations.
 - **Server mode** — a remote MCP server over HTTP so that AI agents can call module commands on the machine where futi runs, plus a REST API for CI/CD. Auth, a namespace allowlist, output and time limits and an audit log are part of the plan.
 - **Module-provided completion and interactive mode** — modules supply their own completion candidates (container names, branches, etc.); an interactive TUI for browsing and calling modules; completion descriptions in bash/fish; PowerShell support.
 - **Ecosystem** — a module registry (`futi modules install <short-name>`, update checks) and module versioning.

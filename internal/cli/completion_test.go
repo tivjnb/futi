@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -395,5 +396,56 @@ func TestCompletionModulesFlagsAcceptedByParsers(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestZshScriptHandlesFilterDirs: the FilterDirs bit (16) switches zsh to directory completion.
+func TestZshScriptHandlesFilterDirs(t *testing.T) {
+	re := regexp.MustCompile(`(?s)directive & 16 \)\); then\s*_files -/`)
+	if !re.MatchString(zshCompletionScript) {
+		t.Error("zsh script has no `_files -/` in the `directive & 16` branch")
+	}
+}
+
+// TestFishCompletionDirsOnly: directive 16 offers directories only, not files.
+func TestFishCompletionDirsOnly(t *testing.T) {
+	fishPath, err := exec.LookPath("fish")
+	if err != nil {
+		t.Skip("fish not installed")
+	}
+	tmp := t.TempDir()
+	work := filepath.Join(tmp, "work")
+	writeFile(t, filepath.Join(work, "f.txt"), "x")
+	if err := os.Mkdir(filepath.Join(work, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	modules := filepath.Join(tmp, "modules")
+	writeFile(t, filepath.Join(modules, "mk.yaml"), "name: mk\ncmd: \"mkdir {{.d}}\"\nargs:\n  - {name: d, type: dir}\n")
+
+	cmd := exec.Command(fishPath, "--no-config", "-c", "futi completion fish | source; complete -C 'futi mk '")
+	cmd.Dir = work
+	cmd.Env = append(os.Environ(),
+		"PATH="+filepath.Dir(builtFutiBinary(t))+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FUTI_MODULES_DIR="+modules,
+		"HOME="+tmp,
+		"XDG_CACHE_HOME="+filepath.Join(tmp, "cache"),
+		"XDG_CONFIG_HOME="+filepath.Join(tmp, "config"),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("fish: %v\n%s", err, out)
+	}
+	var names []string
+	for _, line := range strings.Split(string(out), "\n") {
+		name, _, _ := strings.Cut(strings.TrimSpace(line), "\t")
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	if !slices.Contains(names, "sub/") && !slices.Contains(names, "sub") {
+		t.Errorf("candidates %q do not contain the directory sub", names)
+	}
+	if slices.Contains(names, "f.txt") {
+		t.Errorf("candidates %q contain the file f.txt", names)
 	}
 }

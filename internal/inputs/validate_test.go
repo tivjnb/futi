@@ -92,7 +92,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "invalid type",
 			args: []Spec{{Name: "x", Type: "float"}},
-			want: []string{`arg "x": invalid type "float" (valid: string, int, bool)`},
+			want: []string{`arg "x": invalid type "float" (valid: string, int, bool, file, dir)`},
 		},
 		{
 			name: "bool arg",
@@ -311,5 +311,99 @@ func TestValidateErrorsHaveNoValues(t *testing.T) {
 		if strings.Contains(err.Error(), "secret") {
 			t.Fatalf("error leaks default value: %v", err)
 		}
+	}
+}
+
+func TestValidateChoicesDefaultErrorHasNoValue(t *testing.T) {
+	errs := Validate([]Spec{{Name: "x", Flag: true, Choices: []string{"a"}, Default: "secret", HasDefault: true}}, nil)
+	if len(errs) == 0 {
+		t.Fatal("no error for default outside choices")
+	}
+	for _, err := range errs {
+		if strings.Contains(err.Error(), "secret") {
+			t.Fatalf("error leaks default value: %v", err)
+		}
+	}
+}
+
+func TestValidateChoices(t *testing.T) {
+	flag := func(name, typ string, ch []string) Spec {
+		return Spec{Name: name, Type: typ, Choices: ch, Flag: true}
+	}
+	arg := func(name, typ string, ch []string) Spec { return Spec{Name: name, Type: typ, Choices: ch} }
+	choices := func(c ...string) []string {
+		if c == nil {
+			return []string{}
+		}
+		return c
+	}
+	flagDef := func(name, typ string, ch []string, def string) Spec {
+		s := flag(name, typ, ch)
+		s.Default, s.HasDefault = def, true
+		return s
+	}
+
+	tests := []struct {
+		name string
+		spec Spec
+		want string // error substring, "" = valid
+	}{
+		{"plain choices", flag("level", "", choices("debug", "info")), ""},
+		{"file flag", flag("p", "file", nil), ""},
+		{"dir arg", arg("d", "dir", nil), ""},
+		{"unknown type", flag("x", "path", nil), `invalid type "path" (valid: string, int, bool, file, dir)`},
+		{"bool choices", flag("f", "bool", choices("a")), "choices is not allowed for bool"},
+		{"file choices", flag("f", "file", choices("a")), "choices is not allowed for file"},
+		{"dir choices", flag("d", "dir", choices("a")), "choices is not allowed for dir"},
+		{"rest choices", Spec{Name: "r", Rest: true, Choices: choices("a")}, "choices is not allowed for rest"},
+		{"empty choices", flag("e", "", choices()), "choices must not be empty"},
+		{"non-integer choice", flag("n", "int", choices("1", "x")), `choice "x" is not an integer`},
+		{"duplicate choice", flag("d", "", choices("a", "a")), `duplicate choice "a"`},
+		{"duplicate canonical int", flag("d", "int", choices("1", "01")), `duplicate choice "01"`},
+		{"control character", flag("c", "", choices("a\tb")), "choice contains a control character"},
+		{"default outside choices", flagDef("l", "", choices("debug", "info"), "trace"), `default is not one of the choices`},
+		{"canonical default match", flagDef("n", "int", choices("1", "3"), "03"), ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var args, flags []Spec
+			if tc.spec.Flag {
+				flags = []Spec{tc.spec}
+			} else {
+				args = []Spec{tc.spec}
+			}
+			errs := Validate(args, flags)
+			if tc.want == "" {
+				if len(errs) != 0 {
+					t.Fatalf("Validate(%+v) = %v, want no errors", tc.spec, errs)
+				}
+				return
+			}
+			for _, e := range errs {
+				if strings.Contains(e.Error(), tc.want) {
+					return
+				}
+			}
+			t.Fatalf("Validate(%+v) = %v, want error containing %q", tc.spec, errs, tc.want)
+		})
+	}
+}
+
+func TestCanonicalChoices(t *testing.T) {
+	tests := []struct {
+		name string
+		spec Spec
+		want []string
+	}{
+		{"int canonicalized, bad skipped", Spec{Type: "int", Choices: []string{"01", "x", "3"}}, []string{"1", "3"}},
+		{"string copied", Spec{Choices: []string{"01", "b"}}, []string{"01", "b"}},
+		{"none", Spec{}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.spec.CanonicalChoices(); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("CanonicalChoices() = %#v, want %#v", got, tc.want)
+			}
+		})
 	}
 }

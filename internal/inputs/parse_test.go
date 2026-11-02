@@ -292,3 +292,52 @@ func TestParseErrorsOmitUnrelatedValues(t *testing.T) {
 		t.Fatalf("err = %v, want error without the value", err)
 	}
 }
+
+func TestScanNext(t *testing.T) {
+	names := func(specs []*Spec) []string {
+		out := []string{}
+		for _, s := range specs {
+			out = append(out, s.Name)
+		}
+		return out
+	}
+	req := func(name string) Spec { return Spec{Name: name, Required: true} }
+	variadic := func(name string) Spec { return Spec{Name: name, Required: true, Variadic: true} }
+	boolFlag := []Spec{{Name: "v", Type: "bool", Flag: true}}
+	tests := []struct {
+		name      string
+		args      []Spec
+		flags     []Spec
+		toks      []string
+		want      []string
+		wantInRst bool
+	}{
+		{"optional second, none", []Spec{req("a"), {Name: "b"}}, nil, nil, []string{"a"}, false},
+		{"optional second, one", []Spec{req("a"), {Name: "b"}}, nil, []string{"x"}, []string{"b"}, false},
+		{"optional second, all taken", []Spec{req("a"), {Name: "b"}}, nil, []string{"x", "y"}, []string{}, false},
+		{"variadic with tail, none", []Spec{variadic("src"), req("dst")}, nil, nil, []string{"src", "dst"}, false},
+		{"variadic with tail, one", []Spec{variadic("src"), req("dst")}, nil, []string{"x"}, []string{"src", "dst"}, false},
+		{"variadic with tail, three", []Spec{variadic("src"), req("dst")}, nil, []string{"x", "y", "z"}, []string{"src", "dst"}, false},
+		{"head variadic tail, none", []Spec{req("h"), variadic("src"), req("t1"), req("t2")}, nil, nil, []string{"h"}, false},
+		{"head variadic tail, one", []Spec{req("h"), variadic("src"), req("t1"), req("t2")}, nil, []string{"x"}, []string{"src", "t1", "t2"}, false},
+		{"rest after arg, none", []Spec{req("img"), {Name: "rest", Rest: true}}, nil, nil, []string{"img"}, false},
+		{"rest after arg, one", []Spec{req("img"), {Name: "rest", Rest: true}}, nil, []string{"x"}, []string{}, true},
+		{"only rest, none", []Spec{{Name: "rest", Rest: true}}, nil, nil, []string{"rest"}, false},
+		{"only rest, one", []Spec{{Name: "rest", Rest: true}}, nil, []string{"x"}, []string{}, true},
+		{"bool flag only", []Spec{req("a"), req("b")}, boolFlag, []string{"--v"}, []string{"a"}, false},
+		{"double dash", []Spec{req("a"), req("b")}, boolFlag, []string{"--"}, []string{"a"}, false},
+		{"double dash then word", []Spec{req("a"), req("b")}, boolFlag, []string{"--", "x"}, []string{"b"}, false},
+		{"no args", nil, nil, nil, []string{}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			st := Scan(tc.args, tc.flags, tc.toks)
+			if got := names(st.Next); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("Scan(%q).Next = %v, want %v", tc.toks, got, tc.want)
+			}
+			if st.InRest != tc.wantInRst {
+				t.Errorf("Scan(%q).InRest = %v, want %v", tc.toks, st.InRest, tc.wantInRst)
+			}
+		})
+	}
+}

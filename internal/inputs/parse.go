@@ -24,6 +24,11 @@ type State struct {
 	AfterDD     bool            // "--" was consumed
 	Positionals int             // positional tokens assigned to args, rest excluded
 	Used        map[string]bool // flags set, by Spec.Name
+	// Next lists the args that can take the next positional word, in
+	// declaration order. Empty when InRest or the args are used up; not
+	// meaningful while Pending is set. It may hold the rest arg before its
+	// first word, when InRest is still false.
+	Next []*Spec
 }
 
 var numberRE = regexp.MustCompile(`^-[0-9]+(\.[0-9]+)?$`)
@@ -69,6 +74,7 @@ func Scan(args, flags []Spec, toks []string) State {
 		AfterDD:     s.afterDD,
 		Positionals: len(s.positionals),
 		Used:        s.used,
+		Next:        s.next(),
 	}
 }
 
@@ -310,18 +316,43 @@ func (s *scanner) knownFlag(tok string) *Spec {
 	return nil
 }
 
+// variadicHead is the index of the first variadic arg, or len(args) if none.
+func variadicHead(args []Spec) int {
+	for i, a := range args {
+		if a.Variadic {
+			return i
+		}
+	}
+	return len(args)
+}
+
+// next returns the args that can take the next positional word, mirroring
+// assignPositionals: before the variadic arg the k-th word goes to args[k];
+// from there on it may belong to the variadic arg or to any arg after it,
+// since the tail is only known once all words are in.
+func (s *scanner) next() []*Spec {
+	if s.inRest {
+		return nil
+	}
+	k, head := len(s.positionals), variadicHead(s.args)
+	var out []*Spec
+	switch {
+	case k < head:
+		out = append(out, &s.args[k])
+	case head < len(s.args):
+		for i := head; i < len(s.args); i++ {
+			out = append(out, &s.args[i])
+		}
+	}
+	return out
+}
+
 // assignPositionals distributes the collected positionals over args: the
 // args before a variadic one first, then those after it, the rest to the
 // variadic arg. The rest arg is filled while scanning.
 func (s *scanner) assignPositionals() {
 	pos := s.positionals
-	head := len(s.args)
-	for i, a := range s.args {
-		if a.Variadic {
-			head = i
-			break
-		}
-	}
+	head := variadicHead(s.args)
 	for i := 0; i < head && len(pos) > 0; i++ {
 		s.values[s.args[i].Name] = pos[0]
 		pos = pos[1:]

@@ -15,6 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A path collision (one path addressing two entities, such as a command `deploy` of module `dev` and the module `dev/deploy`) is an error in `modules validate` and a warning in `list`.
 - Warnings when a subcommand or a child module shadows a string arg value: in `modules validate`, in the node help and in `modules update`.
 - Shell completion follows the new command-line grammar.
+- Input types `file` and `dir`: strings that mark a path. Completion suggests files and directories for `file` and directories only for `dir`; futi never checks or changes the path.
+- `choices` on `string` and `int` inputs: a fixed set of allowed values, validated at run time, shown in help and offered by completion.
 
 ### Changed
 
@@ -26,6 +28,7 @@ Breaking relative to 0.1.0:
 - A trailing `help` or `list` after a path is no longer a system request: use `futi help <path>` and `futi list <path>`. `futi <module> help` calls the module's own command named `help`.
 - `attach` and `detach` hooks run without a shell. A compound hook is written explicitly as `[sh, -c, "..."]`; a program given with a path (`scripts/x.sh`) is looked up from the module directory.
 - `modules add_command` writes `cmd` as a list (`[echo, <name>]`) by default.
+- Shell completion suggests files only for `file` and `dir` inputs (0.1.0 suggested them for the value of any flag).
 
 ### Fixed
 

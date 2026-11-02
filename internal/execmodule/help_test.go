@@ -228,3 +228,40 @@ func TestFormatHelpInputAlignmentUsesSanitizedWidth(t *testing.T) {
 		t.Errorf("misaligned: %q", out)
 	}
 }
+
+func TestHelpChoicesAndPathTypes(t *testing.T) {
+	cmd := &Command{
+		Cmd: cmdText("x"),
+		Args: []inputs.Spec{
+			{Name: "env", Choices: []string{"dev", "prod"}},
+		},
+		Flags: []inputs.Spec{
+			{Name: "level", Flag: true, Choices: []string{"debug", "info", "warn"}, HasDefault: true, Default: "info"},
+			{Name: "out", Type: "file", Flag: true},
+			{Name: "dir", Type: "dir", Flag: true, HasDefault: true, Default: "build"},
+			{Name: "lv", Flag: true, Variadic: true, Choices: []string{"debug", "info"}},
+		},
+	}
+	got := FormatCommandHelp("m c", cmd)
+	for _, want := range []string{
+		"--level debug|info|warn",
+		`(default "info")`,
+		"--out file",
+		"--dir dir",
+		`(default "build")`,
+		"--lv debug|info...",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("help lacks %q:\n%s", want, got)
+		}
+	}
+	var envLine string
+	for _, l := range strings.Split(got, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "env") {
+			envLine = l
+		}
+	}
+	if !strings.Contains(envLine, "(dev|prod)") {
+		t.Errorf("env arg line %q lacks (dev|prod):\n%s", envLine, got)
+	}
+}

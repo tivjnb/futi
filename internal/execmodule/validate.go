@@ -164,12 +164,35 @@ func checkCommand(path string, isDefault bool, cmd *Command, errors *[]error, wa
 			for _, err := range tmpl.Check(inputs.TemplateInputs(cmd.Args, cmd.Flags)) {
 				*errors = append(*errors, fmt.Errorf("command %q: cmd: %w", path, err))
 			}
+			checkChoiceDashes(path, tmpl, cmd, errors)
 		}
 	}
 
 	if w, ok := shadowWarning(path, cmd); ok {
 		*warnings = append(*warnings, w)
 	}
+}
+
+// checkChoiceDashes reports choices that start with "-" for an input whose
+// value the dash guard checks: such a choice would pass Bind and then be
+// refused when the command runs. Choices are compared in canonical form, as
+// Bind does.
+func checkChoiceDashes(path string, tmpl *argvtmpl.Template, cmd *Command, errors *[]error) {
+	ti := inputs.TemplateInputs(cmd.Args, cmd.Flags)
+	check := func(label string, specs []inputs.Spec) {
+		for _, s := range specs {
+			if len(s.Choices) == 0 || !tmpl.Guarded(ti, s.Name) {
+				continue
+			}
+			for _, e := range s.CanonicalChoices() {
+				if strings.HasPrefix(e, "-") {
+					*errors = append(*errors, fmt.Errorf("command %q: %s %q: choice %q starts with \"-\" and is refused by the dash guard; use --opt={{.%s}}, put a literal -- before it, or set allow_dash", path, label, s.Name, e, s.Name))
+				}
+			}
+		}
+	}
+	check("arg", cmd.Args)
+	check("flag", cmd.Flags)
 }
 
 // ShadowWarnings returns the warnings of c and of its subcommands (recursively)
