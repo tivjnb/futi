@@ -3,7 +3,6 @@ package inputs
 import (
 	"encoding/json"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/tivjnb/futi/internal/argvtmpl"
@@ -146,7 +145,8 @@ func TestBindChoices(t *testing.T) {
 		{"int canonical match", count, map[string]any{"n": "03"}, map[string]argvtmpl.Value{"n": sc("3")}, ""},
 		{"int from float64", count, map[string]any{"n": float64(3)}, map[string]argvtmpl.Value{"n": sc("3")}, ""},
 		{"int not in choices", count, map[string]any{"n": "4"}, nil, `invalid value "4" for --n (valid: 3)`},
-		{"fractional float64 is a type error", count, map[string]any{"n": float64(3.5)}, nil, "!invalid value"},
+		{"fractional float64 is a type error", count, map[string]any{"n": float64(3.5)}, nil, `invalid int value "3.5" for --n`},
+		{"int choice error shows the original value", count, map[string]any{"n": "04"}, nil, `invalid value "04" for --n (valid: 3)`},
 		{"required empty", reqLevel, map[string]any{"level": ""}, nil, `empty value for --level`},
 		{"optional empty is not a choice", level, map[string]any{"level": ""}, nil, `invalid value "" for --level (valid: debug, info)`},
 		{"variadic element", items, map[string]any{"item": []any{"a", "c"}}, nil, `invalid value "c" for <item> (valid: a, b)`},
@@ -160,12 +160,6 @@ func TestBindChoices(t *testing.T) {
 			if tc.err != "" {
 				if err == nil {
 					t.Fatalf("err = nil, want %q", tc.err)
-				}
-				if tc.err == "!invalid value" {
-					if strings.Contains(err.Error(), "invalid value") {
-						t.Fatalf("err = %v, want a type error", err)
-					}
-					return
 				}
 				if err.Error() != tc.err {
 					t.Fatalf("err = %v, want %q", err, tc.err)

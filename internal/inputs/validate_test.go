@@ -314,6 +314,18 @@ func TestValidateErrorsHaveNoValues(t *testing.T) {
 	}
 }
 
+func TestValidateChoicesDefaultErrorHasNoValue(t *testing.T) {
+	errs := Validate([]Spec{{Name: "x", Flag: true, Choices: []string{"a"}, Default: "secret", HasDefault: true}}, nil)
+	if len(errs) == 0 {
+		t.Fatal("no error for default outside choices")
+	}
+	for _, err := range errs {
+		if strings.Contains(err.Error(), "secret") {
+			t.Fatalf("error leaks default value: %v", err)
+		}
+	}
+}
+
 func TestValidateChoices(t *testing.T) {
 	flag := func(name, typ string, ch []string) Spec {
 		return Spec{Name: name, Type: typ, Choices: ch, Flag: true}
@@ -349,7 +361,7 @@ func TestValidateChoices(t *testing.T) {
 		{"duplicate choice", flag("d", "", choices("a", "a")), `duplicate choice "a"`},
 		{"duplicate canonical int", flag("d", "int", choices("1", "01")), `duplicate choice "01"`},
 		{"control character", flag("c", "", choices("a\tb")), "choice contains a control character"},
-		{"default outside choices", flagDef("l", "", choices("debug", "info"), "trace"), `default "trace" is not one of the choices`},
+		{"default outside choices", flagDef("l", "", choices("debug", "info"), "trace"), `default is not one of the choices`},
 		{"canonical default match", flagDef("n", "int", choices("1", "3"), "03"), ""},
 	}
 	for _, tc := range tests {

@@ -55,7 +55,7 @@ COMP_LINE='` + compLine + `'
 COMP_POINT=` + strconv.Itoa(compPoint) + `
 __futi_get_completion_results
 printf 'DIRECTIVE=%s\n' "$directive"
-printf 'REPLY=%s\n' "${COMPREPLY[*]}"
+printf 'REPLY=%s\n' "${COMPREPLY[@]}"
 `
 	cmd := exec.Command(bash, "--norc", "--noprofile", "-c", driver)
 	cmd.Env = append(os.Environ(), "SCRIPT="+scriptPath, "OUT="+outPath, "ARGS="+argsPath)
@@ -69,7 +69,7 @@ printf 'REPLY=%s\n' "${COMPREPLY[*]}"
 			directive = strings.TrimPrefix(l, "DIRECTIVE=")
 		case strings.HasPrefix(l, "REPLY="):
 			if r := strings.TrimPrefix(l, "REPLY="); r != "" {
-				reply = strings.Split(r, " ")
+				reply = append(reply, r)
 			}
 		}
 	}
@@ -141,6 +141,18 @@ func TestBashCompletionScript(t *testing.T) {
 			out:      "a:bc\n:0\n",
 			wantArgs: []string{"__complete", "a:b"}, wantReply: []string{"a:bc"}, wantDir: "0",
 			wordbreak: " ",
+		},
+		{
+			name:  "candidates are escaped for the shell",
+			words: `futi ""`, line: "futi ", point: 5, cword: 1,
+			out:      "us east\nplain\n:4",
+			wantArgs: []string{"__complete", ""}, wantReply: []string{`us\ east`, "plain"}, wantDir: "4",
+		},
+		{
+			name:  "prefix is stripped before escaping",
+			words: `futi mod --level=us`, line: "futi mod --level=us", point: 19, cword: 2,
+			out:      "--level=us east\n:4",
+			wantArgs: []string{"__complete", "mod", "--level=us"}, wantReply: []string{`us\ east`}, wantDir: "4",
 		},
 		{
 			name:  "курсор внутри слова: передаётся часть до курсора",

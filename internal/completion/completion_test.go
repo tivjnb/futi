@@ -1227,6 +1227,19 @@ commands:
   status: {cmd: "dep status"}
 `)
 	writeFile(t, filepath.Join(dir, "run.yaml"), "name: run\ncmd: \"run {{.x}}\"\nargs:\n  - {name: x}\n")
+	writeFile(t, filepath.Join(dir, "two.yaml"), `name: two
+cmd: "two {{.a}} {{.b}}"
+args:
+  - {name: a, choices: [p, q]}
+  - {name: b, choices: [r, s]}
+`)
+	writeFile(t, filepath.Join(dir, "merge.yaml"), `name: merge
+cmd: "merge {{.a}} {{.b}}"
+args:
+  - {name: a, variadic: true, required: true, choices: [x, z]}
+  - {name: b, required: true, choices: [y, z]}
+`)
+	writeFile(t, filepath.Join(dir, "dflag.yaml"), "name: dflag\ncmd: \"d {{.d}}\"\nflags:\n  - {name: d, type: dir}\n")
 	src := discovery.NewGlobalSource(dir)
 	cases := []struct {
 		name       string
@@ -1235,6 +1248,11 @@ commands:
 		want       []string
 		dir        Directive
 	}{
+		{"choices of several candidates are merged and deduplicated", []string{"merge"}, "", []string{"x", "y", "z"}, ShellCompDirectiveNoFileComp},
+		{"dir flag value", []string{"dflag", "--d"}, "", nil, ShellCompDirectiveFilterDirs},
+		{"dir flag=value", []string{"dflag"}, "--d=x", nil, ShellCompDirectiveNoFileComp},
+		{"choices of a non-first positional", []string{"two", "x"}, "", []string{"r", "s"}, ShellCompDirectiveNoFileComp},
+		{"choices of a positional after double dash", []string{"two", "--"}, "", []string{"p", "q"}, ShellCompDirectiveNoFileComp},
 		{"file wins over dir", []string{"cp"}, "", nil, ShellCompDirectiveDefault},
 		{"variadic file after first word", []string{"cp", "a"}, "", nil, ShellCompDirectiveDefault},
 		{"dir only", []string{"mk"}, "", nil, ShellCompDirectiveFilterDirs},

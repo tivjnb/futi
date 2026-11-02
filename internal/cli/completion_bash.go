@@ -124,6 +124,16 @@ __futi_get_completion_results() {
             COMPREPLY[i]="${COMPREPLY[i]#"$prefix"}"
         done
     fi
+
+    # Escape candidates for the shell (a choice may contain spaces or
+    # metacharacters). Not for directories: "-o filenames" escapes those itself.
+    if ! (( directive & 16 )); then
+        for i in "${!COMPREPLY[@]}"; do
+            [[ -n "${COMPREPLY[i]}" ]] || continue
+            printf -v t %q "${COMPREPLY[i]}"
+            COMPREPLY[i]="$t"
+        done
+    fi
 }
 
 _futi() {

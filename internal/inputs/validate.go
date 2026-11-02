@@ -170,7 +170,7 @@ func checkChoices(s Spec, validType bool, fail func(format string, a ...any)) {
 			def = strconv.Itoa(n)
 		}
 		if !slices.Contains(s.CanonicalChoices(), def) {
-			fail("default %q is not one of the choices", s.Default)
+			fail("default is not one of the choices")
 		}
 	}
 }

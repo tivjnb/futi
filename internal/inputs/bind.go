@@ -112,7 +112,7 @@ func canonical(s Spec, str string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("invalid int value %q for %s", str, s.CLIName())
 		}
-		return checkChoice(s, strconv.Itoa(n))
+		return checkChoice(s, strconv.Itoa(n), str)
 	case argvtmpl.Bool:
 		b, ok := parseBool(str)
 		if !ok {
@@ -123,11 +123,12 @@ func canonical(s Spec, str string) (string, error) {
 	if s.Required && str == "" {
 		return "", fmt.Errorf("empty value for %s", s.CLIName())
 	}
-	return checkChoice(s, str)
+	return checkChoice(s, str, str)
 }
 
-// checkChoice returns str if the input has no choices or str is one of them.
-func checkChoice(s Spec, str string) (string, error) {
+// checkChoice returns str (the canonical form) if the input has no choices or str
+// is one of them; the error shows given, the value as the user wrote it.
+func checkChoice(s Spec, str, given string) (string, error) {
 	if len(s.Choices) == 0 {
 		return str, nil
 	}
@@ -138,7 +139,7 @@ func checkChoice(s Spec, str string) (string, error) {
 	for i, c := range valid {
 		valid[i] = termtext.Line(c)
 	}
-	return "", fmt.Errorf("invalid value %q for %s (valid: %s)", str, s.CLIName(), strings.Join(valid, ", "))
+	return "", fmt.Errorf("invalid value %q for %s (valid: %s)", given, s.CLIName(), strings.Join(valid, ", "))
 }
 
 func asScalar(s Spec, raw any) (string, error) {
