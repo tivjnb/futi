@@ -1203,3 +1203,57 @@ func TestCompleteRestOnlyNodeUsesShellFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestCompleteInputTypes(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "cp.yaml"), `name: cp
+cmd: "cp {{.src}} {{.dst}}"
+args:
+  - {name: src, type: file, variadic: true}
+  - {name: dst, type: dir, required: true}
+`)
+	writeFile(t, filepath.Join(dir, "mk.yaml"), "name: mk\ncmd: \"mkdir {{.d}}\"\nargs:\n  - {name: d, type: dir}\n")
+	writeFile(t, filepath.Join(dir, "log.yaml"), `name: log
+cmd: "log {{.level}} {{.out}}"
+flags:
+  - {name: level, short: l, choices: [debug, info, warn]}
+  - {name: out, type: file}
+`)
+	writeFile(t, filepath.Join(dir, "dep.yaml"), `name: dep
+cmd: "dep {{.target}}"
+args:
+  - {name: target, choices: [dev, prod, status-x]}
+commands:
+  status: {cmd: "dep status"}
+`)
+	writeFile(t, filepath.Join(dir, "run.yaml"), "name: run\ncmd: \"run {{.x}}\"\nargs:\n  - {name: x}\n")
+	src := discovery.NewGlobalSource(dir)
+	cases := []struct {
+		name       string
+		args       []string
+		toComplete string
+		want       []string
+		dir        Directive
+	}{
+		{"file wins over dir", []string{"cp"}, "", nil, ShellCompDirectiveDefault},
+		{"variadic file after first word", []string{"cp", "a"}, "", nil, ShellCompDirectiveDefault},
+		{"dir only", []string{"mk"}, "", nil, ShellCompDirectiveFilterDirs},
+		{"long flag choices", []string{"log", "--level"}, "", []string{"debug", "info", "warn"}, ShellCompDirectiveNoFileComp},
+		{"short flag choices", []string{"log", "-l"}, "i", []string{"info"}, ShellCompDirectiveNoFileComp},
+		{"flag=value choices", []string{"log"}, "--level=de", []string{"--level=debug"}, ShellCompDirectiveNoFileComp},
+		{"flag=value file", []string{"log"}, "--out=x", nil, ShellCompDirectiveNoFileComp},
+		{"file flag value", []string{"log", "--out"}, "", nil, ShellCompDirectiveDefault},
+		{"subcommand prefix wins", []string{"dep"}, "st", []string{"status"}, ShellCompDirectiveNoFileComp},
+		{"unmatched prefix gives choices", []string{"dep"}, "p", []string{"prod"}, ShellCompDirectiveNoFileComp},
+		{"plain string", []string{"run"}, "", nil, ShellCompDirectiveNoFileComp},
+		{"after double dash", []string{"cp", "--"}, "", nil, ShellCompDirectiveDefault},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			matches, d := Complete(src, nil, c.args, c.toComplete)
+			if got := text(matches); (!reflect.DeepEqual(got, c.want) && (len(got) != 0 || len(c.want) != 0)) || d != c.dir {
+				t.Errorf("Complete(%v, %q) = %v/%v, want %v/%v", c.args, c.toComplete, got, d, c.want, c.dir)
+			}
+		})
+	}
+}
