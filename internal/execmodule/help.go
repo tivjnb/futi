@@ -90,6 +90,9 @@ func writeArgs(b *strings.Builder, args []inputs.Spec) {
 			name += "..."
 		}
 		var meta []string
+		if len(a.Choices) > 0 {
+			meta = append(meta, "("+choicesText(a)+")")
+		}
 		if a.Required {
 			meta = append(meta, "(required)")
 		}
@@ -115,11 +118,14 @@ func writeFlags(b *strings.Builder, flags []inputs.Spec) {
 		}
 		sig += "--" + strings.ReplaceAll(termtext.Line(f.Name), "_", "-")
 		if f.Kind() != argvtmpl.Bool {
-			typ := f.Type
-			if typ == "" {
+			typ := termtext.Line(f.Type)
+			if f.Type == "" {
 				typ = "string"
 			}
-			sig += " " + termtext.Line(typ)
+			if len(f.Choices) > 0 {
+				typ = choicesText(f)
+			}
+			sig += " " + typ
 			if f.Variadic {
 				sig += "..."
 			}
@@ -137,11 +143,21 @@ func writeFlags(b *strings.Builder, flags []inputs.Spec) {
 	writeRows(b, rows)
 }
 
-// defaultMeta is "(default "x")" for a string input and "(default 100)" for
-// the others.
+// choicesText is the allowed values of an input joined with "|".
+func choicesText(s inputs.Spec) string {
+	vals := s.CanonicalChoices()
+	for i, v := range vals {
+		vals[i] = termtext.Line(v)
+	}
+	return strings.Join(vals, "|")
+}
+
+// defaultMeta is "(default "x")" for a string, file or dir input and
+// "(default 100)" for the others.
 func defaultMeta(s inputs.Spec) string {
 	val := termtext.Line(s.Default)
-	if s.Type == "" || s.Type == "string" {
+	switch s.Type {
+	case "", "string", "file", "dir":
 		return fmt.Sprintf("(default %q)", val)
 	}
 	return "(default " + val + ")"

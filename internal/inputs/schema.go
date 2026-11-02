@@ -7,7 +7,11 @@ import (
 	"github.com/tivjnb/futi/internal/argvtmpl"
 )
 
-const restNote = "(passed to the tool verbatim)"
+const (
+	restNote = "(passed to the tool verbatim)"
+	fileNote = "(path to a file)"
+	dirNote  = "(path to a directory)"
+)
 
 // Schema returns the JSON Schema of a node's inputs for MCP and REST: a flat
 // object with one property per arg and flag. guarded reports whether the dash
@@ -53,6 +57,10 @@ func propertySchema(s Spec, guard bool) map[string]any {
 		}
 	}
 
+	if s.Choices != nil {
+		elem["enum"] = enumValues(s)
+	}
+
 	prop := elem
 	if s.isList() {
 		prop = map[string]any{"type": "array", "items": elem}
@@ -64,6 +72,12 @@ func propertySchema(s Spec, guard bool) map[string]any {
 	desc := s.Description
 	if s.Rest {
 		desc = strings.TrimSpace(desc + " " + restNote)
+	}
+	switch s.Type {
+	case "file":
+		desc = strings.TrimSpace(desc + " " + fileNote)
+	case "dir":
+		desc = strings.TrimSpace(desc + " " + dirNote)
 	}
 	if desc != "" {
 		prop["description"] = desc
@@ -88,4 +102,20 @@ func defaultValue(s Spec) any {
 		}
 	}
 	return s.Default
+}
+
+// enumValues is the choices as typed JSON values: numbers for an int input.
+func enumValues(s Spec) []any {
+	vals := s.CanonicalChoices()
+	out := make([]any, 0, len(vals))
+	for _, v := range vals {
+		if s.Kind() == argvtmpl.Int {
+			if n, err := strconv.Atoi(v); err == nil {
+				out = append(out, n)
+				continue
+			}
+		}
+		out = append(out, v)
+	}
+	return out
 }

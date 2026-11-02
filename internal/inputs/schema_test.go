@@ -6,6 +6,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/tivjnb/futi/internal/argvtmpl"
@@ -68,5 +69,38 @@ func TestSchemaEmptyNode(t *testing.T) {
 	want := `{"additionalProperties":false,"properties":{},"type":"object"}`
 	if string(b) != want {
 		t.Fatalf("got %s, want %s", b, want)
+	}
+}
+
+func TestSchemaChoicesAndPathTypes(t *testing.T) {
+	no := func(string) bool { return false }
+	props := func(s Spec) map[string]any {
+		return Schema(nil, []Spec{s}, no)["properties"].(map[string]any)["x"].(map[string]any)
+	}
+
+	if got := props(Spec{Name: "x", Flag: true, Choices: []string{"a", "b"}})["enum"]; !reflect.DeepEqual(got, []any{"a", "b"}) {
+		t.Errorf("string enum = %#v", got)
+	}
+	if got := props(Spec{Name: "x", Flag: true, Type: "int", Choices: []string{"1", "3"}})["enum"]; !reflect.DeepEqual(got, []any{1, 3}) {
+		t.Errorf("int enum = %#v", got)
+	}
+	list := props(Spec{Name: "x", Flag: true, Variadic: true, Choices: []string{"a", "b"}})
+	if _, ok := list["enum"]; ok {
+		t.Errorf("enum on the array itself: %#v", list)
+	}
+	if got := list["items"].(map[string]any)["enum"]; !reflect.DeepEqual(got, []any{"a", "b"}) {
+		t.Errorf("items enum = %#v", got)
+	}
+
+	for _, tc := range []struct{ typ, desc, want string }{
+		{"file", "", "(path to a file)"},
+		{"file", "Output", "Output (path to a file)"},
+		{"dir", "", "(path to a directory)"},
+		{"dir", "Where", "Where (path to a directory)"},
+	} {
+		p := props(Spec{Name: "x", Flag: true, Type: tc.typ, Description: tc.desc})
+		if p["type"] != "string" || p["description"] != tc.want {
+			t.Errorf("%s %q: type=%v description=%v, want string %q", tc.typ, tc.desc, p["type"], p["description"], tc.want)
+		}
 	}
 }
