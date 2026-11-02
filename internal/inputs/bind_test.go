@@ -3,6 +3,7 @@ package inputs
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/tivjnb/futi/internal/argvtmpl"
@@ -123,5 +124,72 @@ func TestParseThenBindIntVariadic(t *testing.T) {
 	}
 	if want := ls("8", "9"); !reflect.DeepEqual(got["port"], want) {
 		t.Fatalf("port = %#v, want %#v", got["port"], want)
+	}
+}
+
+func TestBindChoices(t *testing.T) {
+	level := node{flags: []Spec{{Name: "level", Flag: true, Choices: []string{"debug", "info"}}}}
+	reqLevel := node{flags: []Spec{{Name: "level", Flag: true, Required: true, Choices: []string{"debug", "info"}}}}
+	count := node{flags: []Spec{{Name: "n", Type: "int", Flag: true, Choices: []string{"3"}}}}
+	items := node{args: []Spec{{Name: "item", Variadic: true, Choices: []string{"a", "b"}}}}
+	file := node{flags: []Spec{{Name: "path", Type: "file", Flag: true, Choices: []string{"x"}}}}
+	pathNode := node{flags: []Spec{{Name: "path", Type: "file", Flag: true}}}
+	tests := []struct {
+		name  string
+		node  node
+		given map[string]any
+		want  map[string]argvtmpl.Value
+		err   string // exact; "!invalid value" means: an error without that text
+	}{
+		{"allowed", level, map[string]any{"level": "info"}, map[string]argvtmpl.Value{"level": sc("info")}, ""},
+		{"case differs", level, map[string]any{"level": "Info"}, nil, `invalid value "Info" for --level (valid: debug, info)`},
+		{"int canonical match", count, map[string]any{"n": "03"}, map[string]argvtmpl.Value{"n": sc("3")}, ""},
+		{"int from float64", count, map[string]any{"n": float64(3)}, map[string]argvtmpl.Value{"n": sc("3")}, ""},
+		{"int not in choices", count, map[string]any{"n": "4"}, nil, `invalid value "4" for --n (valid: 3)`},
+		{"fractional float64 is a type error", count, map[string]any{"n": float64(3.5)}, nil, "!invalid value"},
+		{"required empty", reqLevel, map[string]any{"level": ""}, nil, `empty value for --level`},
+		{"optional empty is not a choice", level, map[string]any{"level": ""}, nil, `invalid value "" for --level (valid: debug, info)`},
+		{"variadic element", items, map[string]any{"item": []any{"a", "c"}}, nil, `invalid value "c" for <item> (valid: a, b)`},
+		{"variadic ok", items, map[string]any{"item": []string{"b", "a"}}, map[string]argvtmpl.Value{"item": ls("b", "a")}, ""},
+		{"file choice is compared as is", file, map[string]any{"path": "y"}, nil, `invalid value "y" for --path (valid: x)`},
+		{"file without choices is not touched", pathNode, map[string]any{"path": "a b/../x"}, map[string]argvtmpl.Value{"path": sc("a b/../x")}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Bind(tc.node.args, tc.node.flags, tc.given)
+			if tc.err != "" {
+				if err == nil {
+					t.Fatalf("err = nil, want %q", tc.err)
+				}
+				if tc.err == "!invalid value" {
+					if strings.Contains(err.Error(), "invalid value") {
+						t.Fatalf("err = %v, want a type error", err)
+					}
+					return
+				}
+				if err.Error() != tc.err {
+					t.Fatalf("err = %v, want %q", err, tc.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseThenBindChoices(t *testing.T) {
+	n := node{flags: []Spec{{Name: "level", Flag: true, Choices: []string{"debug", "info"}}}}
+	res, err := Parse(n.args, n.flags, []string{"--level", "Info"}, "futi x")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	_, err = Bind(n.args, n.flags, res.Values)
+	if want := `invalid value "Info" for --level (valid: debug, info)`; err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
 	}
 }

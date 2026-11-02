@@ -606,3 +606,43 @@ func TestValidateHookShellWarning(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateChoiceDashGuard: a choice starting with "-" is refused where the
+// dash guard would reject it at run time.
+func TestValidateChoiceDashGuard(t *testing.T) {
+	const want = `choice "-v" starts with "-"`
+	tests := []struct {
+		name     string
+		manifest string
+		wantErr  bool
+	}{
+		{"guarded", "cmd: [tool, '{{.mode}}']\nflags:\n  - name: mode\n    choices: [-v, x]\n", true},
+		{"allow_dash", "cmd: [tool, '{{.mode}}']\nflags:\n  - name: mode\n    allow_dash: true\n    choices: [-v, x]\n", false},
+		{"attached to a literal", "cmd: [tool, '--mode={{.mode}}']\nflags:\n  - name: mode\n    choices: [-v, x]\n", false},
+		{"int -0 is canonical 0", "cmd: [tool, '{{.n}}']\nflags:\n  - name: n\n    type: int\n    choices: [-0, 1]\n", false},
+		{"int negative", "cmd: [tool, '{{.n}}']\nflags:\n  - name: n\n    type: int\n    choices: [-5]\n", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseAndValidate(t, tc.manifest)
+			if !tc.wantErr {
+				if len(got) != 0 {
+					t.Fatalf("errors = %q, want none", got)
+				}
+				return
+			}
+			if tc.name == "int negative" {
+				if len(got) != 1 || !strings.Contains(got[0], `choice "-5" starts with "-"`) {
+					t.Fatalf("errors = %q", got)
+				}
+				return
+			}
+			for _, e := range got {
+				if strings.Contains(e, want) {
+					return
+				}
+			}
+			t.Fatalf("errors = %q, want one containing %q", got, want)
+		})
+	}
+}
