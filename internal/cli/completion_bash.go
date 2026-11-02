@@ -67,7 +67,7 @@ __futi_get_completion_results() {
     # the call; bash dynamic scoping mutates the caller variable.
     # __futi_args/__futi_cur are declared local here and filled in
     # __futi_collect_words (also dynamic scoping); they do not leak into the shell.
-    local out line cur colon_prefix i n __futi_cur
+    local out line cur prefix tail sep t i n __futi_cur
     local -a lines
     local -a __futi_args
     __futi_collect_words
@@ -96,14 +96,29 @@ __futi_get_completion_results() {
         fi
     done
 
-    # ":" is in COMP_WORDBREAKS: bash replaces only the part of the word after
-    # the last ":", so strip the prefix from candidates.
-    # Only if ":" is really in COMP_WORDBREAKS.
-    if [[ "$COMP_WORDBREAKS" == *:* && "$cur" == *:* ]]; then
-        colon_prefix="${cur%"${cur##*:}"}"
+    # ":" and "=" are in COMP_WORDBREAKS: bash replaces only the part of the word
+    # after the last such character, so strip the prefix from candidates.
+    # Only characters that are really in COMP_WORDBREAKS count.
+    tail="$cur"
+    for sep in = :; do
+        if [[ "$COMP_WORDBREAKS" == *"$sep"* && "$cur" == *"$sep"* ]]; then
+            t="${cur##*"$sep"}"
+            (( ${#t} < ${#tail} )) && tail="$t"
+        fi
+    done
+    if (( ${#tail} < ${#cur} )); then
+        prefix="${cur%"$tail"}"
         for i in "${!COMPREPLY[@]}"; do
-            COMPREPLY[i]="${COMPREPLY[i]#"$colon_prefix"}"
+            COMPREPLY[i]="${COMPREPLY[i]#"$prefix"}"
         done
+    fi
+
+    # ShellCompDirectiveFilterDirs (1<<4 = 16): directories only. "-o default" is
+    # removed, otherwise bash would add files when COMPREPLY is empty.
+    if (( directive & 16 )); then
+        compopt +o default 2>/dev/null || true
+        compopt -o filenames 2>/dev/null || true
+        COMPREPLY=( $(compgen -d -- "$cur") )
     fi
 }
 

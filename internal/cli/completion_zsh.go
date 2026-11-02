@@ -66,6 +66,11 @@ _futi() {
     if (( directive & 4 )); then
         _message 'no file completion'
     fi
+    # FilterDirs (16): directories only.
+    if (( directive & 16 )); then
+        _files -/
+        return 0
+    fi
     # Default: futi allows file completion (flag values are
     # paths). The completion function fully controls the candidates,
     # so we generate the file candidates ourselves.

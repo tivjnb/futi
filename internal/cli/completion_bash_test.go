@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -199,5 +200,77 @@ echo "args=${__futi_args+SET}"
 	}
 	if string(got) != "cur=\nargs=\n" {
 		t.Errorf("переменные утекли в вызывающий shell: %q", got)
+	}
+}
+
+// TestBashCompletionStripsEqualsPrefix: "=" is in COMP_WORDBREAKS, so bash
+// replaces only the part after the last "=": candidates lose the prefix.
+func TestBashCompletionStripsEqualsPrefix(t *testing.T) {
+	cases := []struct {
+		name       string
+		withLib    bool
+		wordbreaks string
+		want       []string
+	}{
+		{"default wordbreaks", false, "", []string{"debug"}},
+		{"default wordbreaks with bash-completion", true, "", []string{"debug"}},
+		{"no equals in wordbreaks", false, " :", []string{"--level=debug"}},
+		{"no equals in wordbreaks with bash-completion", true, " :", []string{"--level=debug"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wb := tc.wordbreaks
+			if wb == "" {
+				wb = " =:"
+			}
+			_, reply, _ := runBashComplete(t, tc.withLib, "futi mod --level=de", "futi mod --level=de", 19, 2, "--level=debug\n:4", wb)
+			if !slices.Equal(reply, tc.want) {
+				t.Errorf("COMPREPLY = %q, want %q", reply, tc.want)
+			}
+		})
+	}
+}
+
+// TestBashCompletionDirsOnly: directive 16 offers directories only and
+// removes "-o default", otherwise bash would add files on an empty COMPREPLY.
+func TestBashCompletionDirsOnly(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not found")
+	}
+	tmp := t.TempDir()
+	if err := os.Mkdir(filepath.Join(tmp, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "f.txt"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(tmp, "futi.bash")
+	if err := os.WriteFile(scriptPath, []byte(bashCompletionScript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	compoptLog := filepath.Join(t.TempDir(), "compopt.txt")
+	// compopt only works inside a real completion, so it is replaced by a recorder.
+	driver := `source "$SCRIPT"
+futi() { printf ':16\n'; }
+compopt() { echo "$*" >> "$LOG"; }
+COMP_WORDS=(futi mk ""); COMP_CWORD=2; COMP_LINE='futi mk '; COMP_POINT=8
+_futi
+printf 'REPLY=%s\n' "${COMPREPLY[*]}"
+`
+	cmd := exec.Command(bash, "--norc", "--noprofile", "-c", driver)
+	cmd.Dir = tmp
+	cmd.Env = append(os.Environ(), "SCRIPT="+scriptPath, "LOG="+compoptLog)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("bash: %v\n%s", err, out)
+	}
+	reply := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(out)), "REPLY="))
+	if reply != "sub" && reply != "sub/" {
+		t.Errorf("COMPREPLY = %q, want only the directory sub", reply)
+	}
+	log, _ := os.ReadFile(compoptLog)
+	if !strings.Contains(string(log), "+o default") {
+		t.Errorf("compopt calls %q do not remove -o default", log)
 	}
 }

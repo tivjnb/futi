@@ -31,6 +31,12 @@ function __futi_perform_completion
         end
     end
 
+    # Directive FilterDirs (16): directories only.
+    if test (math "bitand($directive, 16)") -ne 0
+        __fish_complete_directories "$cursor" 2>/dev/null
+        return
+    end
+
     # Directive Default (0): futi allows file completion -
     # flag values (paths). fish globally disabled files (-f),
     # so we generate the candidates ourselves.
