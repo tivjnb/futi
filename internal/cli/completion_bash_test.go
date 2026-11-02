@@ -239,8 +239,10 @@ func TestBashCompletionDirsOnly(t *testing.T) {
 		t.Skip("bash not found")
 	}
 	tmp := t.TempDir()
-	if err := os.Mkdir(filepath.Join(tmp, "sub"), 0o755); err != nil {
-		t.Fatal(err)
+	for _, d := range []string{"sub", "my dir", "a:b"} {
+		if err := os.Mkdir(filepath.Join(tmp, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(tmp, "f.txt"), nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -249,28 +251,47 @@ func TestBashCompletionDirsOnly(t *testing.T) {
 	if err := os.WriteFile(scriptPath, []byte(bashCompletionScript), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	compoptLog := filepath.Join(t.TempDir(), "compopt.txt")
-	// compopt only works inside a real completion, so it is replaced by a recorder.
-	driver := `source "$SCRIPT"
+	cases := []struct {
+		name  string
+		words string // COMP_WORDS elements after futi mk
+		line  string
+		want  []string
+	}{
+		{"empty word", `""`, "futi mk ", []string{"a:b", "my dir", "sub"}},
+		{"colon prefix is stripped", `"a:"`, "futi mk a:", []string{"b"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			compoptLog := filepath.Join(t.TempDir(), "compopt.txt")
+			// compopt only works inside a real completion, so it is replaced by a recorder.
+			driver := `source "$SCRIPT"
 futi() { printf ':16\n'; }
 compopt() { echo "$*" >> "$LOG"; }
-COMP_WORDS=(futi mk ""); COMP_CWORD=2; COMP_LINE='futi mk '; COMP_POINT=8
+COMP_WORDS=(futi mk ` + tc.words + `); COMP_CWORD=2; COMP_LINE='` + tc.line + `'; COMP_POINT=${#COMP_LINE}
 _futi
-printf 'REPLY=%s\n' "${COMPREPLY[*]}"
+printf 'REPLY=%s\n' "${COMPREPLY[@]}"
 `
-	cmd := exec.Command(bash, "--norc", "--noprofile", "-c", driver)
-	cmd.Dir = tmp
-	cmd.Env = append(os.Environ(), "SCRIPT="+scriptPath, "LOG="+compoptLog)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("bash: %v\n%s", err, out)
-	}
-	reply := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(out)), "REPLY="))
-	if reply != "sub" && reply != "sub/" {
-		t.Errorf("COMPREPLY = %q, want only the directory sub", reply)
-	}
-	log, _ := os.ReadFile(compoptLog)
-	if !strings.Contains(string(log), "+o default") {
-		t.Errorf("compopt calls %q do not remove -o default", log)
+			cmd := exec.Command(bash, "--norc", "--noprofile", "-c", driver)
+			cmd.Dir = tmp
+			cmd.Env = append(os.Environ(), "SCRIPT="+scriptPath, "LOG="+compoptLog)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("bash: %v\n%s", err, out)
+			}
+			var got []string
+			for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				got = append(got, strings.TrimSuffix(strings.TrimPrefix(l, "REPLY="), "/"))
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("COMPREPLY = %q, want %q", got, tc.want)
+			}
+			log, _ := os.ReadFile(compoptLog)
+			for _, w := range []string{"+o default", "-o filenames"} {
+				if !strings.Contains(string(log), w) {
+					t.Errorf("compopt calls %q lack %q", log, w)
+				}
+			}
+		})
 	}
 }

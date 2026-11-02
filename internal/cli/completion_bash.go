@@ -96,6 +96,18 @@ __futi_get_completion_results() {
         fi
     done
 
+    # ShellCompDirectiveFilterDirs (1<<4 = 16): directories only. "-o default" is
+    # removed, otherwise bash would add files when COMPREPLY is empty. One candidate
+    # per line, no word splitting or globbing; the prefix is stripped below.
+    if (( directive & 16 )); then
+        compopt +o default 2>/dev/null || true
+        compopt -o filenames 2>/dev/null || true
+        COMPREPLY=()
+        while IFS= read -r line; do
+            COMPREPLY+=("$line")
+        done < <(compgen -d -- "$cur")
+    fi
+
     # ":" and "=" are in COMP_WORDBREAKS: bash replaces only the part of the word
     # after the last such character, so strip the prefix from candidates.
     # Only characters that are really in COMP_WORDBREAKS count.
@@ -111,14 +123,6 @@ __futi_get_completion_results() {
         for i in "${!COMPREPLY[@]}"; do
             COMPREPLY[i]="${COMPREPLY[i]#"$prefix"}"
         done
-    fi
-
-    # ShellCompDirectiveFilterDirs (1<<4 = 16): directories only. "-o default" is
-    # removed, otherwise bash would add files when COMPREPLY is empty.
-    if (( directive & 16 )); then
-        compopt +o default 2>/dev/null || true
-        compopt -o filenames 2>/dev/null || true
-        COMPREPLY=( $(compgen -d -- "$cur") )
     fi
 }
 
