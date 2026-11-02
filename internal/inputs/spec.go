@@ -3,6 +3,7 @@
 package inputs
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/tivjnb/futi/internal/argvtmpl"
@@ -10,12 +11,13 @@ import (
 
 // Spec is one declared input of a command.
 type Spec struct {
-	Name, Type, Description, Short string // Type: "", "string", "int", "bool" ("" = string)
+	Name, Type, Description, Short string // Type: "", "string", "int", "bool", "file", "dir" ("" = string)
 	Required, Variadic, Rest       bool
 	AllowDash                      bool
-	Default                        string // meaningful only if HasDefault
-	HasDefault                     bool   // false: no default (a default may be the empty string)
-	Flag                           bool   // true: an element of flags
+	Default                        string   // meaningful only if HasDefault
+	HasDefault                     bool     // false: no default (a default may be the empty string)
+	Flag                           bool     // true: an element of flags
+	Choices                        []string // allowed values as written in YAML; nil = no choices key
 }
 
 // Kind returns the value type of the input; an unknown type counts as string.
@@ -27,6 +29,27 @@ func (s Spec) Kind() argvtmpl.Kind {
 		return argvtmpl.Bool
 	}
 	return argvtmpl.String
+}
+
+// CanonicalChoices returns the choices in canonical form: int elements as
+// strconv.Itoa(Atoi(e)); an element that is not an integer is skipped (Validate
+// reports it). For other types it is a copy of Choices.
+func (s Spec) CanonicalChoices() []string {
+	if s.Choices == nil {
+		return nil
+	}
+	out := make([]string, 0, len(s.Choices))
+	for _, e := range s.Choices {
+		if s.Type == "int" {
+			n, err := strconv.Atoi(e)
+			if err != nil {
+				continue
+			}
+			e = strconv.Itoa(n)
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // CLIName returns the name as shown to the user: "--ignore-case" for a flag,

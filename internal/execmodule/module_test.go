@@ -760,3 +760,30 @@ func TestCmdSpecTemplateForms(t *testing.T) {
 		t.Fatalf("list form: argv = %q, err = %v (quotes are literal in a list)", argvtmpl.Argv(args), err)
 	}
 }
+
+func TestLoadModuleChoices(t *testing.T) {
+	load := func(t *testing.T, choices string) (*Module, error) {
+		t.Helper()
+		dir := t.TempDir()
+		p := filepath.Join(dir, "mod.yaml")
+		writeFile(t, p, "name: mod\ncommands:\n  run:\n    flags:\n      - name: n\n        type: int\n        required: true\n        choices: "+choices+"\n    cmd: echo {{.n}}\n")
+		return LoadModule(p, dir)
+	}
+
+	t.Run("carried to Spec", func(t *testing.T) {
+		mod, err := load(t, "[1, 3, 5]")
+		if err != nil {
+			t.Fatalf("LoadModule: %v", err)
+		}
+		got := mod.Commands["run"].Flags[0].Choices
+		if want := []string{"1", "3", "5"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("Choices = %#v, want %#v", got, want)
+		}
+	})
+	t.Run("empty list rejected", func(t *testing.T) {
+		_, err := load(t, "[]")
+		if err == nil || !strings.Contains(err.Error(), "choices must not be empty") {
+			t.Fatalf("LoadModule err = %v, want choices must not be empty", err)
+		}
+	})
+}

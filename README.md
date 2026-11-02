@@ -863,7 +863,7 @@ An invalid module prints a report with all errors and warnings in one pass:
 ```bash
 $ futi modules validate bad
 ERROR: line 10: "positional" was replaced by "args"/"flags" (see README)
-ERROR: command "build": flag "tag": invalid type "float" (valid: string, int, bool)
+ERROR: command "build": flag "tag": invalid type "float" (valid: string, int, bool, file, dir)
 ERROR: command "build": flag "tag": duplicate name "tag"
 ERROR: command "build": cmd: 1:14: "-t" would be left without its value when "tag" is unset; use {{if .tag}}-t {{.tag}}{{end}} or -t={{.tag}}
 ERROR: command "empty": must have cmd or commands

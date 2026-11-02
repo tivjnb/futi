@@ -134,15 +134,16 @@ type commandYAML struct {
 }
 
 type inputYAML struct {
-	Name        string  `yaml:"name"`
-	Type        string  `yaml:"type"`
-	Required    bool    `yaml:"required"`
-	Default     *string `yaml:"default"`
-	Description string  `yaml:"description"`
-	Short       string  `yaml:"short"`
-	Variadic    bool    `yaml:"variadic"`
-	Rest        bool    `yaml:"rest"`
-	AllowDash   bool    `yaml:"allow_dash"`
+	Name        string   `yaml:"name"`
+	Type        string   `yaml:"type"`
+	Required    bool     `yaml:"required"`
+	Default     *string  `yaml:"default"`
+	Description string   `yaml:"description"`
+	Short       string   `yaml:"short"`
+	Variadic    bool     `yaml:"variadic"`
+	Rest        bool     `yaml:"rest"`
+	AllowDash   bool     `yaml:"allow_dash"`
+	Choices     []string `yaml:"choices"`
 }
 
 // LoadModule загружает манифест модуля из YAML-файла и валидирует схему.
@@ -317,6 +318,7 @@ func parseInputs(raw []inputYAML, flag bool) []inputs.Spec {
 			Variadic:    in.Variadic,
 			Rest:        in.Rest,
 			AllowDash:   in.AllowDash,
+			Choices:     in.Choices,
 			Default:     def,
 			HasDefault:  in.Default != nil,
 			Flag:        flag,

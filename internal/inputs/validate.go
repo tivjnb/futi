@@ -3,7 +3,10 @@ package inputs
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
+
+	"github.com/tivjnb/futi/internal/termtext"
 )
 
 var nameRE = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -42,10 +45,10 @@ func Validate(args, flags []Spec) []error {
 
 		validType := true
 		switch s.Type {
-		case "", "string", "int", "bool":
+		case "", "string", "int", "bool", "file", "dir":
 		default:
 			validType = false
-			fail("invalid type %q (valid: string, int, bool)", s.Type)
+			fail("invalid type %q (valid: string, int, bool, file, dir)", s.Type)
 		}
 		isBool := s.Type == "bool"
 		if isBool && !flag {
@@ -71,6 +74,10 @@ func Validate(args, flags []Spec) []error {
 					fail("default is not a boolean (true/false/1/0/yes/no/on/off)")
 				}
 			}
+		}
+
+		if s.Choices != nil {
+			checkChoices(s, validType, fail)
 		}
 
 		if s.Short != "" {
@@ -115,6 +122,57 @@ func Validate(args, flags []Spec) []error {
 		errs = append(errs, fmt.Errorf("%s", argsFormMsg))
 	}
 	return errs
+}
+
+// checkChoices reports the schema errors of the choices key. Messages never
+// repeat a choice that contains control characters.
+func checkChoices(s Spec, validType bool, fail func(format string, a ...any)) {
+	switch {
+	case s.Type == "bool" || s.Type == "file" || s.Type == "dir":
+		fail("choices is not allowed for %s", s.Type)
+		return
+	case s.Rest:
+		fail("choices is not allowed for rest")
+		return
+	case len(s.Choices) == 0:
+		fail("choices must not be empty")
+		return
+	}
+
+	seen := map[string]bool{}
+	for _, e := range s.Choices {
+		if termtext.Line(e) != e {
+			fail("choice contains a control character")
+			continue
+		}
+		canon := e
+		if s.Type == "int" {
+			n, err := strconv.Atoi(e)
+			if err != nil {
+				fail("choice %q is not an integer", e)
+				continue
+			}
+			canon = strconv.Itoa(n)
+		}
+		if seen[canon] {
+			fail("duplicate choice %q", e)
+		}
+		seen[canon] = true
+	}
+
+	if s.HasDefault && !s.Variadic && validType {
+		def := s.Default
+		if s.Type == "int" {
+			n, err := strconv.Atoi(def)
+			if err != nil {
+				return // "default is not an integer" is already reported
+			}
+			def = strconv.Itoa(n)
+		}
+		if !slices.Contains(s.CanonicalChoices(), def) {
+			fail("default %q is not one of the choices", s.Default)
+		}
+	}
 }
 
 func isASCIILetter(b byte) bool { return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' }
