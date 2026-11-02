@@ -211,9 +211,10 @@ futi docker logs -f web                # docker logs -f web
 | Поле | Где | По умолчанию | Описание |
 |---|---|---|---|
 | `name` | оба | — | Обязательно. `[a-z][a-z0-9_]*`, уникально среди args и flags узла. В CLI `_` превращается в `-` (`ignore_case` — это `--ignore-case`); в шаблоне — `{{.ignore_case}}`. Имена `help`, `env`, `module_root`, `module_name` зарезервированы |
-| `type` | оба | `string` | `string`, `int` или `bool`; `bool` — только у flags |
+| `type` | оба | `string` | `string`, `int`, `bool`, `file` или `dir`; `bool` — только у flags. `file` и `dir` — строки-подсказки о пути (completion, help): futi не проверяет, что путь существует и куда указывает, и не меняет его |
 | `required` | оба, кроме bool | `false` | Вход обязателен. Вместе с любым `default` (даже пустым) — ошибка схемы. У variadic/rest — минимум одно значение |
 | `default` | оба, кроме variadic/rest | — | Строка; для `int` — целое, для `bool` — одно из `true/false/1/0/yes/no/on/off` |
+| `choices` | оба, только `string`/`int` | — | Непустой список допустимых значений (см. [Choices](#choices)). Не для `bool`, `file`, `dir` и `rest` |
 | `description` | оба | — | Показывается в help и completion |
 | `short` | flags | — | Одна латинская буква, регистр значим (`-f` ≠ `-F`), уникальна в узле; `h` зарезервирована. Допустима у variadic-флага |
 | `variadic` | оба | `false` | Args: несколько слов подряд. Flags: флаг можно повторять, значения копятся. Не для `bool` |
@@ -221,6 +222,28 @@ futi docker logs -f web                # docker logs -f web
 | `allow_dash` | оба, кроме bool | `false` | Снимает [защиту от значений с ведущим `-`](#значения-с-ведущим--) |
 
 Args команды имеют одну из трёх форм: обязательные, затем необязательные (`req* opt*`); обязательные, один `variadic`, обязательные (`req* variadic req*`); обязательные, затем один `rest` (`req* rest`). Перед `variadic`/`rest` могут стоять только обязательные args; необязательный arg может идти после обязательных и иметь `default` (`context` выше по умолчанию `.`).
+
+#### Choices
+
+`choices` ограничивает вход фиксированным набором значений; допустимо для входов `string` и `int` (в том числе variadic). Список не может быть пустым; для `int` каждый элемент — целое; дубликаты (`1` и `01` — одно и то же целое) и управляющие символы — ошибка схемы. `default` должен входить в choices.
+
+```yaml
+flags:
+  - name: level
+    choices: [debug, info, warn]
+    default: info
+args:
+  - name: env
+    choices: [dev, prod]
+```
+
+Значение вне списка — ошибка; сравнение точное, с учётом регистра, у variadic-входа проверяется каждый элемент:
+
+```
+ERROR: invalid value "Info" for --level (valid: debug, info, warn)
+```
+
+Вариант, начинающийся с `-`, у входа под [защитой от ведущего `-`](#значения-с-ведущим--) — ошибка схемы: используйте `--opt={{.x}}`, литеральный `--` в `cmd` или `allow_dash: true`.
 
 ```yaml
 # meta.yaml — модуль как одна команда со схемой
@@ -854,7 +877,7 @@ flags:
   -h, --help
 ```
 
-`variadic`-вход показывается с `...` (`[words...]`), `rest`-arg — как `[docker_args...]` с пометкой `(passed verbatim)`. Если у узла есть подкоманды и string-arg, в справке добавляется `words up, down are subcommands; pass such a value after --`. Шаблон в справке не показывается; собранную команду смотрите через [`--dry-run`](#--dry-run).
+Флаг с `choices` показывает значения вместо типа (`--level debug|info|warn (default "info")`), arg — в виде `(dev|prod)`; флаг `file` или `dir` показывает свой тип (`--out file`). `variadic`-вход показывается с `...` (`[words...]`), `rest`-arg — как `[docker_args...]` с пометкой `(passed verbatim)`. Если у узла есть подкоманды и string-arg, в справке добавляется `words up, down are subcommands; pass such a value after --`. Шаблон в справке не показывается; собранную команду смотрите через [`--dry-run`](#--dry-run).
 Завершающий `-h`/`--help` после пути игнорируется (`futi help demo -h` = `futi help demo`); `futi help --help` показывает справку самого futi, как `futi -h`. Каждое слово после `futi help` должно быть словом пути: `futi help docker build extra` — ошибка `unknown command "extra" for "futi docker build"`. `help` — встроенная команда только первым словом: `futi demo help` вызывает команду `help` модуля `demo` как обычную команду (флаги, `-- args`, её stderr и код выхода) и завершается ошибкой, если такой команды нет; `futi help demo help` показывает справку этой команды.
 
 ### `--dry-run`
@@ -919,7 +942,7 @@ $ echo $?
 - модуль без `cmd` и без `commands`
 - команда без `cmd` и без `commands` (бесполезная команда); `cmd` из одних пробелов считается пустым
 - `args` или `flags` без `cmd` — на любом уровне (модуль, команда); входы не наследуются подкомандами
-- ошибка схемы входа: `type` не из `{string, int, bool}`, `bool` с `required`/`variadic`/`allow_dash`, `required` вместе с любым `default` (даже пустым), `default` не того типа, дубликат имени среди args и flags узла, имя не по `[a-z][a-z0-9_]*`, зарезервированное имя (`help`, `env`, `module_root`, `module_name`), неверный `short` (не одна латинская буква, дубликат, `h`), `rest` не у последнего arg и недопустимая форма args (разрешены только `required… optional…`, `required… variadic required…` или `required… rest`)
+- ошибка схемы входа: `type` не из `{string, int, bool, file, dir}`, неверные `choices` (у `bool`, `file`, `dir` или `rest`, пустой список, дубликаты, не целое для `int`, `default` вне списка), `bool` с `required`/`variadic`/`allow_dash`, `required` вместе с любым `default` (даже пустым), `default` не того типа, дубликат имени среди args и flags узла, имя не по `[a-z][a-z0-9_]*`, зарезервированное имя (`help`, `env`, `module_root`, `module_name`), неверный `short` (не одна латинская буква, дубликат, `h`), `rest` не у последнего arg и недопустимая форма args (разрешены только `required… optional…`, `required… variadic required…` или `required… rest`)
 - ошибка шаблона в `cmd`, `attach`, `detach`: синтаксис, недопустимая конструкция (см. [`cmd` и `text/template`](#cmd-и-texttemplate)), ссылка на необъявленный вход, bool вне условия, variadic/rest в склейке без `range`, `range` по не-variadic входу; хуки могут ссылаться только на `env`, `module_root` и `module_name`
 - вход, который `cmd` нигде не упоминает (`input "port" is not used in cmd`)
 - висящий флаг: литерал `--tail`, за которым стоит аргумент, способный выпасть (`"--tail" would be left without its value when "tail" is unset; use {{if .tail}}--tail {{.tail}}{{end}} or --tail={{.tail}}`); для variadic/rest не проверяется
@@ -1209,7 +1232,7 @@ futi completion fish > ~/.config/fish/completions/futi.fish
 
 - **Слова пути** — дети текущего узла в объединённом дереве: `futi <TAB>` (модули, namespaces, builtins), `futi dev <TAB>`, `futi docker <TAB>`, `futi docker migrate <TAB>`. Подкоманда подсказывается только сразу после пути: когда дальше идёт флаг или другое слово, остальное — входы узла
 - **Флаги** — только для слова, начинающегося с `-`: `futi k8s logs -<TAB>` → `--follow`, `-f`, `--tail`, `--help`; уже использованные флаги повторно не предлагаются (кроме variadic). Пометки `(required)` и `(default: …)` видны в zsh, bash/fish их отрезают
-- **Значения** — для значения не-bool флага (`futi docker build --tag <TAB>`, `--tag=<TAB>`) и для позиционного arg ничего не подсказывается: shell тоже не добавляет файлы (дополнение файлов запланировано для входов `path`/`dir`, см. ROADMAP). Bool-флаг значения не берёт, поэтому после него `true`/`false` не предлагаются
+- **Значения** — вход с `choices` подсказывает свои варианты; вход `file` — файлы и каталоги, вход `dir` — только каталоги. Для остальных входов (`futi docker build --tag <TAB>`) ничего не подсказывается, и shell файлы тоже не добавляет. После `--flag=<TAB>` дополняются только варианты choices, пути — никогда. Если у узла есть подкоманды и у первого arg есть `choices`, побеждают подходящие подкоманды; варианты предлагаются, только когда ни одна подкоманда не подходит. Bool-флаг значения не берёт, поэтому после него `true`/`false` не предлагаются
 - **Rest-arg** — после старта rest-arg (`futi docker run nginx <TAB>`) или когда он первый вход узла без подкоманд (`futi run <TAB>`), токены уходят утилите как есть, и shell дополняет файлы как обычно. Всё после `--` — данные: ни флаги, ни подкоманды не подсказываются
 - **`help` и `list`** — встроенные команды только первым словом; после них дополняется путь команды: `futi help do<TAB>` → `docker`, `futi list dev <TAB>`. Внутри пути `help` и `list` подсказываются, только если модуль определяет такие команды
 - **Глобальные флаги** — `futi --<TAB>` → `--dry-run`, `--help`, `--version`; после ведущего `--dry-run` подсказки как для обычного вызова, но без builtins (`cache`, `completion`, `list`, `modules`): `futi --dry-run <TAB>` показывает только модули и namespaces
@@ -1450,7 +1473,7 @@ futi находится на ранней стадии (0.x): формат мо�
 
 ### Ближайшие планы
 
-- **Типы входов** — расширение за пределы `int`: `file`, `json`, `secret` (безопасная передача через env, не args; базовый доступ к env vars уже есть через `{{.env.FOO}}`), `choices`, аннотации команд. Для `path`/`dir`-типов автокомплит будет предлагать пути только им
+- **Типы входов** — расширение за пределы `int`, `file` и `dir`: `json`, `secret` (безопасная передача через env, не args; базовый доступ к env vars уже есть через `{{.env.FOO}}`), аннотации команд
 - **Descriptions в bash/fish** — zsh выводит описания уже сейчас; bash/fish — roadmap
 - **PowerShell** — 4-й shell после стабилизации bash/zsh/fish
 - **Модульный completion** — модули сами предоставляют подсказки для автодополнения (динамические кандидаты: имена контейнеров, веток и т.п.); тогда же имя `completion` может быть отдано модулям через smart-роутинг (`futi completion bash|zsh|fish` остаётся builtin-генерацией скрипта, остальные вызовы — резолв модуля). Сейчас `completion`/`__complete` зарезервированы (см. `futi modules init`)
