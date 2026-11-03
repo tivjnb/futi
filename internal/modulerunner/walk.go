@@ -224,7 +224,8 @@ func moduleCommand(mod *execmodule.Module) *execmodule.Command {
 // Children returns the sorted names of the node's children: discovery children
 // of its namespace and subcommands. Unreadable sources are skipped. With a
 // frontend, subcommands and loaded child modules not exposed to it are left
-// out; a module that fails to load stays.
+// out; a module that fails to load stays. Child modules are loaded on each
+// call: it is meant for error paths and relies on a caching loader.
 func (n *Node) Children(source discovery.Source) []string {
 	seen := map[string]bool{}
 	if n.Command != nil {
@@ -257,6 +258,18 @@ func (n *Node) Children(source discovery.Source) []string {
 	return names
 }
 
+// HiddenError reports that the node reached by ResolveWords exists but is not
+// exposed to the requested frontend. It is returned before any "requires a
+// subcommand" or unknown-word error of that node.
+type HiddenError struct {
+	Path    []string
+	Command *execmodule.Command
+}
+
+func (e *HiddenError) Error() string {
+	return fmt.Sprintf("%q is not exposed to the requested frontend", strings.Join(e.Path, " "))
+}
+
 // visible reports whether cmd is shown to the node's frontend; an empty
 // frontend filters nothing.
 func (n *Node) visible(cmd *execmodule.Command) bool {
@@ -277,6 +290,9 @@ func ResolveWords(source discovery.Source, loader ModuleLoader, words []string, 
 		return nil, nil, fmt.Errorf("modulerunner: %w", err)
 	}
 	rest := words[n:]
+	if node.Command != nil && !node.visible(node.Command) {
+		return nil, nil, &HiddenError{Path: node.Path, Command: node.Command}
+	}
 	if !node.runnable() {
 		return nil, nil, noCommandError(source, node, rest)
 	}

@@ -61,10 +61,11 @@ func (r *Runtime) ResolveWords(f execmodule.Frontend, words []string) (*Target, 
 	}
 	res, rest, err := modulerunner.ResolveWords(src, r.loader(), words, f)
 	if err != nil {
+		var hidden *modulerunner.HiddenError
+		if errors.As(err, &hidden) {
+			return nil, nil, notExposed(f, hidden.Path, hidden.Command)
+		}
 		return nil, nil, classify(err)
-	}
-	if err := notExposed(f, res.Path, res.Command); err != nil {
-		return nil, nil, err
 	}
 	return &Target{r: res}, rest, nil
 }

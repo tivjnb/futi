@@ -31,7 +31,8 @@ type HelpDoc struct {
 }
 
 // HelpIn resolves system help for the node at path in src as seen from f (a
-// hidden node is a *NotExposedError); every word of path must be a path word. For a partial namespace listing it returns both a valid
+// hidden node is a *NotExposedError); every word of path must be a path
+// word. For a partial namespace listing it returns both a valid
 // HelpNamespace and the *discovery.PartialError. Other errors are classified.
 func HelpIn(f execmodule.Frontend, src discovery.Source, loader modulerunner.ModuleLoader, path []string) (HelpDoc, error) {
 	doc, err := helpIn(f, src, loader, path)

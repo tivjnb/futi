@@ -24,7 +24,13 @@ commands:
   prod:
     expose: [mcp]
     cmd: echo prod
+  grp:
+    expose: [mcp]
+    commands:
+      a:
+        cmd: echo a
 `)
+	writeFile(t, filepath.Join(dir, "ng", "nocmd.yaml"), "expose: [mcp]\ncommands:\n  a:\n    cmd: echo a\n")
 	writeFile(t, filepath.Join(dir, "ns", "hidden.yaml"), "expose: [mcp]\ncmd: echo hidden\n")
 	writeFile(t, filepath.Join(dir, "ns", "shown.yaml"), "cmd: echo shown\n")
 	return dir
@@ -65,6 +71,49 @@ func TestResolveWordsNotExposed(t *testing.T) {
 	}
 	if _, _, err := rt.ResolveWords(execmodule.FrontendCLI, []string{"ops", "status"}); err != nil {
 		t.Errorf("CLI status: %v", err)
+	}
+}
+
+func TestResolveWordsHiddenGroupAndModule(t *testing.T) {
+	rt := exposeRT(t)
+	tests := []struct {
+		words []string
+		path  []string
+	}{
+		{[]string{"ops", "grp"}, []string{"ops", "grp"}},
+		{[]string{"ops", "grp", "x"}, []string{"ops", "grp"}},
+		{[]string{"ops", "grp", "a"}, []string{"ops", "grp", "a"}}, // child of a hidden group is hidden too
+		{[]string{"ng", "nocmd"}, []string{"ng", "nocmd"}},
+		{[]string{"ng", "nocmd", "x"}, []string{"ng", "nocmd"}},
+	}
+	for _, tt := range tests {
+		_, _, err := rt.ResolveWords(execmodule.FrontendCLI, tt.words)
+		var ne *core.NotExposedError
+		if !errors.As(err, &ne) || !slices.Equal(ne.Path, tt.path) {
+			t.Errorf("ResolveWords(%q) err = %v, want NotExposedError at %q", tt.words, err, tt.path)
+		}
+		if core.ExitCode(err) != 1 {
+			t.Errorf("ResolveWords(%q) exit code = %d, want 1", tt.words, core.ExitCode(err))
+		}
+		if _, _, err := rt.ResolveWords("", tt.words); errors.As(err, &ne) {
+			t.Errorf("ResolveWords(\"\", %q) filtered: %v", tt.words, err)
+		}
+	}
+}
+
+func TestHiddenModuleStillChecksCollisions(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "ns", "a.yaml"), "expose: [mcp]\ncommands:\n  b:\n    cmd: echo\n")
+	writeFile(t, filepath.Join(dir, "ns", "a", "b.yaml"), "cmd: echo\n")
+	res, err := core.ListIn(execmodule.FrontendCLI, discovery.NewGlobalSource(dir), nil, "ns", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := childNames(res.Children); !slices.Equal(names, []string{"a"}) { // namespace a only
+		t.Errorf("children = %q, want only the namespace a", names)
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], `path "ns a b" is ambiguous`) {
+		t.Errorf("Warnings = %q, want the collision of \"ns a b\"", res.Warnings)
 	}
 }
 
@@ -118,8 +167,8 @@ func TestListHidesNotExposed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if names := commandNames(res); !slices.Equal(names, []string{"prod", "status"}) {
-		t.Errorf("MCP commands = %q, want [prod status]", names)
+	if names := commandNames(res); !slices.Equal(names, []string{"grp", "prod", "status"}) {
+		t.Errorf("MCP commands = %q, want [grp prod status]", names)
 	}
 	res, err = core.ListIn(execmodule.FrontendMCP, src, nil, "ns", false)
 	if err != nil {
