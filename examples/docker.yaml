@@ -3,6 +3,7 @@ description: Docker shortcuts
 commands:
   ps:
     description: List containers
+    readonly: true
     flags:
       - name: all
         type: bool
@@ -10,6 +11,7 @@ commands:
     cmd: "docker ps {{if .all}}--all{{end}}"
   logs:
     description: Show container logs
+    readonly: true
     flags:
       - name: container
         required: true
@@ -24,4 +26,5 @@ commands:
     cmd: "docker logs --tail={{.tail}} {{if .follow}}--follow{{end}} -- {{.container}}"
   prune:
     description: "Remove ALL stopped containers, unused networks, dangling images and build cache. IRREVERSIBLE: removed data cannot be restored"
+    destructive: true
     cmd: "docker system prune --force"

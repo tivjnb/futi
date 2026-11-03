@@ -5,7 +5,7 @@ Working modules you can try right away:
 | Module | Commands |
 |---|---|
 | `git` | `status`, `log`, `switch`, `amend-noedit` |
-| `docker` | `ps`, `logs`, `prune` (irreversible) |
+| `docker` | `ps`, `logs` (both `readonly`), `prune` (irreversible, `destructive`: asks for confirmation) |
 | `files` | `large`, `count` |
 | `backup` | module package with a bundled script (`backup/scripts/backup.sh`) |
 

@@ -19,6 +19,7 @@ futi deploy staging
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [Module structure](#module-structure)
+- [Command annotations](#command-annotations)
 - [Discovery and namespaces](#discovery-and-namespaces)
 - [Inputs and templating](#inputs-and-templating)
 - [Module package with scripts](#module-package-with-scripts)
@@ -202,6 +203,8 @@ A node (the module or a command) has these fields:
 | `args` | list | Positional inputs |
 | `flags` | list | Inputs passed as `--name` |
 | `commands` | map | Nested commands (a node may have `cmd`, `args` and `commands` at the same time) |
+| `readonly`, `destructive`, `idempotent` | bool | Annotations of a command with its own `cmd` (see [Command annotations](#command-annotations)) |
+| `expose` | list | Where the node is available: `cli`, `mcp`, `http`; inherited by the subcommands (see [Command annotations](#command-annotations)) |
 | `attach`, `detach` | string or list | Module only. Install/uninstall hooks (see [Managing modules](#managing-modules)) |
 
 `args` and `flags` of a node belong to its own `cmd` only: they are not inherited by subcommands. The module-level `args` and `flags` describe the module's default command.
@@ -267,6 +270,92 @@ An unknown manifest key (for example, the typo `requird` in an input) is a schem
 > **Old format.** `params`, `positional` and `{{.args}}`, `{{.args_list}}`, `{{quote …}}` no longer exist. A module that uses them fails to load with an error that points to the replacement (for example `"params" was replaced by "args"/"flags" (see README)`). Move parameters to `flags` (or to `args` if they were positional), replace `{{quote .x}}` with `{{.x}}`, and replace `{{.args}}` with a `rest` or `variadic` arg.
 
 ---
+
+## Command annotations
+
+An author can describe what a command does to the world and where it may be called from. The keys are optional and sit next to `cmd` in the module or in any command:
+
+```yaml
+# ~/.config/futi/modules/db.yaml
+name: db
+description: Database tools
+commands:
+  status:
+    description: Show the server status
+    readonly: true
+    idempotent: true
+    cmd: "pg_isready"
+
+  drop:
+    description: Drop a database
+    destructive: true
+    args:
+      - name: name
+        required: true
+    cmd: ["dropdb", "{{.name}}"]
+
+  maintenance:
+    description: Maintenance tasks
+    expose: [cli, mcp]          # inherited by the subcommands
+    idempotent: true
+    cmd: "vacuumdb --all"       # fallback when no subcommand is given
+    commands:
+      analyze:
+        cmd: "vacuumdb --all --analyze-only"
+      reindex:
+        expose: [mcp]           # narrower than the parent: not available in the CLI
+        cmd: "reindexdb --all"
+```
+
+| Key | Where | Meaning |
+|---|---|---|
+| `readonly` | a node with its own `cmd` | The command changes nothing |
+| `destructive` | a node with its own `cmd` | The command deletes or overwrites data; futi asks for confirmation |
+| `idempotent` | a node with its own `cmd` | A repeated call has no further effect |
+| `expose` | any node | A list of frontends where the node is available: `cli`, `mcp`, `http`. Inherited; a subcommand may only narrow it |
+
+`readonly`, `destructive` and `idempotent` have three states: `true`, `false` and unset (not stated). They are allowed only on a node that has its own `cmd`; on a pure group they are a schema error (`readonly applies only to a command with cmd`). `readonly: true` together with `destructive: true` is a schema error (`readonly and destructive are mutually exclusive`). Only `destructive: true` changes what the CLI does; the other keys are shown in `help` and are meant for tools that call futi.
+
+`expose` defaults to all three frontends. A node without its own `expose` takes the list of its parent (the module root is exposed everywhere), and a subcommand may name only frontends that its parent has: `expose widens the parent: "mcp" is not exposed by "<parent>"`. An empty list, an unknown or a repeated value is a schema error. Inheritance works inside one module file; a namespace directory has no annotations. `mcp` and `http` are groundwork for a future server mode: today only `cli` has an effect.
+
+A command without `cli` in its `expose` is hidden from `futi list`, from the help of its group and from completion, and a direct call, `help`, `-h` or `list` of it fails (exit code 1):
+
+```
+command "futi db maintenance reindex" is not available in the CLI (expose: mcp)
+```
+
+A hidden command still occupies its word: a path collision with it is an error, and `futi modules validate` checks it as usual.
+
+### Confirmation of destructive commands
+
+A command with `destructive: true` does not run until it is confirmed:
+
+```bash
+$ futi db drop main
+futi db drop is destructive and will run:
+  dropdb main
+Run it? [y/N]
+```
+
+- **A terminal on stdin.** futi asks on stderr. `y` or `yes` (any case, spaces around are ignored) confirms; anything else and end of input give `futi: aborted` and exit code 1, the command is not started. The answer is read up to the end of the line and no further, so the rest of stdin goes to the command.
+- **No terminal on stdin** (a pipe, CI, a file). futi refuses without reading stdin, because stdin belongs to the command (`futi db import < dump.sql`): `futi: "futi db drop" is destructive and needs confirmation (no terminal on stdin): rerun as "futi --yes db drop ..."`. Exit code 1.
+- **`--yes` / `-y`** skips the question and runs the command. For a command that is not destructive the flag does nothing.
+- **`--dry-run`** prints the command and never asks.
+
+```bash
+futi --yes db drop main        # run without asking
+futi -y --dry-run db drop main # the flags go in any order; prints: dropdb main
+```
+
+`--yes` is recognized only before the path, like `--dry-run` (see [`--yes`](#--yes)).
+
+`futi help db drop` shows the annotations that are set to `true` and, when the list differs from "everywhere", the exposure; `futi list db` adds `(destructive)` to the description:
+
+```
+$ futi help db drop
+...
+annotations: destructive (asks for confirmation)
+```
 
 ---
 
@@ -398,7 +487,7 @@ futi docker logs web --follow=false
 futi k8s logs -- -weird-pod-name           # after "--" everything is an arg
 ```
 
-The command line is `futi [--dry-run] <path…> [args and flags…]`. Tokens after the path are read left to right:
+The command line is `futi [--dry-run] [--yes] <path…> [args and flags…]`. Tokens after the path are read left to right:
 
 - `--name value`, `--name=value` — a flag with a `string`/`int` value; `-s value` — its short form (set by `short`). Short flags are not glued (`-fi` is an error with the hint `-f -i`) and do not take `=` (`-f=x` is an error)
 - `--bool-flag` — a `bool` flag is `true`; `--bool-flag=false` — explicit (`true/false/1/0/yes/no/on/off`). A bare bool flag never takes the next word: `--force false` is an error (`bool flag --force takes no separate value; use --force=false`); to pass the arg `false`, put it after `--`
@@ -413,7 +502,7 @@ The command line is `futi [--dry-run] <path…> [args and flags…]`. Tokens aft
 
 After the whole line is read: defaults are applied, a missing required input is an error (`missing argument <pod>`, `missing required flag --tag`), an `int` must be an integer, an extra word is `unexpected argument "extra" (futi k8s logs takes 1 argument: <pod>)` (with a hint `--x=…` when the previous token is a bool flag).
 
-`--dry-run`, `-h/--help` and `--version` of futi itself are recognized only **before** the path. After the path every flag belongs to the command: `futi k8s logs x --dry-run` fails with `unknown flag --dry-run` unless the command declares such a flag.
+`--dry-run`, `--yes`, `-h/--help` and `--version` of futi itself are recognized only **before** the path. After the path every flag belongs to the command: `futi k8s logs x --dry-run` fails with `unknown flag --dry-run` unless the command declares such a flag.
 
 #### Subcommand or arg
 
@@ -664,6 +753,7 @@ futi <namespace...> <command> [args and --flags]   # call a module command
 futi <path...> -h                           # help for a path (namespace, module, branch or command)
 futi <namespace>                            # default command (if the module has a module-level cmd)
 futi --dry-run <path...> <command>          # print the command without running it
+futi --yes <path...> <command>              # run a destructive command without asking (-y)
 futi help <path...>                         # help for a path
 futi list                                   # modules and namespaces at the root
 futi list <path...>                         # contents of a namespace or module commands
@@ -864,11 +954,25 @@ docker build -t 'my app' -f Dockerfile .
 
 The output is one line on stdout: the command's argv after template evaluation, with tokens that contain spaces or special characters in single quotes (the line can be pasted into a shell). The output uses bash/zsh syntax (not POSIX sh/dash): the `$'…'` form is used only for tokens with control or non-printable characters (ESC, `\r`, bidi characters, etc.), so a foreign module cannot forge the displayed command. To paste such tokens back into a shell, use a UTF-8 locale: `\u…` inside `$'…'` depends on the locale. Errors (unknown command, missing required input, template error) are printed the same way as without `--dry-run`, with the same exit code.
 
-- The flag is recognized only as the first argument of `futi`; after the path `--dry-run` is an ordinary module flag, not a reserved name.
+- The flag is recognized only before the path (together with [`--yes`](#--yes), in any order); after the path `--dry-run` is an ordinary module flag, not a reserved name. Repeating it is an error: `futi: duplicate flag --dry-run`.
+- A destructive command is printed without a confirmation question.
 - Hooks (`attach`/`detach`) are not executed and not shown: only the command is printed.
 - `-h` / `--help` after the path works as usual (help, exit code 0). A module command named `help` (`futi --dry-run demo help`) is shown like any other.
 - `list`, `help`, `modules`, `cache`, `completion`, `--version` and `-h` without a path are not module commands: with `--dry-run` they fail with the error `--dry-run applies only to module commands` (exit code 1).
 - **Secrets:** the template substitutes `{{.env.X}}` values, and they will appear in the output. Do not publish `--dry-run` output for commands with tokens and passwords in the environment.
+
+### `--yes`
+
+`--yes` (short `-y`) is a global flag: it confirms a [destructive command](#confirmation-of-destructive-commands) in advance, so futi does not ask.
+
+```bash
+futi --yes db drop main
+futi -y --dry-run db drop main
+```
+
+- Like `--dry-run`, the flag is recognized only before the path; after the path `--yes` belongs to the command (`futi db drop main --yes` fails with `unknown flag --yes` if the command has no such flag). The order of `--yes` and `--dry-run` does not matter; repeating a flag is an error (`futi: duplicate flag --yes`).
+- For a command that is not `destructive: true` the flag does nothing.
+- With builtins (`list`, `help`, `modules`, `cache`, `completion`, `--version`, `-h`) it fails with `futi: --yes applies only to module commands` (exit code 1). The own `--yes` of `futi modules install|update|uninstall` is given after the subcommand and is not affected.
 
 ---
 
@@ -1194,7 +1298,7 @@ futi completion fish > ~/.config/fish/completions/futi.fish
 - **Values** — an input with `choices` suggests its choices; a `file` input suggests files and directories, a `dir` input suggests directories only. For any other input (`futi docker build --tag <TAB>`) nothing is suggested, and the shell does not add files either. After `--flag=<TAB>` only choices are completed, never paths. When a node has subcommands and its first arg has `choices`, the matching subcommands win; the choices are offered only if no subcommand matches. A bool flag takes no value, so nothing is offered after it
 - **Rest arg** — once the rest arg has started (`futi docker run nginx <TAB>`) or when it is the next input of a node (`futi run <TAB>`; on a node with subcommands, only if the typed prefix matches no subcommand), the tokens are passed to the tool as they are, and the shell completes files as usual. Everything after `--` is data: no flags or subcommands are suggested
 - **`help` and `list`** — these are builtins only as the first word; after them the command path is completed: `futi help do<TAB>` → `docker`, `futi list dev <TAB>`. Inside a path `help` and `list` are suggested only if the module defines such commands
-- **Global flags** — `futi --<TAB>` → `--dry-run`, `--help`, `--version`; after a leading `--dry-run` the hints are as for a regular call, but without builtins (`cache`, `completion`, `list`, `modules`): `futi --dry-run <TAB>` shows only modules and namespaces
+- **Global flags** — `futi --<TAB>` → `--dry-run`, `--help`, `--version`, `--yes`; after the leading `--dry-run` / `--yes` / `-y` (in any combination) the hints are as for a regular call, but without builtins (`cache`, `completion`, `list`, `modules`): `futi --dry-run <TAB>` shows only modules and namespaces. Commands without `cli` in `expose` are not suggested
 - **Builtins** — `futi cache <TAB>` → `refresh`/`status`/`clear`; `futi completion <TAB>` → `bash`/`zsh`/`fish`. At the root, `cache`, `completion`, `list`, `modules` are suggested as builtins even when a module has the same name (the CLI executes the builtin)
 - **Module validation** — `futi modules validate <TAB>` suggests full module names (`dev.deploy`), and no hints after the first argument
 - **`modules` flags** — `futi modules add_command <module> --<TAB>` → `--cmd`, `--desc`; likewise for `init`, `install`, `uninstall`, `update`
@@ -1420,7 +1524,7 @@ futi deploy rollback production
 
 futi is early-stage software (0.x): the module format may change between minor versions. Everything below is a plan, not a promise: none of it is implemented yet.
 
-- **Module schema** — richer input types (`json`, `secret`), annotations.
+- **Module schema** — richer input types (`json`, `secret`).
 - **Server mode** — a remote MCP server over HTTP so that AI agents can call module commands on the machine where futi runs, plus a REST API for CI/CD. Auth, a namespace allowlist, output and time limits and an audit log are part of the plan.
 - **Module-provided completion and interactive mode** — modules supply their own completion candidates (container names, branches, etc.); an interactive TUI for browsing and calling modules; completion descriptions in bash/fish; PowerShell support.
 - **Ecosystem** — a module registry (`futi modules install <short-name>`, update checks) and module versioning.

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Command annotations: `readonly`, `destructive` and `idempotent` (true, false or unset; only on a command with its own `cmd`; `readonly` and `destructive` exclude each other) and `expose` (`cli`, `mcp`, `http`; inherited, a subcommand may only narrow it). A command without `cli` in `expose` is hidden from `list`, group help and completion and fails when called directly. `futi help` shows the annotations and `futi list` marks destructive commands. `mcp` and `http` are groundwork for a future server.
+- `futi --yes` / `-y`: a command with `destructive: true` asks for confirmation (`[y/N]` on a terminal) and refuses to run when stdin is not a terminal; `--yes` confirms in advance, `--dry-run` never asks. Completion offers `--yes` and skips commands that are not exposed to the CLI.
 - `futi help <path>`: contextual help at any level of the command tree.
 - Inputs of a command: `args` (positional words) and `flags` (`--name value`, `-s` short form via `short`), with `string`, `int` and `bool` types, `required`, `default` and `variadic`.
 - A `rest` arg that passes the remaining tokens to the wrapped tool verbatim, including flags and `-h`.
@@ -29,6 +31,10 @@ Breaking relative to 0.1.0:
 - `attach` and `detach` hooks run without a shell. A compound hook is written explicitly as `[sh, -c, "..."]`; a program given with a path (`scripts/x.sh`) is looked up from the module directory.
 - `modules add_command` writes `cmd` as a list (`[echo, <name>]`) by default.
 - Shell completion suggests files only for `file` and `dir` inputs (0.1.0 suggested them for the value of any flag).
+
+Other:
+
+- A repeated `--dry-run` before the path is an error: `futi: duplicate flag --dry-run`.
 
 ### Fixed
 
