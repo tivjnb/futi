@@ -1359,3 +1359,24 @@ func TestCompleteHidesNotExposed(t *testing.T) {
 		t.Errorf("flags of visible command = %v, want [--help]", got)
 	}
 }
+
+func TestCompleteHiddenModuleStillOffersNamespaceChildren(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "ops", "secret.yaml"), `expose: [mcp]
+cmd: "echo secret {{if .force}}-f{{end}}"
+flags:
+  - name: force
+    type: bool
+commands:
+  inner:
+    cmd: echo inner
+`)
+	writeFile(t, filepath.Join(dir, "ops", "secret", "kid.yaml"), "cmd: echo kid\n")
+	src := discovery.NewGlobalSource(dir)
+	if got := completeTexts(t, src, []string{"ops", "secret"}, ""); !reflect.DeepEqual(got, []string{"kid"}) {
+		t.Errorf("children of hidden module = %v, want [kid] (no subcommands)", got)
+	}
+	if got := completeTexts(t, src, []string{"ops", "secret"}, "-"); got != nil {
+		t.Errorf("flags of hidden module = %v, want none", got)
+	}
+}

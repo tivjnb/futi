@@ -202,9 +202,16 @@ func pathMatches(source discovery.Source, loader modulerunner.ModuleLoader, args
 	if err != nil || (n == 0 && len(args) > 0) {
 		return nil, ShellCompDirectiveNoFileComp
 	}
-	// A command (or group) not exposed to the CLI offers neither flags nor children.
+	// A command (or group) not exposed to the CLI offers neither flags nor
+	// subcommands; the namespace directory of the same name still offers its
+	// children.
 	if node.Command != nil && !node.Command.ExposedTo(execmodule.FrontendCLI) {
-		return nil, ShellCompDirectiveNoFileComp
+		if n < len(args) || strings.HasPrefix(toComplete, "-") {
+			return nil, ShellCompDirectiveNoFileComp
+		}
+		bare := *node
+		bare.Command = nil
+		return filterMatches(childMatches(source, loader, &bare, false), toComplete), ShellCompDirectiveNoFileComp
 	}
 	rest := args[n:]
 
