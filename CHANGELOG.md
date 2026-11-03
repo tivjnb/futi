@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-03
+
 ### Added
 
 - Command annotations: `readonly`, `destructive` and `idempotent` (true, false or unset; only on a command with its own `cmd`; `readonly` and `destructive` exclude each other) and `expose` (`cli`, `mcp`, `http`; inherited, a subcommand may only narrow it). A command without `cli` in `expose` is hidden from `list`, group help and completion and fails when called directly. `futi help` shows the annotations and `futi list` marks destructive commands. `mcp` and `http` are groundwork for a future server.
@@ -31,7 +33,6 @@ Breaking relative to 0.1.0:
 - `attach` and `detach` hooks run without a shell. A compound hook is written explicitly as `[sh, -c, "..."]`; a program given with a path (`scripts/x.sh`) is looked up from the module directory.
 - `modules add_command` writes `cmd` as a list (`[echo, <name>]`) by default.
 - Shell completion suggests files only for `file` and `dir` inputs (0.1.0 suggested them for the value of any flag).
-
 - A repeated `--dry-run` before the path is an error: `futi: duplicate flag --dry-run`.
 
 ### Fixed
