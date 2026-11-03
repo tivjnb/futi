@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -89,6 +90,12 @@ type Command struct {
 	Args        []inputs.Spec
 	Flags       []inputs.Spec // Spec.Flag is true for every element
 	Commands    map[string]*Command
+
+	// Annotations. ReadOnly, Destructive and Idempotent are TriUnset when the
+	// key is absent. Expose is the effective list after inheritance, in
+	// AllFrontends order; empty (a zero Command) means visible everywhere.
+	ReadOnly, Destructive, Idempotent Tri
+	Expose                            []Frontend
 }
 
 // Module is a loaded YAML module. Its own node (the default command of the
@@ -115,6 +122,10 @@ type moduleYAML struct {
 	Args        []inputYAML            `yaml:"args"`
 	Flags       []inputYAML            `yaml:"flags"`
 	Commands    map[string]commandYAML `yaml:"commands"`
+	ReadOnly    *bool                  `yaml:"readonly"`
+	Destructive *bool                  `yaml:"destructive"`
+	Idempotent  *bool                  `yaml:"idempotent"`
+	Expose      *[]string              `yaml:"expose"`
 
 	// Keys of the old format: accepted here so that the unknown-key check
 	// skips them; ParseManifest reports them with their own message.
@@ -128,6 +139,10 @@ type commandYAML struct {
 	Args        []inputYAML            `yaml:"args"`
 	Flags       []inputYAML            `yaml:"flags"`
 	Commands    map[string]commandYAML `yaml:"commands"`
+	ReadOnly    *bool                  `yaml:"readonly"`
+	Destructive *bool                  `yaml:"destructive"`
+	Idempotent  *bool                  `yaml:"idempotent"`
+	Expose      *[]string              `yaml:"expose"`
 
 	OldParams     any `yaml:"params"`
 	OldPositional any `yaml:"positional"`
@@ -243,19 +258,26 @@ func ParseManifest(data []byte, manifestPath, moduleRoot string) (*Module, error
 		}
 	}
 
+	var annErrs []error
+	root := parseCommand(commandYAML{
+		Description: raw.Description,
+		Cmd:         raw.Cmd,
+		Args:        raw.Args,
+		Flags:       raw.Flags,
+		Commands:    raw.Commands,
+		ReadOnly:    raw.ReadOnly,
+		Destructive: raw.Destructive,
+		Idempotent:  raw.Idempotent,
+		Expose:      raw.Expose,
+	}, defaultPath, AllFrontends, &annErrs)
+
 	return &Module{
-		Name:   raw.Name,
-		Root:   moduleRoot,
-		Attach: raw.Attach,
-		Detach: raw.Detach,
-		Command: *parseCommand(commandYAML{
-			Description: raw.Description,
-			Cmd:         raw.Cmd,
-			Args:        raw.Args,
-			Flags:       raw.Flags,
-			Commands:    raw.Commands,
-		}),
-		schemaErrs: schemaErrs,
+		Name:       raw.Name,
+		Root:       moduleRoot,
+		Attach:     raw.Attach,
+		Detach:     raw.Detach,
+		Command:    *root,
+		schemaErrs: append(schemaErrs, annErrs...),
 	}, nil
 }
 
@@ -328,19 +350,34 @@ func parseInputs(raw []inputYAML, flag bool) []inputs.Spec {
 }
 
 // parseCommand рекурсивно преобразует commandYAML в Command,
-// включая вложенные commands.
-func parseCommand(c commandYAML) *Command {
+// включая вложенные commands. path — имя команды в сообщениях, parent —
+// действующий expose родителя; ошибки аннотаций дописываются в errs.
+func parseCommand(c commandYAML, path string, parent []Frontend, errs *[]error) *Command {
 	cmd := &Command{
 		Description: c.Description,
 		Cmd:         c.Cmd,
 		Args:        parseInputs(c.Args, false),
 		Flags:       parseInputs(c.Flags, true),
+		ReadOnly:    triOf(c.ReadOnly),
+		Destructive: triOf(c.Destructive),
+		Idempotent:  triOf(c.Idempotent),
+		Expose:      parseExpose(c.Expose, path, parent, errs),
 	}
 
 	if len(c.Commands) > 0 {
 		cmd.Commands = make(map[string]*Command, len(c.Commands))
-		for name, sub := range c.Commands {
-			cmd.Commands[name] = parseCommand(sub)
+		// Sorted, so that the errors come in a stable order.
+		names := make([]string, 0, len(c.Commands))
+		for name := range c.Commands {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			subPath := name
+			if path != defaultPath {
+				subPath = path + "." + name
+			}
+			cmd.Commands[name] = parseCommand(c.Commands[name], subPath, cmd.Expose, errs)
 		}
 	}
 
