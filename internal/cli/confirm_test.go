@@ -85,6 +85,11 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
+// iotestErrReader fails every Read with err.
+type iotestErrReader struct{ err error }
+
+func (r iotestErrReader) Read([]byte) (int, error) { return 0, r.err }
+
 func TestConfirmPrompt(t *testing.T) {
 	req := core.ConfirmRequest{Path: []string{"db", "drop"}, Argv: []string{"dropdb", "main"}}
 	const prompt = "futi db drop is destructive and will run:\n  dropdb main\nRun it? [y/N] "
@@ -108,6 +113,15 @@ func TestConfirmPrompt(t *testing.T) {
 		}
 		if in.read {
 			t.Fatal("stdin was read")
+		}
+	})
+
+	t.Run("stdin read error is returned", func(t *testing.T) {
+		boom := errors.New("boom")
+		var errb bytes.Buffer
+		ok, err := newConfirm(false, io.MultiReader(strings.NewReader("y"), iotestErrReader{boom}), &errb, func() bool { return true })(req)
+		if ok || !errors.Is(err, boom) {
+			t.Fatalf("ok=%v err=%v, want false and the read error", ok, err)
 		}
 	})
 

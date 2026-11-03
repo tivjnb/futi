@@ -98,9 +98,12 @@ func TestExecuteConfirm(t *testing.T) {
 		}
 	})
 	t.Run("callback error", func(t *testing.T) {
-		_, err, marker := run(t, drop, map[string]any{}, func(core.ConfirmRequest) (bool, error) { return false, errBoom }, false)
+		res, err, marker := run(t, drop, map[string]any{}, func(core.ConfirmRequest) (bool, error) { return false, errBoom }, false)
 		if !errors.Is(err, errBoom) || exists(marker) {
 			t.Errorf("err = %v, marker = %v", err, exists(marker))
+		}
+		if len(res.Argv) == 0 {
+			t.Error("res.Argv is empty after a callback error")
 		}
 	})
 	t.Run("confirmed", func(t *testing.T) {

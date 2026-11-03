@@ -32,6 +32,7 @@ func TestAnnotationsParse(t *testing.T) {
 		{"readonly and idempotent", "commands:\n  a:\n    cmd: x\n    readonly: true\n    idempotent: true\n", ""},
 		{"unknown expose", "commands:\n  x:\n    cmd: x\n    expose: [mpc]\n", `command "x": unknown expose value "mpc" (want cli, mcp or http)`},
 		{"duplicate expose", "commands:\n  x:\n    cmd: x\n    expose: [cli, cli]\n", `command "x": duplicate expose value "cli"`},
+		{"unknown expose does not widen children", "expose: [mpc]\ncmd: r\ncommands:\n  sub:\n    cmd: x\n    expose: [cli]\n", `command "(default)": unknown expose value "mpc" (want cli, mcp or http)`},
 		{"empty expose", "commands:\n  x:\n    cmd: x\n    expose: []\n", `command "x": expose is empty: the command is unreachable`},
 		{"widens root", "expose: [cli]\ncmd: r\ncommands:\n  sub:\n    cmd: x\n    expose: [cli, mcp]\n", `command "sub": expose widens the parent: "mcp" is not exposed by "(default)"`},
 		{"widens group", "commands:\n  db:\n    expose: [cli]\n    commands:\n      sub:\n        cmd: x\n        expose: [http]\n", `command "db.sub": expose widens the parent: "http" is not exposed by "db"`},
@@ -100,6 +101,19 @@ commands:
 	}
 	if got := m.Commands["a"].Expose; !slices.Equal(got, []Frontend{FrontendCLI, FrontendMCP, FrontendHTTP}) {
 		t.Errorf("default Expose = %v, want [cli mcp http]", got)
+	}
+}
+
+func TestAnnotationsExposeNarrowsParent(t *testing.T) {
+	m, errs := annParse(t, "expose: [cli, mcp]\ncmd: r\ncommands:\n  sub:\n    cmd: x\n    expose: [cli]\n")
+	if len(errs) != 0 {
+		t.Fatalf("errors = %v, want none", errs)
+	}
+	if got := m.Commands["sub"].Expose; !slices.Equal(got, []Frontend{FrontendCLI}) {
+		t.Errorf("sub Expose = %v, want [cli]", got)
+	}
+	if !slices.Equal(m.Expose, []Frontend{FrontendCLI, FrontendMCP}) {
+		t.Errorf("root Expose = %v, want [cli mcp]", m.Expose)
 	}
 }
 

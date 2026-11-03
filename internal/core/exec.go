@@ -122,8 +122,8 @@ type ExecuteResult struct {
 // exits non-zero is not an error: see ExecuteResult.WaitErr and ExitCode.
 // A destructive command needs ExecuteRequest.Confirm to approve it
 // (ErrConfirmationRequired, ErrNotConfirmed). Errors are invalid input
-// (ErrInvalidInput), failures to start or to write
-// output, and ctx cancellation (wrapping ctx.Err(), which takes priority).
+// (ErrInvalidInput), failures to start or to write output, and ctx
+// cancellation (wrapping ctx.Err(), which takes priority).
 func (r *Runtime) Execute(ctx context.Context, t *Target, req ExecuteRequest) (ExecuteResult, error) {
 	var res ExecuteResult
 	vals, err := t.r.Validate(req.Inputs)

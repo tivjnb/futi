@@ -76,6 +76,9 @@ func parseExpose(raw *[]string, path string, parent []Frontend, errs *[]error) [
 			seen = append(seen, f)
 		}
 	}
+	if len(seen) == 0 {
+		return parent // every value was reported above: no follow-up errors
+	}
 	var out []Frontend
 	for _, f := range AllFrontends {
 		if slices.Contains(seen, f) {

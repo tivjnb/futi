@@ -32,8 +32,6 @@ Breaking relative to 0.1.0:
 - `modules add_command` writes `cmd` as a list (`[echo, <name>]`) by default.
 - Shell completion suggests files only for `file` and `dir` inputs (0.1.0 suggested them for the value of any flag).
 
-Other:
-
 - A repeated `--dry-run` before the path is an error: `futi: duplicate flag --dry-run`.
 
 ### Fixed
