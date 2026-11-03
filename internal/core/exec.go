@@ -53,14 +53,18 @@ func (t *Target) Manifest() string { return t.r.ManifestPath }
 // ResolveWords walks the command path at the start of words over the merged
 // module tree and returns the runnable command and the words after the path.
 // Not-found and invalid-input failures carry ErrNotFound and ErrInvalidInput.
-func (r *Runtime) ResolveWords(words []string) (*Target, []string, error) {
+// A command hidden from f is a *NotExposedError.
+func (r *Runtime) ResolveWords(f execmodule.Frontend, words []string) (*Target, []string, error) {
 	src, err := r.Source()
 	if err != nil {
 		return nil, nil, err
 	}
-	res, rest, err := modulerunner.ResolveWords(src, r.loader(), words)
+	res, rest, err := modulerunner.ResolveWords(src, r.loader(), words, f)
 	if err != nil {
 		return nil, nil, classify(err)
+	}
+	if err := notExposed(f, res.Path, res.Command); err != nil {
+		return nil, nil, err
 	}
 	return &Target{r: res}, rest, nil
 }

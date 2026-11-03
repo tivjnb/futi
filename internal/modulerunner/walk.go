@@ -23,6 +23,11 @@ type Node struct {
 	// it is the module's own command (cmd, params, commands).
 	Command *execmodule.Command
 	CmdPath []string // command path inside Module; empty on the module level
+
+	// frontend and loader come from Walk; Children uses them to leave out
+	// names hidden from the frontend.
+	frontend execmodule.Frontend
+	loader   ModuleLoader
 }
 
 // WalkOptions configures Walk.
@@ -32,6 +37,9 @@ type WalkOptions struct {
 	// otherwise with LoadModule (no caller uses it today; list does not call
 	// Walk).
 	Verified bool
+	// Frontend, when set, makes Node.Children skip names not exposed to it.
+	// Walk itself still steps through hidden nodes.
+	Frontend execmodule.Frontend
 }
 
 // CollisionError reports a path that addresses two entities of the merged
@@ -82,7 +90,7 @@ func (e *PathError) Is(target error) bool { return target == e.class }
 // that is both a module command and a discovery child is a *CollisionError;
 // source and module load errors are returned as is.
 func Walk(source discovery.Source, loader ModuleLoader, words []string, opt WalkOptions) (*Node, int, error) {
-	node := &Node{}
+	node := &Node{frontend: opt.Frontend, loader: loader}
 	n := 0
 	for _, w := range words {
 		if w == "--" || IsFlagToken(w) {
@@ -150,6 +158,7 @@ func (n *Node) step(source discovery.Source, loader ModuleLoader, seg string, op
 			Path: path, Namespace: ns,
 			Module: n.Module, ManifestPath: n.ManifestPath, ModuleRoot: n.ModuleRoot,
 			Command: sub, CmdPath: append(append([]string(nil), n.CmdPath...), seg),
+			frontend: n.frontend, loader: n.loader,
 		}, nil
 	}
 
@@ -159,7 +168,7 @@ func (n *Node) step(source discovery.Source, loader ModuleLoader, seg string, op
 	probe := incomplete && !isModule && !isNamespace && !n.runnable()
 	if !isModule && !probe {
 		if isNamespace {
-			return &Node{Path: path, Namespace: ns}, nil
+			return &Node{Path: path, Namespace: ns, frontend: n.frontend, loader: n.loader}, nil
 		}
 		return nil, nil
 	}
@@ -181,7 +190,8 @@ func (n *Node) step(source discovery.Source, loader ModuleLoader, seg string, op
 	return &Node{
 		Path: path, Namespace: ns,
 		Module: mod, ManifestPath: manifest, ModuleRoot: root,
-		Command: moduleCommand(mod),
+		Command:  moduleCommand(mod),
+		frontend: n.frontend, loader: n.loader,
 	}, nil
 }
 
@@ -212,18 +222,27 @@ func moduleCommand(mod *execmodule.Module) *execmodule.Command {
 }
 
 // Children returns the sorted names of the node's children: discovery children
-// of its namespace and subcommands. Unreadable sources are skipped.
+// of its namespace and subcommands. Unreadable sources are skipped. With a
+// frontend, subcommands and loaded child modules not exposed to it are left
+// out; a module that fails to load stays.
 func (n *Node) Children(source discovery.Source) []string {
 	seen := map[string]bool{}
 	if n.Command != nil {
-		for name := range n.Command.Commands {
-			seen[name] = true
+		for name, sub := range n.Command.Commands {
+			if n.visible(sub) {
+				seen[name] = true
+			}
 		}
 	}
 	children, err := source.ListChildren(n.Namespace)
 	var partial *discovery.PartialError
 	if err == nil || errors.As(err, &partial) {
 		for _, c := range children {
+			if c.Type == "module" && !c.Conflict && n.frontend != "" {
+				if mod, err := LoadModule(n.loader, c.ManifestPath, c.ModuleRoot); err == nil && !n.visible(&mod.Command) {
+					continue
+				}
+			}
 			seen[c.Name] = true
 		}
 	}
@@ -238,11 +257,18 @@ func (n *Node) Children(source discovery.Source) []string {
 	return names
 }
 
+// visible reports whether cmd is shown to the node's frontend; an empty
+// frontend filters nothing.
+func (n *Node) visible(cmd *execmodule.Command) bool {
+	return n.frontend == "" || cmd.ExposedTo(n.frontend)
+}
+
 // ResolveWords walks words with verified module loading and returns the
 // runnable command of the reached node and the words left after the path.
-// A node without cmd is a *PathError.
-func ResolveWords(source discovery.Source, loader ModuleLoader, words []string) (*Resolved, []string, error) {
-	node, n, err := Walk(source, loader, words, WalkOptions{Verified: true})
+// A node without cmd is a *PathError. The names in its "available" lists are
+// limited to those exposed to f; an empty f filters nothing.
+func ResolveWords(source discovery.Source, loader ModuleLoader, words []string, f execmodule.Frontend) (*Resolved, []string, error) {
+	node, n, err := Walk(source, loader, words, WalkOptions{Verified: true, Frontend: f})
 	if err != nil {
 		var collision *CollisionError
 		if errors.As(err, &collision) {
@@ -255,6 +281,7 @@ func ResolveWords(source discovery.Source, loader ModuleLoader, words []string) 
 		return nil, nil, noCommandError(source, node, rest)
 	}
 	return &Resolved{
+		Path:         node.Path,
 		Command:      node.Command,
 		Module:       node.Module,
 		ModuleRoot:   node.ModuleRoot,

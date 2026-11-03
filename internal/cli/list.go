@@ -10,6 +10,7 @@ import (
 
 	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/modulerunner"
 	"github.com/tivjnb/futi/internal/termtext"
 
@@ -24,7 +25,7 @@ import (
 // loader используется для загрузки модулей (с кэшем или без).
 // Коллизии путей печатаются в errw строками "Warning: …", листинг выводится.
 func runList(w, errw io.Writer, source discovery.Source, namespace string, verbose, recurse bool, loader modulerunner.ModuleLoader) error {
-	res, err := core.ListIn(source, loader, namespace, recurse)
+	res, err := core.ListIn(execmodule.FrontendCLI, source, loader, namespace, recurse)
 	// Частичный листинг: результат валиден, выводим его и возвращаем ошибку,
 	// чтобы вызывающий показал предупреждения.
 	var partial *discovery.PartialError
@@ -48,7 +49,7 @@ func runList(w, errw io.Writer, source discovery.Source, namespace string, verbo
 }
 
 func printCommands(w io.Writer, manifestPath, moduleRoot string, verbose bool, loader modulerunner.ModuleLoader) error {
-	res, err := core.ModuleCommands(loader, manifestPath, moduleRoot)
+	res, err := core.ModuleCommands(execmodule.FrontendCLI, loader, manifestPath, moduleRoot)
 	if err != nil {
 		return err
 	}

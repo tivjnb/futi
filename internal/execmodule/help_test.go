@@ -78,7 +78,7 @@ flags:
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := FormatCommandHelp(tt.path, tt.cmd); got != tt.want {
+			if got := FormatCommandHelp(tt.path, tt.cmd, FrontendCLI); got != tt.want {
 				t.Errorf("FormatCommandHelp:\ngot:\n%s\nwant:\n%s", got, tt.want)
 			}
 		})
@@ -173,7 +173,7 @@ subcommands:
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := FormatCommandHelp("m c", tt.cmd); got != tt.want {
+			if got := FormatCommandHelp("m c", tt.cmd, FrontendCLI); got != tt.want {
 				t.Errorf("FormatCommandHelp:\ngot:\n%s\nwant:\n%s", got, tt.want)
 			}
 		})
@@ -190,7 +190,7 @@ func TestFormatCommandHelpStripsControlChars(t *testing.T) {
 		Flags:       []inputs.Spec{{Name: "f\x1b[1m", Short: "s\x1b[1m", Flag: true}},
 		Commands:    map[string]*Command{"run": {Description: "d\x1b[2J", Cmd: cmdText("echo")}},
 	}
-	out := FormatCommandHelp("demo\x1b[1m run", cmd)
+	out := FormatCommandHelp("demo\x1b[1m run", cmd, FrontendCLI)
 	if strings.Contains(out, "\x1b") || strings.Contains(out, "\x07") {
 		t.Fatalf("output contains control chars: %q", out)
 	}
@@ -206,7 +206,7 @@ func TestFormatHelpAlignmentUsesSanitizedWidth(t *testing.T) {
 		"a\x1b[2Jbcdef": {Description: "d1"},
 		"x":             {Description: "d2"},
 	}}
-	out := FormatCommandHelp("m", cmd)
+	out := FormatCommandHelp("m", cmd, FrontendCLI)
 	if !strings.Contains(out, "  x          d2\n") || !strings.Contains(out, "  a[2Jbcdef  d1\n") {
 		t.Fatalf("misaligned: %q", out)
 	}
@@ -223,7 +223,7 @@ func TestFormatHelpInputAlignmentUsesSanitizedWidth(t *testing.T) {
 		},
 	}
 	// Очищенное имя "a[2Jbcdef" — 9 символов, "x" дополняется 8 пробелами.
-	out := FormatCommandHelp("m c", cmd)
+	out := FormatCommandHelp("m c", cmd, FrontendCLI)
 	if !strings.Contains(out, "  a[2Jbcdef  d1\n") || !strings.Contains(out, "  x          d2\n") {
 		t.Errorf("misaligned: %q", out)
 	}
@@ -242,7 +242,7 @@ func TestHelpChoicesAndPathTypes(t *testing.T) {
 			{Name: "lv", Flag: true, Variadic: true, Choices: []string{"debug", "info"}},
 		},
 	}
-	got := FormatCommandHelp("m c", cmd)
+	got := FormatCommandHelp("m c", cmd, FrontendCLI)
 	for _, want := range []string{
 		"--level debug|info|warn",
 		`(default "info")`,
@@ -263,5 +263,30 @@ func TestHelpChoicesAndPathTypes(t *testing.T) {
 	}
 	if !strings.Contains(envLine, "(dev|prod)") {
 		t.Errorf("env arg line %q lacks (dev|prod):\n%s", envLine, got)
+	}
+}
+
+func TestFormatCommandHelpHidesSubcommands(t *testing.T) {
+	cmd := &Command{
+		Args: []inputs.Spec{{Name: "target"}},
+		Commands: map[string]*Command{
+			"up":   {Description: "Start", Expose: []Frontend{FrontendMCP}},
+			"down": {Description: "Stop"},
+		},
+	}
+	cli := FormatCommandHelp("m", cmd, FrontendCLI)
+	if !strings.Contains(cli, "  down") || strings.Contains(cli, "  up") {
+		t.Errorf("CLI help must list down and hide up:\n%s", cli)
+	}
+	if !strings.Contains(cli, "warning:") {
+		t.Errorf("CLI help lacks the shadow warning:\n%s", cli)
+	}
+	if mcp := FormatCommandHelp("m", cmd, FrontendMCP); !strings.Contains(mcp, "  up") {
+		t.Errorf("MCP help must list up:\n%s", mcp)
+	}
+
+	onlyHidden := &Command{Commands: map[string]*Command{"up": {Expose: []Frontend{FrontendMCP}}}}
+	if got := FormatCommandHelp("m", onlyHidden, FrontendCLI); strings.Contains(got, "subcommands:") {
+		t.Errorf("no visible subcommands, section printed:\n%s", got)
 	}
 }

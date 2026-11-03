@@ -92,7 +92,7 @@ func prepareExample(src discovery.Source, ns, cmd string, inputs map[string]any)
 	if cmd != "" {
 		words = append(words, cmd)
 	}
-	r, _, err := modulerunner.ResolveWords(src, nil, words)
+	r, _, err := modulerunner.ResolveWords(src, nil, words, "")
 	if err != nil {
 		return nil, err
 	}

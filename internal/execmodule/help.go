@@ -12,8 +12,9 @@ import (
 
 // FormatCommandHelp formats the help of a node (the module itself or a
 // command): description, usage, args, flags and subcommands. cmdPath is the
-// full path for usage, for example "docker build". Pure function, no I/O.
-func FormatCommandHelp(cmdPath string, cmd *Command) string {
+// full path for usage, for example "docker build". Subcommands not exposed to
+// f are not listed. Pure function, no I/O.
+func FormatCommandHelp(cmdPath string, cmd *Command, f Frontend) string {
 	var b strings.Builder
 	path := termtext.Line(cmdPath)
 
@@ -41,9 +42,14 @@ func FormatCommandHelp(cmdPath string, cmd *Command) string {
 		writeFlags(&b, cmd.Flags)
 	}
 
-	if len(cmd.Commands) > 0 {
+	var names []string
+	for _, name := range sortedNames(cmd.Commands) {
+		if cmd.Commands[name].ExposedTo(f) {
+			names = append(names, name)
+		}
+	}
+	if len(names) > 0 {
 		b.WriteString("subcommands:\n")
-		names := sortedNames(cmd.Commands)
 		width := 0
 		for _, name := range names {
 			width = max(width, utf8.RuneCountInString(termtext.Line(name)))

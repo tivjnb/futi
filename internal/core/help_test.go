@@ -15,7 +15,7 @@ import (
 )
 
 func TestHelpInEmptyPathIsUsage(t *testing.T) {
-	doc, err := core.HelpIn(nil, nil, nil)
+	doc, err := core.HelpIn(execmodule.FrontendCLI, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestHelpInEmptyPathIsUsage(t *testing.T) {
 func TestHelpInModule(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "db.yaml"), "name: db\ndescription: Database\ncmd: echo\n")
-	doc, err := core.HelpIn(discovery.NewGlobalSource(dir), nil, []string{"db"})
+	doc, err := core.HelpIn(execmodule.FrontendCLI, discovery.NewGlobalSource(dir), nil, []string{"db"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestHelpInLeafCommand(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "db.yaml"),
 		"name: db\ncommands:\n  status:\n    description: Show status\n    cmd: echo ok\n")
-	doc, err := core.HelpIn(discovery.NewGlobalSource(dir), nil, []string{"db", "status"})
+	doc, err := core.HelpIn(execmodule.FrontendCLI, discovery.NewGlobalSource(dir), nil, []string{"db", "status"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestHelpInBranchIsSyntheticModule(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "db.yaml"),
 		"name: db\ndescription: Database\ncommands:\n  migrate:\n    description: Migrations\n    commands:\n      up:\n        cmd: echo up\n")
-	doc, err := core.HelpIn(discovery.NewGlobalSource(dir), nil, []string{"db", "migrate"})
+	doc, err := core.HelpIn(execmodule.FrontendCLI, discovery.NewGlobalSource(dir), nil, []string{"db", "migrate"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestHelpInBranchIsSyntheticModule(t *testing.T) {
 func TestHelpInNamespaceChildren(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "ns", "x.yaml"), "name: x\ncmd: echo x\n")
-	doc, err := core.HelpIn(discovery.NewGlobalSource(dir), nil, []string{"ns"})
+	doc, err := core.HelpIn(execmodule.FrontendCLI, discovery.NewGlobalSource(dir), nil, []string{"ns"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestHelpInNotFound(t *testing.T) {
 		{[]string{"db", "down"}, `unknown command "down" for "futi db" (available: up)`, execmodule.ErrCommandNotFound},
 	}
 	for _, tt := range tests {
-		_, err := core.HelpIn(src, nil, tt.path)
+		_, err := core.HelpIn(execmodule.FrontendCLI, src, nil, tt.path)
 		if err == nil || err.Error() != tt.want {
 			t.Errorf("HelpIn(%q) err = %v, want %q", tt.path, err, tt.want)
 			continue
@@ -112,7 +112,7 @@ func TestHelpInNotFound(t *testing.T) {
 func TestHelpInDottedPath(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "db.yaml"), "name: db\ncommands:\n  up:\n    description: Apply\n    cmd: echo up\n")
-	doc, err := core.HelpIn(discovery.NewGlobalSource(dir), nil, []string{"db.up"})
+	doc, err := core.HelpIn(execmodule.FrontendCLI, discovery.NewGlobalSource(dir), nil, []string{"db.up"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestHelpInCollision(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "dev.yaml"), "name: dev\ncommands:\n  deploy:\n    cmd: echo a\n")
 	writeFile(t, filepath.Join(dir, "dev", "deploy.yaml"), "cmd: echo b\n")
-	_, err := core.HelpIn(discovery.NewGlobalSource(dir), nil, []string{"dev", "deploy"})
+	_, err := core.HelpIn(execmodule.FrontendCLI, discovery.NewGlobalSource(dir), nil, []string{"dev", "deploy"})
 	var ce *modulerunner.CollisionError
 	if !errors.As(err, &ce) {
 		t.Fatalf("err = %v, want *CollisionError", err)
@@ -140,7 +140,7 @@ func TestHelpInNamespacePartial(t *testing.T) {
 	dirB := filepath.Join(t.TempDir(), "missing")
 	writeFile(t, filepath.Join(dirA, "ns", "x.yaml"), "name: x\ncmd: echo x\n")
 	cfg := &config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: dirB}}}
-	doc, err := core.HelpIn(discovery.NewCompositeSource(cfg), nil, []string{"ns"})
+	doc, err := core.HelpIn(execmodule.FrontendCLI, discovery.NewCompositeSource(cfg), nil, []string{"ns"})
 	var pe *discovery.PartialError
 	if !errors.As(err, &pe) {
 		t.Fatalf("err = %v, want *discovery.PartialError", err)
@@ -170,7 +170,7 @@ func TestHelpInModuleUsesVerifiedLoad(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "db.yaml"), "name: db\ncmd: echo\n")
 	spy := &verifiedSpy{}
-	doc, err := core.HelpIn(discovery.NewGlobalSource(dir), spy, []string{"db"})
+	doc, err := core.HelpIn(execmodule.FrontendCLI, discovery.NewGlobalSource(dir), spy, []string{"db"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestRuntimeHelpUsesRuntimeLoader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc, err := rt.Help([]string{"db"})
+	doc, err := rt.Help(execmodule.FrontendCLI, []string{"db"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestRuntimeHelpUsesRuntimeLoader(t *testing.T) {
 func TestRuntimeHelpPropagatesSourceError(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "futi.yaml"), "name: [\n  invalid")
-	_, err := newRT(t, dir).Help([]string{"db"})
+	_, err := newRT(t, dir).Help(execmodule.FrontendCLI, []string{"db"})
 	if err == nil || !strings.HasPrefix(err.Error(), "local source: ") {
 		t.Fatalf("err = %v, want prefix %q", err, "local source: ")
 	}

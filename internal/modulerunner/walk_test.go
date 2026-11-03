@@ -300,7 +300,7 @@ func TestResolveWordsErrors(t *testing.T) {
 		{[]string{"docker", "--v", "--", "run"}, `"futi docker" requires a subcommand (available: build, run)`, execmodule.ErrRequiresSubcommand},
 	}
 	for _, tt := range tests {
-		_, _, err := ResolveWords(src, nil, tt.words)
+		_, _, err := ResolveWords(src, nil, tt.words, "")
 		if err == nil || err.Error() != tt.want {
 			t.Errorf("ResolveWords(%q) err = %v\nwant %q", tt.words, err, tt.want)
 			continue
@@ -313,7 +313,7 @@ func TestResolveWordsErrors(t *testing.T) {
 
 func TestResolveWordsRest(t *testing.T) {
 	dir := writeTree(t, map[string]string{"docker.yaml": dockerYAML})
-	r, rest, err := ResolveWords(discovery.NewGlobalSource(dir), nil, []string{"docker.build", "--tag", "x", "--", "a"})
+	r, rest, err := ResolveWords(discovery.NewGlobalSource(dir), nil, []string{"docker.build", "--tag", "x", "--", "a"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +329,7 @@ func TestWalkUnreadableSourceDoesNotHideUnknownWord(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing")
 	src := discovery.NewCompositeSource(&config.Config{Sources: []config.SourceConfig{{Path: a}, {Path: missing}}})
 
-	_, _, err := ResolveWords(src, nil, []string{"docker", "x"})
+	_, _, err := ResolveWords(src, nil, []string{"docker", "x"}, "")
 	want := `unknown command "x" for "futi docker" (available: build, run)`
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v, want %q", err, want)

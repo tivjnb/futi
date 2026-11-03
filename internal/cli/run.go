@@ -55,7 +55,8 @@ func runErrorText(err error, path []string) string {
 func resolveErrorText(err error, path []string) string {
 	var pathErr *modulerunner.PathError
 	var collision *modulerunner.CollisionError
-	if errors.As(err, &pathErr) || errors.As(err, &collision) {
+	var notExposed *core.NotExposedError
+	if errors.As(err, &pathErr) || errors.As(err, &collision) || errors.As(err, &notExposed) {
 		return err.Error()
 	}
 	return runErrorText(err, path)
@@ -69,7 +70,7 @@ func resolveErrorText(err error, path []string) string {
 // сигналом), а Main возвращает код, и тесты проверяют его без os.Exit.
 func runParsed(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt *core.Runtime, pa *parsedArgs) (int, error) {
 	source, _ := rt.Source() // main has already checked the error
-	t, rest, err := rt.ResolveWords(pa.words)
+	t, rest, err := rt.ResolveWords(execmodule.FrontendCLI, pa.words)
 	if err != nil {
 		// -h/--help after a path without a runnable command (futi docker -h):
 		// help for the leading words.

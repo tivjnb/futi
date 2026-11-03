@@ -28,7 +28,7 @@ func TestResolveTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tgt, _, err := rt.ResolveWords([]string{"m", "c"})
+	tgt, _, err := rt.ResolveWords(execmodule.FrontendCLI, []string{"m", "c"})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestResolveErrorClasses(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := rt.ResolveWords(tc.words)
+			_, _, err := rt.ResolveWords(execmodule.FrontendCLI, tc.words)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("ResolveWords(%q) err = %v, want class %v", tc.words, err, tc.want)
 			}
@@ -83,7 +83,7 @@ func TestResolveWordsRest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tgt, rest, err := rt.ResolveWords([]string{"m.c", "--x", "1", "--", "a"})
+	tgt, rest, err := rt.ResolveWords(execmodule.FrontendCLI, []string{"m.c", "--x", "1", "--", "a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func newExecRT(t *testing.T, opts core.Options, cmd string) (*core.Runtime, *cor
 	if err != nil {
 		t.Fatal(err)
 	}
-	tgt, _, err := rt.ResolveWords([]string{"m", "c"})
+	tgt, _, err := rt.ResolveWords(execmodule.FrontendCLI, []string{"m", "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestExecuteValidationIsInvalidInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tgt, _, err := rt.ResolveWords([]string{"m", "c"})
+	tgt, _, err := rt.ResolveWords(execmodule.FrontendCLI, []string{"m", "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +371,7 @@ func TestResolveExecuteLoadsModuleOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tgt, _, err := rt.ResolveWords([]string{"m", "c"})
+	tgt, _, err := rt.ResolveWords(execmodule.FrontendCLI, []string{"m", "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestExecuteConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			tgt, _, err := rt.ResolveWords([]string{"m", "c"})
+			tgt, _, err := rt.ResolveWords(execmodule.FrontendCLI, []string{"m", "c"})
 			if err != nil {
 				t.Error(err)
 				return
@@ -493,7 +493,7 @@ func TestExecuteInputs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tgt, _, err := rt.ResolveWords(tt.words)
+			tgt, _, err := rt.ResolveWords(execmodule.FrontendCLI, tt.words)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -524,7 +524,7 @@ func TestExecuteEmptyArgv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tgt, _, err := rt.ResolveWords([]string{"m", "c"})
+	tgt, _, err := rt.ResolveWords(execmodule.FrontendCLI, []string{"m", "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
