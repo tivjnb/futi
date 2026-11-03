@@ -53,6 +53,13 @@ func helpIn(f execmodule.Frontend, src discovery.Source, loader modulerunner.Mod
 		}
 		return HelpDoc{}, fmt.Errorf("help: %w", err)
 	}
+	// A hidden node reached before an unknown word is reported as hidden, as
+	// ResolveWords does.
+	if node.Command != nil {
+		if err := notExposed(f, node.Path, node.Command); err != nil {
+			return HelpDoc{}, err
+		}
+	}
 	if n < len(path) {
 		return HelpDoc{}, modulerunner.UnknownCommandError(src, node, path[n])
 	}
@@ -71,10 +78,6 @@ func helpIn(f execmodule.Frontend, src discovery.Source, loader modulerunner.Mod
 			return HelpDoc{Kind: HelpNamespace, Path: node.Path, Children: DescribeChildren(f, children, loader)}, err
 		}
 		return HelpDoc{}, &helpModuleNotFoundError{path: strings.Join(node.Path, " ")}
-	}
-
-	if err := notExposed(f, node.Path, node.Command); err != nil {
-		return HelpDoc{}, err
 	}
 
 	// Модульный help: command path пуст.

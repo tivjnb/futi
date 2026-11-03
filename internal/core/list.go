@@ -117,6 +117,20 @@ func listIn(f execmodule.Frontend, src discovery.Source, loader modulerunner.Mod
 				return ListResult{}, fmt.Errorf("list: %w", err)
 			}
 
+			// The deepest hidden node on the way wins over later lookup errors.
+			if err := notExposed(f, strings.Split(ns, "."), &mod.Command); err != nil {
+				return ListResult{}, err
+			}
+			for k := 1; k < len(commandPath); k++ {
+				prefix, perr := mod.ResolveCommandPath(commandPath[:k])
+				if perr != nil {
+					break // the full lookup below reports it
+				}
+				if err := notExposed(f, append(strings.Split(ns, "."), commandPath[:k]...), prefix); err != nil {
+					return ListResult{}, err
+				}
+			}
+
 			cmd, err := mod.ResolveCommandPath(commandPath)
 			if err != nil {
 				return ListResult{}, fmt.Errorf("list: %w", err)
