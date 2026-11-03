@@ -291,6 +291,21 @@ func TestFormatCommandHelpHidesSubcommands(t *testing.T) {
 	}
 }
 
+func TestFormatCommandHelpWarnsWhenAllSubcommandsHidden(t *testing.T) {
+	cmd := &Command{
+		Cmd:      cmdText("x"),
+		Args:     []inputs.Spec{{Name: "v"}},
+		Commands: map[string]*Command{"only": {Cmd: cmdText("x"), Expose: []Frontend{FrontendMCP}}},
+	}
+	got := FormatCommandHelp("m c", cmd, FrontendCLI)
+	if !strings.Contains(got, "warning:") {
+		t.Errorf("shadow warning lost when every subcommand is hidden:\n%s", got)
+	}
+	if strings.Contains(got, "subcommands:") {
+		t.Errorf("subcommands section printed with none visible:\n%s", got)
+	}
+}
+
 func TestFormatCommandHelpAnnotations(t *testing.T) {
 	tests := []struct {
 		name      string

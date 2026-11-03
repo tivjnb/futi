@@ -64,9 +64,10 @@ func FormatCommandHelp(cmdPath string, cmd *Command, f Frontend) string {
 			}
 			b.WriteString(line + "\n")
 		}
-		if w, ok := shadowWarning(cmdPath, cmd); ok {
-			b.WriteString("warning: " + termtext.Line(w) + "\n")
-		}
+	}
+	// The warning covers all subcommands, hidden ones included.
+	if w, ok := shadowWarning(cmdPath, cmd); ok {
+		b.WriteString("warning: " + termtext.Line(w) + "\n")
 	}
 
 	return b.String()
