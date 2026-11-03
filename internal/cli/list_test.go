@@ -54,7 +54,7 @@ func TestPrintChildrenSortedAlphabetically(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := renderChildren(&buf, core.DescribeChildren(children, nil), false); err != nil {
+	if err := renderChildren(&buf, core.DescribeChildren(execmodule.FrontendCLI, children, nil), false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -84,7 +84,7 @@ func TestPrintChildrenSameNameOrderedByType(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if err := renderChildren(&buf, core.DescribeChildren(tt.children, nil), false); err != nil {
+			if err := renderChildren(&buf, core.DescribeChildren(execmodule.FrontendCLI, tt.children, nil), false); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			out := buf.String()
@@ -327,7 +327,7 @@ func TestRenderChildrenUsesLoader(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := renderChildren(&buf, core.DescribeChildren(children, spy), false); err != nil {
+	if err := renderChildren(&buf, core.DescribeChildren(execmodule.FrontendCLI, children, spy), false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -606,7 +606,7 @@ func TestPrintChildrenConflictSources(t *testing.T) {
 		ConflictSources: []string{"/a", "/b"},
 	}}
 	var buf bytes.Buffer
-	if err := renderChildren(&buf, core.DescribeChildren(children, nil), false); err != nil {
+	if err := renderChildren(&buf, core.DescribeChildren(execmodule.FrontendCLI, children, nil), false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "conflict: module in several sources: /a, /b") {
@@ -712,4 +712,102 @@ func TestRunListCollisionWarningToStderr(t *testing.T) {
 	if got := errw.String(); !strings.HasPrefix(got, "Warning: path \"dev deploy\" is ambiguous: ") || strings.Count(got, "\n") != 1 {
 		t.Errorf("stderr = %q, want one Warning: line about \"dev deploy\"", got)
 	}
+}
+
+func TestListDestructiveSuffix(t *testing.T) {
+	dir := t.TempDir()
+	writeMainTestFile(t, filepath.Join(dir, "db.yaml"), `
+name: db
+cmd: "echo root"
+destructive: true
+commands:
+  drop:
+    description: Drop the db
+    cmd: "echo drop"
+    destructive: true
+  nodesc:
+    cmd: "echo nodesc"
+    destructive: true
+  safe:
+    description: Safe one
+    cmd: "echo safe"
+  explicit:
+    description: Not destructive
+    cmd: "echo explicit"
+    destructive: false
+  group:
+    destructive: false
+    cmd: "echo group"
+    commands:
+      wipe:
+        description: Wipe it
+        cmd: "echo wipe"
+        destructive: true
+`)
+	var buf bytes.Buffer
+	if err := printCommands(&buf, filepath.Join(dir, "db.yaml"), dir, false, nil); err != nil {
+		t.Fatalf("printCommands: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"Drop the db (destructive)", "(destructive)", "(default)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("module list lacks %q:\n%s", want, out)
+		}
+	}
+	rows := tableRows(out)
+	for name, want := range map[string]string{
+		"(default)": "(destructive)",
+		"drop":      "Drop the db (destructive)",
+		"nodesc":    "(destructive)",
+		"safe":      "Safe one",
+		"explicit":  "Not destructive",
+		"group":     "",
+	} {
+		if rows[name] != want {
+			t.Errorf("row %q description = %q, want %q:\n%s", name, rows[name], want, out)
+		}
+	}
+
+	buf.Reset()
+	if err := runList(&buf, io.Discard, discovery.NewGlobalSource(dir), "db.group", false, false, nil); err != nil {
+		t.Fatalf("runList: %v", err)
+	}
+	rows = tableRows(buf.String())
+	if rows["wipe"] != "Wipe it (destructive)" || rows["(default)"] != "" {
+		t.Errorf("subcommand list rows = %v:\n%s", rows, buf.String())
+	}
+
+	buf.Reset()
+	writeMainTestFile(t, filepath.Join(dir, "grp.yaml"), `
+name: grp
+commands:
+  g:
+    cmd: "echo g"
+    destructive: true
+    commands:
+      x:
+        cmd: "echo x"
+`)
+	if err := runList(&buf, io.Discard, discovery.NewGlobalSource(dir), "grp.g", false, false, nil); err != nil {
+		t.Fatalf("runList grp.g: %v", err)
+	}
+	if rows := tableRows(buf.String()); rows["(default)"] != "(destructive)" || rows["x"] != "" {
+		t.Errorf("fallback cmd rows = %v:\n%s", rows, buf.String())
+	}
+}
+
+// tableRows maps the first column of a two-column table to the second one.
+func tableRows(out string) map[string]string {
+	rows := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, "│") {
+			continue
+		}
+		cells := strings.Split(strings.Trim(strings.TrimSpace(line), "│"), "│")
+		if len(cells) < 2 {
+			continue
+		}
+		rows[strings.TrimSpace(cells[0])] = strings.TrimSpace(cells[1])
+	}
+	return rows
 }

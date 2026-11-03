@@ -351,6 +351,55 @@ func TestCompletionFishRealShell(t *testing.T) {
 	}
 }
 
+// TestCompletionFishRealShellExposeAndYes: in a real fish, --yes is skipped as
+// a global flag and commands not exposed to the CLI are not suggested.
+func TestCompletionFishRealShellExposeAndYes(t *testing.T) {
+	fishPath, err := exec.LookPath("fish")
+	if err != nil {
+		t.Skip("fish не установлен")
+	}
+	tmp := t.TempDir()
+	binDir := filepath.Dir(builtFutiBinary(t))
+	modules := filepath.Join(tmp, "modules")
+	exposeModules(t, modules)
+
+	cases := []struct {
+		line string
+		want []string
+	}{
+		{"futi --yes o", []string{"ops"}},
+		{"futi -y o", []string{"ops"}},
+		{"futi ops ", []string{"status"}},
+		{"futi ns ", []string{"shown"}},
+		{"futi ops prod -", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.line, func(t *testing.T) {
+			cmd := exec.Command(fishPath, "--no-config", "-c", "futi completion fish | source; complete -C '"+tc.line+"'")
+			cmd.Env = append(os.Environ(),
+				"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"FUTI_MODULES_DIR="+modules,
+				"HOME="+tmp,
+				"XDG_CACHE_HOME="+filepath.Join(tmp, "cache"),
+				"XDG_CONFIG_HOME="+filepath.Join(tmp, "config"),
+			)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("fish: %v\n%s", err, out)
+			}
+			var got []string
+			for _, line := range strings.Split(string(out), "\n") {
+				if name, _, _ := strings.Cut(strings.TrimSpace(line), "\t"); name != "" {
+					got = append(got, name)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("fish candidates = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestCompletionModulesFlagsAcceptedByParsers: каждый флаг, который completion
 // подсказывает для `futi modules <sub>`, принимается парсером подкоманды
 // (защита от рассинхрона списков и парсеров).

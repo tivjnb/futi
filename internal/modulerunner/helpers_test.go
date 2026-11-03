@@ -17,7 +17,7 @@ func resolveForTest(source discovery.Source, loader ModuleLoader, namespace, com
 	if command != "" {
 		words = append(words, command)
 	}
-	r, _, err := ResolveWords(source, loader, words)
+	r, _, err := ResolveWords(source, loader, words, "")
 	return r, err
 }
 

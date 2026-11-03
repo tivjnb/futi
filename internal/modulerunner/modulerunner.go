@@ -73,6 +73,7 @@ func (p *Prepared) Env() []string {
 // Resolved — найденная команда модуля: сама команда, модуль и его расположение.
 // Модуль загружается один раз в ResolveWords; Validate и Prepare его не перечитывают.
 type Resolved struct {
+	Path         []string // path words of the command (dotted words split)
 	Command      *execmodule.Command
 	Module       *execmodule.Module
 	ModuleRoot   string

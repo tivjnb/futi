@@ -24,6 +24,7 @@ USAGE
   futi cache refresh                  Refresh module cache
   futi completion <bash|zsh|fish>     Generate a shell completion script
   futi --dry-run <path...> <command>  Print the command without running it
+  futi --yes, -y <path...> <command>  Run a destructive command without asking
   futi -h | --help
   futi --version                      Print version
 

@@ -307,3 +307,76 @@ printf 'REPLY=%s\n' "${COMPREPLY[@]}"
 		})
 	}
 }
+
+// exposeModules writes: module ops (root cli+mcp; status inherits, prod is
+// mcp only) and ns/hidden (mcp only) next to ns/shown.
+func exposeModules(t *testing.T, modules string) {
+	t.Helper()
+	writeFile(t, filepath.Join(modules, "ops.yaml"), "expose: [cli, mcp]\ncommands:\n  status:\n    cmd: echo status\n  prod:\n    expose: [mcp]\n    cmd: echo prod\n")
+	writeFile(t, filepath.Join(modules, "ns", "hidden.yaml"), "expose: [mcp]\ncmd: echo hidden\n")
+	writeFile(t, filepath.Join(modules, "ns", "shown.yaml"), "cmd: echo shown\n")
+}
+
+// TestBashCompletionRealFuti runs the bash script against the built binary:
+// --yes is skipped as a global flag, commands not exposed to the CLI are hidden.
+func TestBashCompletionRealFuti(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash не найден")
+	}
+	tmp := t.TempDir()
+	modules := filepath.Join(tmp, "modules")
+	exposeModules(t, modules)
+	scriptPath := filepath.Join(tmp, "futi.bash")
+	if err := os.WriteFile(scriptPath, []byte(bashCompletionScript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Dir(builtFutiBinary(t))
+
+	cases := []struct {
+		name  string
+		words string // COMP_WORDS contents
+		cword int
+		want  []string
+	}{
+		{"module after --yes", `futi --yes o`, 2, []string{"ops"}},
+		{"module after -y", `futi -y o`, 2, []string{"ops"}},
+		{"subcommands hide prod", `futi ops ""`, 2, []string{"status"}},
+		{"namespace hides hidden", `futi ns ""`, 2, []string{"shown"}},
+		{"flags of hidden command", `futi ops prod -`, 3, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			driver := `source "$SCRIPT"
+COMP_WORDS=(` + tc.words + `)
+COMP_CWORD=` + strconv.Itoa(tc.cword) + `
+COMP_LINE="${COMP_WORDS[*]}"
+COMP_POINT=${#COMP_LINE}
+__futi_get_completion_results
+printf 'REPLY=%s\n' "${COMPREPLY[@]}"
+`
+			cmd := exec.Command(bash, "--norc", "--noprofile", "-c", driver)
+			cmd.Env = append(os.Environ(),
+				"SCRIPT="+scriptPath,
+				"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"FUTI_MODULES_DIR="+modules,
+				"HOME="+tmp,
+				"XDG_CACHE_HOME="+filepath.Join(tmp, "cache"),
+				"XDG_CONFIG_HOME="+filepath.Join(tmp, "config"),
+			)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("bash: %v\n%s", err, out)
+			}
+			var got []string
+			for _, l := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+				if r := strings.TrimPrefix(l, "REPLY="); r != "" && strings.HasPrefix(l, "REPLY=") {
+					got = append(got, r)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("COMPREPLY = %q, want %q (output %q)", got, tc.want, out)
+			}
+		})
+	}
+}

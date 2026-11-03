@@ -25,7 +25,7 @@ func TestListInModule(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "db.yaml"),
 		"name: db\ncmd: echo\ncommands:\n  b:\n    description: Bee\n    cmd: echo b\n  a:\n    description: Ay\n    cmd: echo a\n")
-	res, err := core.ListIn(discovery.NewGlobalSource(dir), nil, "db", false)
+	res, err := core.ListIn(execmodule.FrontendCLI, discovery.NewGlobalSource(dir), nil, "db", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestListInSubcommands(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "db.yaml"),
 		"name: db\ncommands:\n  migrate:\n    commands:\n      up:\n        cmd: echo up\n      down:\n        cmd: echo down\n")
-	res, err := core.ListIn(discovery.NewGlobalSource(dir), nil, "db.migrate", false)
+	res, err := core.ListIn(execmodule.FrontendCLI, discovery.NewGlobalSource(dir), nil, "db.migrate", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestListInSubcommands(t *testing.T) {
 func TestListInLeafHasNoSubcommands(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "db.yaml"), "name: db\ncommands:\n  status:\n    cmd: echo ok\n")
-	_, err := core.ListIn(discovery.NewGlobalSource(dir), nil, "db.status", false)
+	_, err := core.ListIn(execmodule.FrontendCLI, discovery.NewGlobalSource(dir), nil, "db.status", false)
 	want := `list: command "status" has no subcommands`
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v, want %q", err, want)
@@ -72,7 +72,7 @@ func TestListInNamespaceChildren(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "x.yaml"), "name: x\ndescription: X\ncmd: echo x\n")
 	writeFile(t, filepath.Join(dir, "broken.yaml"), "name: [unclosed\n")
 	writeFile(t, filepath.Join(dir, "ns", "y.yaml"), "name: y\ncmd: echo y\n")
-	res, err := core.ListIn(discovery.NewGlobalSource(dir), nil, "", false)
+	res, err := core.ListIn(execmodule.FrontendCLI, discovery.NewGlobalSource(dir), nil, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestListInNamespaceChildren(t *testing.T) {
 
 func TestListInNotFoundIsClassified(t *testing.T) {
 	dir := t.TempDir()
-	_, err := core.ListIn(discovery.NewGlobalSource(dir), nil, "nope", false)
+	_, err := core.ListIn(execmodule.FrontendCLI, discovery.NewGlobalSource(dir), nil, "nope", false)
 	if !errors.Is(err, core.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
@@ -110,7 +110,7 @@ func TestListInPartialNotClassified(t *testing.T) {
 	dirB := filepath.Join(t.TempDir(), "missing")
 	writeFile(t, filepath.Join(dirA, "x.yaml"), "name: x\ncmd: echo x\n")
 	cfg := &config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: dirB}}}
-	res, err := core.ListIn(discovery.NewCompositeSource(cfg), nil, "", false)
+	res, err := core.ListIn(execmodule.FrontendCLI, discovery.NewCompositeSource(cfg), nil, "", false)
 	var pe *discovery.PartialError
 	if !errors.As(err, &pe) {
 		t.Fatalf("err = %v, want *discovery.PartialError", err)
@@ -129,7 +129,7 @@ func TestListInPartialNotClassified(t *testing.T) {
 
 func TestDescribeChildrenSkipsConflicts(t *testing.T) {
 	spy := &stubLoader{mod: &execmodule.Module{Command: execmodule.Command{Description: "never"}}}
-	got := core.DescribeChildren([]discovery.Child{
+	got := core.DescribeChildren(execmodule.FrontendCLI, []discovery.Child{
 		{Name: "x", Type: "module", Conflict: true, ManifestPath: "/d/x.yaml"},
 	}, spy)
 	if spy.calls != 0 {
@@ -152,7 +152,7 @@ func TestRuntimeListUsesRuntimeLoader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := rt.List("db", false)
+	res, err := rt.List(execmodule.FrontendCLI, "db", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestListInConflictSources(t *testing.T) {
 	cfg := &config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: dirB}}}
 	spy := &stubLoader{mod: &execmodule.Module{Command: execmodule.Command{Description: "never"}}}
 
-	res, err := core.ListIn(discovery.NewCompositeSource(cfg), spy, "", false)
+	res, err := core.ListIn(execmodule.FrontendCLI, discovery.NewCompositeSource(cfg), spy, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestListInConflictFileVsConfigYaml(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "x", "config.yaml"), "name: x\ncmd: echo b\n")
 	spy := &stubLoader{mod: &execmodule.Module{Command: execmodule.Command{Description: "never"}}}
 
-	res, err := core.ListIn(discovery.NewGlobalSource(dir), spy, "", false)
+	res, err := core.ListIn(execmodule.FrontendCLI, discovery.NewGlobalSource(dir), spy, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestListCollisionWarning(t *testing.T) {
 	want := `path "dev deploy" is ambiguous: command "deploy" of module dev (` + filepath.Join(global, "dev.yaml") +
 		`) and module dev.deploy (` + filepath.Join(local, "dev", "deploy.yaml") + `)`
 	for _, ns := range []string{"", "dev"} {
-		res, err := core.ListIn(src, nil, ns, false)
+		res, err := core.ListIn(execmodule.FrontendCLI, src, nil, ns, false)
 		if err != nil {
 			t.Fatalf("ListIn(%q) err = %v", ns, err)
 		}
@@ -223,7 +223,7 @@ func TestListCollisionWarning(t *testing.T) {
 		}
 	}
 	// The listing itself is still produced.
-	res, _ := core.ListIn(src, nil, "dev", false)
+	res, _ := core.ListIn(execmodule.FrontendCLI, src, nil, "dev", false)
 	if got := names(res.Commands); !reflect.DeepEqual(got, []string{"deploy"}) {
 		t.Errorf("Commands = %v, want [deploy]", got)
 	}
@@ -233,7 +233,7 @@ func TestListNoCollisionNoWarnings(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "dev.yaml"), "name: dev\ncommands:\n  build:\n    cmd: echo\n")
 	writeFile(t, filepath.Join(dir, "dev", "deploy.yaml"), "name: deploy\ncmd: echo\n")
-	res, err := core.ListIn(discovery.NewGlobalSource(dir), nil, "", false)
+	res, err := core.ListIn(execmodule.FrontendCLI, discovery.NewGlobalSource(dir), nil, "", false)
 	if err != nil || len(res.Warnings) != 0 {
 		t.Errorf("Warnings = %q, err = %v, want none", res.Warnings, err)
 	}
@@ -245,7 +245,7 @@ func (failingListSource) List() ([]discovery.ModuleInfo, error) { return nil, er
 
 func TestListCollisionCheckFailureIsWarning(t *testing.T) {
 	src, _, _ := collisionSource(t)
-	res, err := core.ListIn(failingListSource{src}, nil, "dev", false)
+	res, err := core.ListIn(execmodule.FrontendCLI, failingListSource{src}, nil, "dev", false)
 	if err != nil {
 		t.Fatalf("ListIn err = %v, want nil", err)
 	}
@@ -264,7 +264,7 @@ func TestListCollisionWithPartialListing(t *testing.T) {
 	writeFile(t, filepath.Join(dirA, "dev.yaml"), "name: dev\ncommands:\n  deploy:\n    cmd: echo\n")
 	writeFile(t, filepath.Join(dirA, "dev", "deploy.yaml"), "name: deploy\ncmd: echo\n")
 	cfg := &config.Config{Sources: []config.SourceConfig{{Path: dirA}, {Path: dirB}}}
-	res, err := core.ListIn(discovery.NewCompositeSource(cfg), nil, "", false)
+	res, err := core.ListIn(execmodule.FrontendCLI, discovery.NewCompositeSource(cfg), nil, "", false)
 	var pe *discovery.PartialError
 	if !errors.As(err, &pe) {
 		t.Fatalf("err = %v, want *discovery.PartialError", err)
@@ -282,7 +282,7 @@ func TestListNestedNamespaceCollisionWarning(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "ns", "a", "b.yaml"), "name: b\ncmd: echo\n")
 	src := discovery.NewGlobalSource(dir)
 	for _, recurse := range []bool{false, true} {
-		res, err := core.ListIn(src, nil, "ns", recurse)
+		res, err := core.ListIn(execmodule.FrontendCLI, src, nil, "ns", recurse)
 		if err != nil {
 			t.Fatalf("ListIn(recurse=%v) err = %v", recurse, err)
 		}

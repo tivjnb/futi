@@ -10,6 +10,7 @@ import (
 
 	"github.com/tivjnb/futi/internal/core"
 	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/modulerunner"
 	"github.com/tivjnb/futi/internal/termtext"
 
@@ -24,7 +25,7 @@ import (
 // loader используется для загрузки модулей (с кэшем или без).
 // Коллизии путей печатаются в errw строками "Warning: …", листинг выводится.
 func runList(w, errw io.Writer, source discovery.Source, namespace string, verbose, recurse bool, loader modulerunner.ModuleLoader) error {
-	res, err := core.ListIn(source, loader, namespace, recurse)
+	res, err := core.ListIn(execmodule.FrontendCLI, source, loader, namespace, recurse)
 	// Частичный листинг: результат валиден, выводим его и возвращаем ошибку,
 	// чтобы вызывающий показал предупреждения.
 	var partial *discovery.PartialError
@@ -48,7 +49,7 @@ func runList(w, errw io.Writer, source discovery.Source, namespace string, verbo
 }
 
 func printCommands(w io.Writer, manifestPath, moduleRoot string, verbose bool, loader modulerunner.ModuleLoader) error {
-	res, err := core.ModuleCommands(loader, manifestPath, moduleRoot)
+	res, err := core.ModuleCommands(execmodule.FrontendCLI, loader, manifestPath, moduleRoot)
 	if err != nil {
 		return err
 	}
@@ -67,10 +68,11 @@ func renderCommandTable(w io.Writer, res core.ListResult, verbose bool) error {
 
 	var rows [][]string
 	for _, c := range res.Commands {
+		desc := destructiveSuffix(termtext.Line(c.Description), c.Destructive)
 		if verbose {
-			rows = append(rows, []string{termtext.Line(c.Name), termtext.Line(c.Description), termtext.Line(res.Manifest)})
+			rows = append(rows, []string{termtext.Line(c.Name), desc, termtext.Line(res.Manifest)})
 		} else {
-			rows = append(rows, []string{termtext.Line(c.Name), termtext.Line(c.Description)})
+			rows = append(rows, []string{termtext.Line(c.Name), desc})
 		}
 	}
 
@@ -81,10 +83,11 @@ func renderCommandTable(w io.Writer, res core.ListResult, verbose bool) error {
 
 	if res.HasDefault {
 		var defaultRow []string
+		desc := destructiveSuffix("", res.DefaultDestructive)
 		if verbose {
-			defaultRow = []string{"(default)", "", termtext.Line(res.Manifest)}
+			defaultRow = []string{"(default)", desc, termtext.Line(res.Manifest)}
 		} else {
-			defaultRow = []string{"(default)", ""}
+			defaultRow = []string{"(default)", desc}
 		}
 		rows = append([][]string{defaultRow}, rows...)
 	}
@@ -102,6 +105,17 @@ func renderCommandTable(w io.Writer, res core.ListResult, verbose bool) error {
 		return fmt.Errorf("list: render: %w", err)
 	}
 	return nil
+}
+
+// destructiveSuffix appends the "(destructive)" mark to a description.
+func destructiveSuffix(desc string, destructive bool) string {
+	switch {
+	case !destructive:
+		return desc
+	case desc == "":
+		return "(destructive)"
+	}
+	return desc + " (destructive)"
 }
 
 // renderChildren prints the children of a namespace as a table.

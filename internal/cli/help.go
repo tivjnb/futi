@@ -22,7 +22,7 @@ func runHelp(stdout, stderr io.Writer, rt *core.Runtime, path []string) int {
 // модульную (описание + команды) или командную (описание + параметры + cmd).
 // Пустой positional (корень) — printUsage.
 func runSystemHelp(w io.Writer, source discovery.Source, loader modulerunner.ModuleLoader, positional []string) error {
-	doc, err := core.HelpIn(source, loader, positional)
+	doc, err := core.HelpIn(execmodule.FrontendCLI, source, loader, positional)
 	if err != nil {
 		var partial *discovery.PartialError
 		if !errors.As(err, &partial) {
@@ -34,9 +34,9 @@ func runSystemHelp(w io.Writer, source discovery.Source, loader modulerunner.Mod
 	case core.HelpUsage:
 		printUsage(w)
 	case core.HelpModule:
-		fmt.Fprint(w, execmodule.FormatCommandHelp(name, &doc.Module.Command))
+		fmt.Fprint(w, execmodule.FormatCommandHelp(name, &doc.Module.Command, execmodule.FrontendCLI))
 	case core.HelpCommand:
-		fmt.Fprint(w, execmodule.FormatCommandHelp(name, doc.Command))
+		fmt.Fprint(w, execmodule.FormatCommandHelp(name, doc.Command, execmodule.FrontendCLI))
 	case core.HelpNamespace:
 		// Частичный листинг: дети читаемых sources выводятся, ошибка
 		// возвращается — вызывающий покажет предупреждения.

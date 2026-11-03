@@ -1031,15 +1031,16 @@ func TestCompleteDryRunPrefix(t *testing.T) {
 	for _, m := range matches {
 		texts = append(texts, m.Text)
 	}
-	if !reflect.DeepEqual(texts, []string{"--dry-run", "--help", "--version"}) {
+	if !reflect.DeepEqual(texts, []string{"--dry-run", "--help", "--version", "--yes"}) {
 		t.Fatalf("кандидаты на -- = %v", texts)
 	}
 }
 
 func TestCompleteAfterDryRunNoGlobalFlags(t *testing.T) {
 	src := newTestSource(t)
-	if matches, _ := Complete(src, nil, []string{"--dry-run"}, "--"); len(matches) != 0 {
-		t.Fatalf("после --dry-run глобальные флаги не подсказываются, got %v", matches)
+	// Only the other mutating-run flag may follow; --help/--version may not.
+	if got := completeTexts(t, src, []string{"--dry-run"}, "--"); !reflect.DeepEqual(got, []string{"--yes"}) {
+		t.Fatalf("после --dry-run подсказывается только --yes, got %v", got)
 	}
 }
 
@@ -1273,5 +1274,109 @@ args:
 				t.Errorf("Complete(%v, %q) = %v/%v, want %v/%v", c.args, c.toComplete, got, d, c.want, c.dir)
 			}
 		})
+	}
+}
+
+func completeTexts(t *testing.T, src discovery.Source, args []string, toComplete string) []string {
+	t.Helper()
+	matches, _ := Complete(src, nil, args, toComplete)
+	var texts []string
+	for _, m := range matches {
+		texts = append(texts, m.Text)
+	}
+	return texts
+}
+
+func TestCompleteGlobalFlagsYes(t *testing.T) {
+	src := newTestSource(t)
+	cases := []struct {
+		name       string
+		args       []string
+		toComplete string
+		want       []string
+	}{
+		{"all global flags", nil, "--", []string{"--dry-run", "--help", "--version", "--yes"}},
+		{"after --yes", []string{"--yes"}, "--", []string{"--dry-run"}},
+		{"after -y", []string{"-y"}, "--", []string{"--dry-run"}},
+		{"after both", []string{"--dry-run", "--yes"}, "-", nil},
+		{"after both reversed", []string{"--yes", "--dry-run"}, "-", nil},
+		{"after --dry-run", []string{"--dry-run"}, "--", []string{"--yes"}},
+		{"paths after -y", []string{"-y"}, "", []string{"dev", "docker", "git", "meta", "tools"}},
+		{"prefix after --yes", []string{"--yes"}, "do", []string{"docker"}},
+		{"builtin subcommand after --yes", []string{"--yes", "cache"}, "", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := completeTexts(t, src, tc.args, tc.toComplete)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("Complete(%q, %q) = %v, want %v", tc.args, tc.toComplete, got, tc.want)
+			}
+		})
+	}
+}
+
+// exposeSource: module ops (root cli+mcp; status inherits, prod and the group
+// grp are mcp only), ns/hidden (mcp only) and ns/shown.
+func exposeSource(t *testing.T) discovery.Source {
+	t.Helper()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "ops.yaml"), `expose: [cli, mcp]
+commands:
+  status:
+    cmd: echo status
+  prod:
+    expose: [mcp]
+    flags:
+      - name: force
+        type: bool
+    cmd: "echo prod {{if .force}}-f{{end}}"
+  grp:
+    expose: [mcp]
+    commands:
+      a:
+        cmd: echo a
+`)
+	writeFile(t, filepath.Join(dir, "ns", "hidden.yaml"), "expose: [mcp]\ncmd: echo hidden\n")
+	writeFile(t, filepath.Join(dir, "ns", "shown.yaml"), "cmd: echo shown\n")
+	return discovery.NewGlobalSource(dir)
+}
+
+func TestCompleteHidesNotExposed(t *testing.T) {
+	src := exposeSource(t)
+	if got := completeTexts(t, src, []string{"ops"}, ""); !reflect.DeepEqual(got, []string{"status"}) {
+		t.Errorf("ops children = %v, want [status]", got)
+	}
+	if got := completeTexts(t, src, []string{"ns"}, ""); !reflect.DeepEqual(got, []string{"shown"}) {
+		t.Errorf("ns children = %v, want [shown]", got)
+	}
+	if got := completeTexts(t, src, []string{"ops", "prod"}, "-"); got != nil {
+		t.Errorf("flags of hidden command = %v, want none", got)
+	}
+	if got := completeTexts(t, src, []string{"ops", "grp"}, ""); got != nil {
+		t.Errorf("children of hidden group = %v, want none", got)
+	}
+	if got := completeTexts(t, src, []string{"ops", "status"}, "-"); !reflect.DeepEqual(got, []string{"--help"}) {
+		t.Errorf("flags of visible command = %v, want [--help]", got)
+	}
+}
+
+func TestCompleteHiddenModuleStillOffersNamespaceChildren(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "ops", "secret.yaml"), `expose: [mcp]
+cmd: "echo secret {{if .force}}-f{{end}}"
+flags:
+  - name: force
+    type: bool
+commands:
+  inner:
+    cmd: echo inner
+`)
+	writeFile(t, filepath.Join(dir, "ops", "secret", "kid.yaml"), "cmd: echo kid\n")
+	src := discovery.NewGlobalSource(dir)
+	if got := completeTexts(t, src, []string{"ops", "secret"}, ""); !reflect.DeepEqual(got, []string{"kid"}) {
+		t.Errorf("children of hidden module = %v, want [kid] (no subcommands)", got)
+	}
+	if got := completeTexts(t, src, []string{"ops", "secret"}, "-"); got != nil {
+		t.Errorf("flags of hidden module = %v, want none", got)
 	}
 }

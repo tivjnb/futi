@@ -20,6 +20,7 @@ type parsedArgs struct {
 	// core.Runtime.ResolveWords stops.
 	words  []string
 	dryRun bool // глобальный --dry-run: напечатать команду, не исполняя
+	yes    bool // global --yes: run destructive commands without asking
 }
 
 // listRequest сигнализирует, что запрошен листинг namespace или модуля.
@@ -140,18 +141,44 @@ func parseListRequest(namespace, flags []string) error {
 // errDryRunScope — текст ошибки: --dry-run применим только к командам модулей.
 const errDryRunScope = "futi: --dry-run applies only to module commands"
 
-// stripDryRun снимает ведущий --dry-run из args (args[0] — имя программы).
-// Флаг распознаётся только первым аргументом: дальше он обычный флаг модуля.
-func stripDryRun(args []string) (rest []string, dryRun bool) {
-	if len(args) > 1 && args[1] == "--dry-run" {
-		return append([]string{args[0]}, args[2:]...), true
+// errYesScope is the error text: --yes applies only to module commands.
+const errYesScope = "futi: --yes applies only to module commands"
+
+// globalFlags are the futi flags written before the command path.
+type globalFlags struct{ dryRun, yes bool }
+
+// stripGlobalFlags removes the leading --dry-run, --yes and -y from args
+// (args[0] is the program name). A flag is global only while it stands among
+// the leading arguments: further on it is an ordinary module flag. -y and
+// --yes are the same flag.
+func stripGlobalFlags(args []string) (rest []string, g globalFlags, err error) {
+	i := 1
+loop:
+	for ; i < len(args); i++ {
+		switch args[i] {
+		case "--dry-run":
+			if g.dryRun {
+				return nil, globalFlags{}, errors.New("futi: duplicate flag --dry-run")
+			}
+			g.dryRun = true
+		case "--yes", "-y":
+			if g.yes {
+				return nil, globalFlags{}, errors.New("futi: duplicate flag --yes")
+			}
+			g.yes = true
+		default:
+			break loop
+		}
 	}
-	return args, false
+	if i == 1 {
+		return args, g, nil
+	}
+	return append([]string{args[0]}, args[i:]...), g, nil
 }
 
-// dryRunRejected сообщает, что при --dry-run первый аргумент относится к
-// встроенным командам и быстрым путям, а не к командам модулей.
-func dryRunRejected(args []string) bool {
+// globalFlagsRejected reports that the first argument after the global flags
+// is a builtin command or a fast path rather than a module command.
+func globalFlagsRejected(args []string) bool {
 	if len(args) < 2 {
 		return true
 	}
@@ -160,4 +187,13 @@ func dryRunRejected(args []string) bool {
 		return true
 	}
 	return completion.IsReservedName(args[1])
+}
+
+// scopeError is the error text for global flags given to a builtin command;
+// --dry-run is named first when both are present.
+func (g globalFlags) scopeError() string {
+	if g.dryRun {
+		return errDryRunScope
+	}
+	return errYesScope
 }

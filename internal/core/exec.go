@@ -44,6 +44,9 @@ type Target struct{ r *modulerunner.Resolved }
 // Command returns the resolved command.
 func (t *Target) Command() *execmodule.Command { return t.r.Command }
 
+// Path returns the command path words (dotted words split).
+func (t *Target) Path() []string { return t.r.Path }
+
 // ModuleName returns the effective module name.
 func (t *Target) ModuleName() string { return t.r.ModuleName() }
 
@@ -53,13 +56,18 @@ func (t *Target) Manifest() string { return t.r.ManifestPath }
 // ResolveWords walks the command path at the start of words over the merged
 // module tree and returns the runnable command and the words after the path.
 // Not-found and invalid-input failures carry ErrNotFound and ErrInvalidInput.
-func (r *Runtime) ResolveWords(words []string) (*Target, []string, error) {
+// A command hidden from f is a *NotExposedError.
+func (r *Runtime) ResolveWords(f execmodule.Frontend, words []string) (*Target, []string, error) {
 	src, err := r.Source()
 	if err != nil {
 		return nil, nil, err
 	}
-	res, rest, err := modulerunner.ResolveWords(src, r.loader(), words)
+	res, rest, err := modulerunner.ResolveWords(src, r.loader(), words, f)
 	if err != nil {
+		var hidden *modulerunner.HiddenError
+		if errors.As(err, &hidden) {
+			return nil, nil, notExposed(f, hidden.Path, hidden.Command)
+		}
 		return nil, nil, classify(err)
 	}
 	return &Target{r: res}, rest, nil
@@ -81,6 +89,17 @@ type ExecuteRequest struct {
 	OutputLimit int64
 	// DryRun renders the command without running it.
 	DryRun bool
+	// Confirm is asked before a destructive command runs (not for dry runs).
+	// Nil means no confirmation is possible: such a command is refused with
+	// ErrConfirmationRequired. An error from Confirm is returned to the caller.
+	Confirm func(ConfirmRequest) (bool, error)
+}
+
+// ConfirmRequest describes a destructive command awaiting confirmation.
+type ConfirmRequest struct {
+	Path   []string // command path words
+	Argv   []string // rendered argv
+	Module string   // path of the module manifest
 }
 
 // ExecuteResult describes a finished (or dry-run) command.
@@ -101,8 +120,10 @@ type ExecuteResult struct {
 
 // Execute validates the request and runs the target command. A child that
 // exits non-zero is not an error: see ExecuteResult.WaitErr and ExitCode.
-// Errors are invalid input (ErrInvalidInput), failures to start or to write
-// output, and ctx cancellation (wrapping ctx.Err(), which takes priority).
+// A destructive command needs ExecuteRequest.Confirm to approve it
+// (ErrConfirmationRequired, ErrNotConfirmed). Errors are invalid input
+// (ErrInvalidInput), failures to start or to write output, and ctx
+// cancellation (wrapping ctx.Err(), which takes priority).
 func (r *Runtime) Execute(ctx context.Context, t *Target, req ExecuteRequest) (ExecuteResult, error) {
 	var res ExecuteResult
 	vals, err := t.r.Validate(req.Inputs)
@@ -142,6 +163,23 @@ func (r *Runtime) Execute(ctx context.Context, t *Target, req ExecuteRequest) (E
 
 	if err := batchCheck(runtime.GOOS, exec.LookPath, argv[0], p.Args); err != nil {
 		return res, invalidInput(err)
+	}
+
+	if t.r.Command.IsDestructive() {
+		if req.Confirm == nil {
+			return res, ErrConfirmationRequired
+		}
+		ok, err := req.Confirm(ConfirmRequest{
+			Path:   append([]string(nil), t.r.Path...),
+			Argv:   append([]string(nil), p.Argv...),
+			Module: res.Module,
+		})
+		if err != nil {
+			return res, err
+		}
+		if !ok {
+			return res, ErrNotConfirmed
+		}
 	}
 
 	stdout, stderr, limiter := outputWriters(req.Stdout, req.Stderr, req.OutputLimit)

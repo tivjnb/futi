@@ -17,6 +17,13 @@ var ErrNotFound = errors.New("not found")
 // ErrInvalidInput is the class of errors caused by invalid caller input.
 var ErrInvalidInput = errors.New("invalid input")
 
+// ErrConfirmationRequired means a destructive command was run without a way
+// to confirm it.
+var ErrConfirmationRequired = errors.New("command is destructive and needs confirmation")
+
+// ErrNotConfirmed means the confirmation of a destructive command was declined.
+var ErrNotConfirmed = errors.New("command was not confirmed")
+
 // classError attaches an error class to err without changing its text.
 type classError struct {
 	err   error

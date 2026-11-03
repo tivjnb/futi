@@ -59,6 +59,7 @@ func (m *Module) Validate() (errors []error, warnings []string) {
 	if hasDefaultSchema {
 		checkCommand(defaultPath, true, &m.Command, &errors, &warnings)
 	}
+	checkAnnotations(defaultPath, &m.Command, &errors)
 	validateSubcommands("", m.Commands, &errors, &warnings)
 	return errors, warnings
 }
@@ -125,6 +126,7 @@ func validCommandName(name string) bool {
 // path — имя команды (для сообщений об ошибках).
 func validateCommand(path string, cmd *Command, errors *[]error, warnings *[]string) {
 	checkCommand(path, false, cmd, errors, warnings)
+	checkAnnotations(path, cmd, errors)
 	validateSubcommands(path, cmd.Commands, errors, warnings)
 }
 

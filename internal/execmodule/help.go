@@ -12,8 +12,9 @@ import (
 
 // FormatCommandHelp formats the help of a node (the module itself or a
 // command): description, usage, args, flags and subcommands. cmdPath is the
-// full path for usage, for example "docker build". Pure function, no I/O.
-func FormatCommandHelp(cmdPath string, cmd *Command) string {
+// full path for usage, for example "docker build". Subcommands not exposed to
+// f are not listed. Pure function, no I/O.
+func FormatCommandHelp(cmdPath string, cmd *Command, f Frontend) string {
 	var b strings.Builder
 	path := termtext.Line(cmdPath)
 
@@ -41,9 +42,16 @@ func FormatCommandHelp(cmdPath string, cmd *Command) string {
 		writeFlags(&b, cmd.Flags)
 	}
 
-	if len(cmd.Commands) > 0 {
+	writeAnnotations(&b, cmd)
+
+	var names []string
+	for _, name := range sortedNames(cmd.Commands) {
+		if cmd.Commands[name].ExposedTo(f) {
+			names = append(names, name)
+		}
+	}
+	if len(names) > 0 {
 		b.WriteString("subcommands:\n")
-		names := sortedNames(cmd.Commands)
 		width := 0
 		for _, name := range names {
 			width = max(width, utf8.RuneCountInString(termtext.Line(name)))
@@ -56,12 +64,39 @@ func FormatCommandHelp(cmdPath string, cmd *Command) string {
 			}
 			b.WriteString(line + "\n")
 		}
-		if w, ok := shadowWarning(cmdPath, cmd); ok {
-			b.WriteString("warning: " + termtext.Line(w) + "\n")
-		}
+	}
+	// The warning covers all subcommands, hidden ones included.
+	if w, ok := shadowWarning(cmdPath, cmd); ok {
+		b.WriteString("warning: " + termtext.Line(w) + "\n")
 	}
 
 	return b.String()
+}
+
+// writeAnnotations writes the annotations: line (only the true values) and
+// the expose: line (only when the effective list is narrower than all
+// frontends).
+func writeAnnotations(b *strings.Builder, cmd *Command) {
+	var notes []string
+	if cmd.ReadOnly.IsTrue() {
+		notes = append(notes, "readonly")
+	}
+	if cmd.Destructive.IsTrue() {
+		notes = append(notes, "destructive (asks for confirmation)")
+	}
+	if cmd.Idempotent.IsTrue() {
+		notes = append(notes, "idempotent")
+	}
+	if len(notes) > 0 {
+		b.WriteString("annotations: " + strings.Join(notes, ", ") + "\n")
+	}
+	if len(cmd.Expose) > 0 && len(cmd.Expose) < len(AllFrontends) {
+		names := make([]string, len(cmd.Expose))
+		for i, f := range cmd.Expose {
+			names[i] = string(f)
+		}
+		b.WriteString("expose: " + strings.Join(names, ", ") + "\n")
+	}
 }
 
 // argUsage is the token of an arg in the usage line: <name> for a required

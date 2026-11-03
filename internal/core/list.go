@@ -21,7 +21,10 @@ const (
 )
 
 // CommandEntry is one command of a module or subcommand listing.
-type CommandEntry struct{ Name, Description string }
+type CommandEntry struct {
+	Name, Description string
+	Destructive       bool // the command is marked destructive
+}
 
 // ChildEntry is one child of a namespace listing. Text fields are raw.
 type ChildEntry struct {
@@ -37,21 +40,24 @@ type ChildEntry struct {
 // ListResult is the data of one listing; which fields are set depends on Kind.
 type ListResult struct {
 	Kind       ListKind
-	Manifest   string         // ListModule, ListSubcommands: manifest path
-	HasDefault bool           // ListModule: module has cmd; ListSubcommands: command has cmd
-	Commands   []CommandEntry // sorted by Name
-	Children   []ChildEntry   // ListNamespace: in discovery order
-	Warnings   []string       // path collisions found in the listed subtree (error texts)
+	Manifest   string // ListModule, ListSubcommands: manifest path
+	HasDefault bool   // ListModule: module has cmd; ListSubcommands: command has cmd
+	// DefaultDestructive: the default cmd is marked destructive.
+	DefaultDestructive bool
+	Commands           []CommandEntry // sorted by Name
+	Children           []ChildEntry   // ListNamespace: in discovery order
+	Warnings           []string       // path collisions found in the listed subtree (error texts)
 
 	loaded []loadedModule // modules loaded for this listing, to check for path collisions
 }
 
-// ListIn lists namespace in src: a module's commands, a command's
+// ListIn lists namespace in src as seen from f (a hidden module or command
+// is a *NotExposedError): a module's commands, a command's
 // subcommands, or the children of a namespace (the whole subtree if recurse).
 // For a partial listing it returns both a valid result and the
 // *discovery.PartialError. Other errors are classified.
-func ListIn(src discovery.Source, loader modulerunner.ModuleLoader, namespace string, recurse bool) (ListResult, error) {
-	res, err := listIn(src, loader, namespace, recurse)
+func ListIn(f execmodule.Frontend, src discovery.Source, loader modulerunner.ModuleLoader, namespace string, recurse bool) (ListResult, error) {
+	res, err := listIn(f, src, loader, namespace, recurse)
 	if err == nil || errors.As(err, new(*discovery.PartialError)) {
 		res.Warnings = collisionWarnings(src, res.loaded)
 	}
@@ -71,14 +77,17 @@ func collisionWarnings(src discovery.Source, loaded []loadedModule) []string {
 	return collisionTexts(collisionsOf(src, addrs, loaded, ""))
 }
 
-func listIn(src discovery.Source, loader modulerunner.ModuleLoader, namespace string, recurse bool) (ListResult, error) {
+func listIn(f execmodule.Frontend, src discovery.Source, loader modulerunner.ModuleLoader, namespace string, recurse bool) (ListResult, error) {
 	// Сначала пробуем резолвить как модуль. Пустой namespace — запрос корня:
 	// Resolve("") вернул бы «invalid namespace», а не ErrNotFound.
 	if namespace != "" {
 		manifestPath, moduleRoot, err := src.Resolve(namespace)
 		if err == nil {
-			res, mod, err := moduleCommands(loader, manifestPath, moduleRoot)
+			res, mod, err := moduleCommands(f, loader, manifestPath, moduleRoot)
 			if err == nil {
+				if err := notExposed(f, strings.Split(namespace, "."), &mod.Command); err != nil {
+					return ListResult{}, err
+				}
 				res.loaded = []loadedModule{{ns: namespace, manifest: manifestPath, mod: mod}}
 			}
 			return res, err
@@ -108,13 +117,31 @@ func listIn(src discovery.Source, loader modulerunner.ModuleLoader, namespace st
 				return ListResult{}, fmt.Errorf("list: %w", err)
 			}
 
+			// The deepest hidden node on the way wins over later lookup errors.
+			if err := notExposed(f, strings.Split(ns, "."), &mod.Command); err != nil {
+				return ListResult{}, err
+			}
+			for k := 1; k < len(commandPath); k++ {
+				prefix, perr := mod.ResolveCommandPath(commandPath[:k])
+				if perr != nil {
+					break // the full lookup below reports it
+				}
+				if err := notExposed(f, append(strings.Split(ns, "."), commandPath[:k]...), prefix); err != nil {
+					return ListResult{}, err
+				}
+			}
+
 			cmd, err := mod.ResolveCommandPath(commandPath)
 			if err != nil {
 				return ListResult{}, fmt.Errorf("list: %w", err)
 			}
 
+			if err := notExposed(f, append(strings.Split(ns, "."), commandPath...), cmd); err != nil {
+				return ListResult{}, err
+			}
+
 			if len(cmd.Commands) > 0 {
-				res := commandsResult(ListSubcommands, cmd.Commands, manifestPath, !cmd.Cmd.IsZero())
+				res := commandsResult(f, ListSubcommands, cmd.Commands, manifestPath, !cmd.Cmd.IsZero(), cmd.IsDestructive())
 				res.loaded = []loadedModule{{ns: ns, manifest: manifestPath, mod: mod}}
 				return res, nil
 			}
@@ -136,7 +163,7 @@ func listIn(src discovery.Source, loader modulerunner.ModuleLoader, namespace st
 	if listErr != nil && !errors.As(listErr, &partial) {
 		return ListResult{}, fmt.Errorf("list: %w", listErr)
 	}
-	entries, loaded := describeChildren(children, loader, namespace)
+	entries, loaded := describeChildren(f, children, loader, namespace)
 	res := ListResult{Kind: ListNamespace, Children: entries, loaded: loaded}
 	if listErr != nil {
 		return res, listErr
@@ -145,23 +172,26 @@ func listIn(src discovery.Source, loader modulerunner.ModuleLoader, namespace st
 }
 
 // ModuleCommands loads the module and lists its top-level commands.
-func ModuleCommands(loader modulerunner.ModuleLoader, manifestPath, moduleRoot string) (ListResult, error) {
-	res, _, err := moduleCommands(loader, manifestPath, moduleRoot)
+func ModuleCommands(f execmodule.Frontend, loader modulerunner.ModuleLoader, manifestPath, moduleRoot string) (ListResult, error) {
+	res, _, err := moduleCommands(f, loader, manifestPath, moduleRoot)
 	return res, err
 }
 
-func moduleCommands(loader modulerunner.ModuleLoader, manifestPath, moduleRoot string) (ListResult, *execmodule.Module, error) {
+func moduleCommands(f execmodule.Frontend, loader modulerunner.ModuleLoader, manifestPath, moduleRoot string) (ListResult, *execmodule.Module, error) {
 	mod, err := modulerunner.LoadModule(loader, manifestPath, moduleRoot)
 	if err != nil {
 		return ListResult{}, nil, fmt.Errorf("list: %w", err)
 	}
-	return commandsResult(ListModule, mod.Commands, manifestPath, !mod.Cmd.IsZero()), mod, nil
+	return commandsResult(f, ListModule, mod.Commands, manifestPath, !mod.Cmd.IsZero(), mod.IsDestructive()), mod, nil
 }
 
-func commandsResult(kind ListKind, commands map[string]*execmodule.Command, manifestPath string, hasDefault bool) ListResult {
-	res := ListResult{Kind: kind, Manifest: manifestPath, HasDefault: hasDefault}
+func commandsResult(f execmodule.Frontend, kind ListKind, commands map[string]*execmodule.Command, manifestPath string, hasDefault, defaultDestructive bool) ListResult {
+	res := ListResult{Kind: kind, Manifest: manifestPath, HasDefault: hasDefault, DefaultDestructive: defaultDestructive}
 	for name, cmd := range commands {
-		res.Commands = append(res.Commands, CommandEntry{Name: name, Description: cmd.Description})
+		if !cmd.ExposedTo(f) {
+			continue
+		}
+		res.Commands = append(res.Commands, CommandEntry{Name: name, Description: cmd.Description, Destructive: cmd.IsDestructive()})
 	}
 	sort.Slice(res.Commands, func(i, j int) bool { return res.Commands[i].Name < res.Commands[j].Name })
 	return res
@@ -169,14 +199,15 @@ func commandsResult(kind ListKind, commands map[string]*execmodule.Command, mani
 
 // DescribeChildren converts discovery children into entries, loading the
 // description of every non-conflicting module through loader (not verified).
-func DescribeChildren(children []discovery.Child, loader modulerunner.ModuleLoader) []ChildEntry {
-	entries, _ := describeChildren(children, loader, "")
+// A loaded module hidden from f is left out; a module that fails to load stays.
+func DescribeChildren(f execmodule.Frontend, children []discovery.Child, loader modulerunner.ModuleLoader) []ChildEntry {
+	entries, _ := describeChildren(f, children, loader, "")
 	return entries
 }
 
 // describeChildren is DescribeChildren that also returns the loaded modules.
 // Child names are relative to namespace.
-func describeChildren(children []discovery.Child, loader modulerunner.ModuleLoader, namespace string) ([]ChildEntry, []loadedModule) {
+func describeChildren(f execmodule.Frontend, children []discovery.Child, loader modulerunner.ModuleLoader, namespace string) ([]ChildEntry, []loadedModule) {
 	var loaded []loadedModule
 	entries := make([]ChildEntry, 0, len(children))
 	for _, c := range children {
@@ -198,7 +229,11 @@ func describeChildren(children []discovery.Child, loader modulerunner.ModuleLoad
 					if namespace != "" {
 						ns = namespace + "." + c.Name
 					}
+					// Hidden modules still take part in collision checks.
 					loaded = append(loaded, loadedModule{ns: ns, manifest: c.ManifestPath, mod: mod})
+					if !mod.ExposedTo(f) {
+						continue
+					}
 				}
 			}
 		}
@@ -208,10 +243,10 @@ func describeChildren(children []discovery.Child, loader modulerunner.ModuleLoad
 }
 
 // List lists namespace in the runtime's source, see ListIn.
-func (r *Runtime) List(namespace string, recurse bool) (ListResult, error) {
+func (r *Runtime) List(f execmodule.Frontend, namespace string, recurse bool) (ListResult, error) {
 	src, err := r.Source()
 	if err != nil {
 		return ListResult{}, err
 	}
-	return ListIn(src, r.loader(), namespace, recurse)
+	return ListIn(f, src, r.loader(), namespace, recurse)
 }

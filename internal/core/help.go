@@ -30,27 +30,35 @@ type HelpDoc struct {
 	Children []ChildEntry        // HelpNamespace
 }
 
-// HelpIn resolves system help for the node at path in src; every word of path
-// must be a path word. For a partial namespace listing it returns both a valid
+// HelpIn resolves system help for the node at path in src as seen from f (a
+// hidden node is a *NotExposedError); every word of path must be a path
+// word. For a partial namespace listing it returns both a valid
 // HelpNamespace and the *discovery.PartialError. Other errors are classified.
-func HelpIn(src discovery.Source, loader modulerunner.ModuleLoader, path []string) (HelpDoc, error) {
-	doc, err := helpIn(src, loader, path)
+func HelpIn(f execmodule.Frontend, src discovery.Source, loader modulerunner.ModuleLoader, path []string) (HelpDoc, error) {
+	doc, err := helpIn(f, src, loader, path)
 	return doc, classifyUnlessPartial(err)
 }
 
-func helpIn(src discovery.Source, loader modulerunner.ModuleLoader, path []string) (HelpDoc, error) {
+func helpIn(f execmodule.Frontend, src discovery.Source, loader modulerunner.ModuleLoader, path []string) (HelpDoc, error) {
 	if len(path) == 0 {
 		return HelpDoc{Kind: HelpUsage}, nil
 	}
 
 	// Help shows what would run: modules are loaded verified, as for execution.
-	node, n, err := modulerunner.Walk(src, loader, path, modulerunner.WalkOptions{Verified: true})
+	node, n, err := modulerunner.Walk(src, loader, path, modulerunner.WalkOptions{Verified: true, Frontend: f})
 	if err != nil {
 		var collision *modulerunner.CollisionError
 		if errors.As(err, &collision) {
 			return HelpDoc{}, err
 		}
 		return HelpDoc{}, fmt.Errorf("help: %w", err)
+	}
+	// A hidden node reached before an unknown word is reported as hidden, as
+	// ResolveWords does.
+	if node.Command != nil {
+		if err := notExposed(f, node.Path, node.Command); err != nil {
+			return HelpDoc{}, err
+		}
 	}
 	if n < len(path) {
 		return HelpDoc{}, modulerunner.UnknownCommandError(src, node, path[n])
@@ -67,7 +75,7 @@ func helpIn(src discovery.Source, loader modulerunner.ModuleLoader, path []strin
 		if (err == nil || isPartial) && len(children) > 0 {
 			// Частичный листинг: дети читаемых sources возвращаются вместе с
 			// ошибкой — вызывающий покажет предупреждения.
-			return HelpDoc{Kind: HelpNamespace, Path: node.Path, Children: DescribeChildren(children, loader)}, err
+			return HelpDoc{Kind: HelpNamespace, Path: node.Path, Children: DescribeChildren(f, children, loader)}, err
 		}
 		return HelpDoc{}, &helpModuleNotFoundError{path: strings.Join(node.Path, " ")}
 	}
@@ -99,10 +107,10 @@ func (e *helpModuleNotFoundError) Error() string {
 func (e *helpModuleNotFoundError) Unwrap() error { return modulerunner.ErrModuleNotFound }
 
 // Help resolves system help for path in the runtime's source, see HelpIn.
-func (r *Runtime) Help(path []string) (HelpDoc, error) {
+func (r *Runtime) Help(f execmodule.Frontend, path []string) (HelpDoc, error) {
 	src, err := r.Source()
 	if err != nil {
 		return HelpDoc{}, err
 	}
-	return HelpIn(src, r.loader(), path)
+	return HelpIn(f, src, r.loader(), path)
 }
