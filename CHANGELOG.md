@@ -33,7 +33,9 @@ Breaking relative to 0.1.0:
 - `attach` and `detach` hooks run without a shell. A compound hook is written explicitly as `[sh, -c, "..."]`; a program given with a path (`scripts/x.sh`) is looked up from the module directory.
 - `modules add_command` writes `cmd` as a list (`[echo, <name>]`) by default.
 - Shell completion suggests files only for `file` and `dir` inputs (0.1.0 suggested them for the value of any flag).
-- A repeated `--dry-run` before the path is an error: `futi: duplicate flag --dry-run`.
+- A repeated `--dry-run` or `--yes` before the path is an error: `futi: duplicate flag --dry-run`.
+- `help` is a reserved top-level name, like `list` and `cache`: a top-level module or namespace named `help` is refused by `modules init` and `modules install`, and `futi help ...` is always the builtin help.
+- The input name `help` and the short flag `-h` are reserved.
 
 ### Fixed
 
@@ -55,6 +57,7 @@ Rewrite modules as follows (details: [Module structure](README.md#module-structu
 - `{{quote .x}}` becomes `{{.x}}`.
 - `{{.args}}` and `{{.args_list}}` become a `rest` (or `variadic`) arg, used as `{{.name}}`.
 - A hook with `&&`, pipes or redirects becomes `[sh, -c, "..."]`.
+- Rename an input called `help` or a flag with `short: h`; move a top-level module named `help` under another name or namespace.
 - Callers: replace `futi <path> help` with `futi help <path>` and `futi <path> list` with `futi list <path>`.
 - The cache is rebuilt automatically.
 
