@@ -82,7 +82,7 @@ func runParsed(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, r
 		return core.ExitCode(err), err
 	}
 	path := pa.words[:len(pa.words)-len(rest)]
-	return runTarget(ctx, stdin, stdout, stderr, rt, t, path, rest, pa.dryRun)
+	return runTarget(ctx, stdin, stdout, stderr, rt, t, path, rest, pa.dryRun, pa.yes)
 }
 
 // withSubcommandHint appends the path hint to a parse error when a word
@@ -124,7 +124,7 @@ func flagTakesValue(cmd *execmodule.Command, tok string) bool {
 
 // runTarget runs an already resolved target reached by path: parsing of the
 // inputs (-h shows the help), execution, dry-run output and the wait error.
-func runTarget(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt *core.Runtime, t *core.Target, path, rest []string, dryRun bool) (int, error) {
+func runTarget(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, rt *core.Runtime, t *core.Target, path, rest []string, dryRun, yes bool) (int, error) {
 	source, _ := rt.Source() // main has already checked the error
 	cmd := t.Command()
 	res, err := inputs.Parse(cmd.Args, cmd.Flags, rest, "futi "+strings.Join(path, " "))
@@ -138,10 +138,18 @@ func runTarget(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, r
 	exec, err := rt.Execute(ctx, t, core.ExecuteRequest{
 		Inputs: res.Values,
 		Stdin:  stdin, Stdout: stdout, Stderr: stderr,
-		DryRun: dryRun,
+		DryRun:  dryRun,
+		Confirm: newConfirm(yes, stdin, stderr, stdinIsTerminal),
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "%s\n", formatRunError(err))
+		switch {
+		case errors.Is(err, core.ErrNotConfirmed):
+			fmt.Fprintln(stderr, "futi: aborted")
+		case errors.Is(err, errNeedsConfirmation):
+			fmt.Fprintf(stderr, "futi: %v\n", err)
+		default:
+			fmt.Fprintf(stderr, "%s\n", formatRunError(err))
+		}
 		return core.ExitCode(err), err
 	}
 	if dryRun {

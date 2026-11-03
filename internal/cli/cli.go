@@ -15,11 +15,15 @@ import (
 // Main runs futi with the given argv (args[0] is the program name) and streams
 // and returns the process exit code.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer, version string) int {
-	// --dry-run снимается первым, до всех быстрых путей.
-	var dryRun bool
-	args, dryRun = stripDryRun(args)
-	if dryRun && dryRunRejected(args) {
-		fmt.Fprintln(stderr, errDryRunScope)
+	// Global flags (--dry-run, --yes) are stripped first, before all fast paths.
+	args, global, err := stripGlobalFlags(args)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	hasGlobal := global.dryRun || global.yes
+	if hasGlobal && globalFlagsRejected(args) {
+		fmt.Fprintln(stderr, global.scopeError())
 		return 1
 	}
 
@@ -167,8 +171,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer, version stri
 		var listReq *listRequest
 		var helpReq *helpRequest
 		switch {
-		case dryRun && (errors.As(err, &listReq) || errors.Is(err, errHelp)):
-			fmt.Fprintln(stderr, errDryRunScope)
+		case hasGlobal && (errors.As(err, &listReq) || errors.Is(err, errHelp)):
+			fmt.Fprintln(stderr, global.scopeError())
 			return 1
 		case errors.As(err, &listReq):
 			source, err := rt.Source()
@@ -200,7 +204,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer, version stri
 		fmt.Fprintf(stderr, "source: %v\n", err)
 		return 1
 	}
-	pa.dryRun = dryRun
+	pa.dryRun, pa.yes = global.dryRun, global.yes
 	code, runErr := runParsed(context.Background(), stdin, stdout, stderr, rt, pa)
 	if runErr != nil {
 		raiseInterrupt(runErr)
