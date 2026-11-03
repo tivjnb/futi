@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/tivjnb/futi/internal/discovery"
+	"github.com/tivjnb/futi/internal/execmodule"
 	"github.com/tivjnb/futi/internal/inputs"
 	"github.com/tivjnb/futi/internal/modulerunner"
 )
@@ -56,7 +57,7 @@ func IsReservedName(name string) bool {
 }
 
 // globalFlags — глобальные флаги futi, подсказываются на позиции 0.
-var globalFlags = []string{"--dry-run", "--help", "--version"}
+var globalFlags = []string{"--dry-run", "--help", "--version", "--yes"}
 
 // cacheSubcommands — подкоманды `futi cache`.
 var cacheSubcommands = []string{"clear", "refresh", "status"}
@@ -141,28 +142,47 @@ const (
 // real parser does (inputs.Scan). A module that cannot be loaded or a path
 // collision give no suggestions.
 func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []string, toComplete string) ([]Match, Directive) {
-	// A leading global --dry-run is not a part of the path.
-	dryRunGiven := len(args) > 0 && args[0] == "--dry-run"
-	if dryRunGiven {
+	// Leading global flags (--dry-run, --yes/-y) are not a part of the path.
+	// Like the real parser, but without errors: a repeated flag is simply not
+	// suggested again.
+	var dryRunTyped, yesTyped bool
+strip:
+	for len(args) > 0 {
+		switch args[0] {
+		case "--dry-run":
+			dryRunTyped = true
+		case "--yes", "-y":
+			yesTyped = true
+		default:
+			break strip
+		}
 		args = args[1:]
 	}
+	globalGiven := dryRunTyped || yesTyped
 
 	// At position 0 a word with "-" is a global flag of futi.
 	if len(args) == 0 && strings.HasPrefix(toComplete, "-") {
-		flags := globalFlags
-		if dryRunGiven {
-			// --dry-run is already typed, and --help/--version cannot go with it.
-			flags = nil
+		var flags []string
+		if !globalGiven {
+			flags = globalFlags
+		} else {
+			// --help/--version cannot go with another global flag.
+			if !dryRunTyped {
+				flags = append(flags, "--dry-run")
+			}
+			if !yesTyped {
+				flags = append(flags, "--yes")
+			}
 		}
 		return filterMatches(strMatches(flags), toComplete), ShellCompDirectiveNoFileComp
 	}
 
 	// The first reserved word is a builtin: the CLI runs it before resolving
-	// modules, so a module of the same name is not suggested. With --dry-run
-	// builtins are not allowed at all.
+	// modules, so a module of the same name is not suggested. With a global
+	// flag builtins are not allowed at all.
 	if len(args) > 0 && IsReservedName(args[0]) {
 		switch {
-		case dryRunGiven:
+		case globalGiven:
 			return nil, ShellCompDirectiveNoFileComp
 		case args[0] == helpKeyword || args[0] == listKeyword:
 			return helpPathMatches(source, loader, args[1:], toComplete)
@@ -170,16 +190,20 @@ func Complete(source discovery.Source, loader modulerunner.ModuleLoader, args []
 		return builtinMatches(source, args, toComplete)
 	}
 
-	return pathMatches(source, loader, args, toComplete, dryRunGiven)
+	return pathMatches(source, loader, args, toComplete, globalGiven)
 }
 
 // pathMatches suggests what can follow args: the flags of the node reached by
 // the path, its subcommands or nothing.
-func pathMatches(source discovery.Source, loader modulerunner.ModuleLoader, args []string, toComplete string, dryRun bool) ([]Match, Directive) {
+func pathMatches(source discovery.Source, loader modulerunner.ModuleLoader, args []string, toComplete string, globalGiven bool) ([]Match, Directive) {
 	// Verified loading: a stale cache entry must not hide the current flags
 	// and subcommands of a module (TestComplete*ReloadsChangedManifest).
-	node, n, err := modulerunner.Walk(source, loader, args, modulerunner.WalkOptions{Verified: true})
+	node, n, err := modulerunner.Walk(source, loader, args, modulerunner.WalkOptions{Verified: true, Frontend: execmodule.FrontendCLI})
 	if err != nil || (n == 0 && len(args) > 0) {
+		return nil, ShellCompDirectiveNoFileComp
+	}
+	// A command (or group) not exposed to the CLI offers neither flags nor children.
+	if node.Command != nil && !node.Command.ExposedTo(execmodule.FrontendCLI) {
 		return nil, ShellCompDirectiveNoFileComp
 	}
 	rest := args[n:]
@@ -205,7 +229,7 @@ func pathMatches(source discovery.Source, loader modulerunner.ModuleLoader, args
 		return filterMatches(flagSpecMatches(flagSpecs, state.Used), toComplete), ShellCompDirectiveNoFileComp
 	case len(rest) == 0:
 		matches := childMatches(source, loader, node, n == 0)
-		if dryRun && n == 0 {
+		if globalGiven && n == 0 {
 			matches = slices.DeleteFunc(matches, func(m Match) bool { return IsReservedName(m.Text) })
 		}
 		matches = filterMatches(matches, toComplete)
@@ -284,6 +308,9 @@ func childMatches(source discovery.Source, loader modulerunner.ModuleLoader, nod
 	}
 	if node.Command != nil {
 		for name, cmd := range node.Command.Commands {
+			if !cmd.ExposedTo(execmodule.FrontendCLI) {
+				continue
+			}
 			matches = append(matches, Match{Text: name, Description: cmd.Description})
 		}
 	}
@@ -303,6 +330,9 @@ func childMatches(source discovery.Source, loader modulerunner.ModuleLoader, nod
 		if c.Type == "module" && !c.Conflict { // a conflicting module is not loaded
 			// The module description (zsh); the error is ignored.
 			if mod, err := modulerunner.LoadModule(loader, c.ManifestPath, c.ModuleRoot); err == nil {
+				if !mod.ExposedTo(execmodule.FrontendCLI) {
+					continue
+				}
 				m.Description = mod.Description
 			}
 		}
