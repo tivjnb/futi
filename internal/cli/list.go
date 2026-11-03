@@ -68,10 +68,11 @@ func renderCommandTable(w io.Writer, res core.ListResult, verbose bool) error {
 
 	var rows [][]string
 	for _, c := range res.Commands {
+		desc := destructiveSuffix(termtext.Line(c.Description), c.Destructive)
 		if verbose {
-			rows = append(rows, []string{termtext.Line(c.Name), termtext.Line(c.Description), termtext.Line(res.Manifest)})
+			rows = append(rows, []string{termtext.Line(c.Name), desc, termtext.Line(res.Manifest)})
 		} else {
-			rows = append(rows, []string{termtext.Line(c.Name), termtext.Line(c.Description)})
+			rows = append(rows, []string{termtext.Line(c.Name), desc})
 		}
 	}
 
@@ -82,10 +83,11 @@ func renderCommandTable(w io.Writer, res core.ListResult, verbose bool) error {
 
 	if res.HasDefault {
 		var defaultRow []string
+		desc := destructiveSuffix("", res.DefaultDestructive)
 		if verbose {
-			defaultRow = []string{"(default)", "", termtext.Line(res.Manifest)}
+			defaultRow = []string{"(default)", desc, termtext.Line(res.Manifest)}
 		} else {
-			defaultRow = []string{"(default)", ""}
+			defaultRow = []string{"(default)", desc}
 		}
 		rows = append([][]string{defaultRow}, rows...)
 	}
@@ -103,6 +105,17 @@ func renderCommandTable(w io.Writer, res core.ListResult, verbose bool) error {
 		return fmt.Errorf("list: render: %w", err)
 	}
 	return nil
+}
+
+// destructiveSuffix appends the "(destructive)" mark to a description.
+func destructiveSuffix(desc string, destructive bool) string {
+	switch {
+	case !destructive:
+		return desc
+	case desc == "":
+		return "(destructive)"
+	}
+	return desc + " (destructive)"
 }
 
 // renderChildren prints the children of a namespace as a table.

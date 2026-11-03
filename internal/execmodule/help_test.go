@@ -290,3 +290,61 @@ func TestFormatCommandHelpHidesSubcommands(t *testing.T) {
 		t.Errorf("no visible subcommands, section printed:\n%s", got)
 	}
 }
+
+func TestFormatCommandHelpAnnotations(t *testing.T) {
+	tests := []struct {
+		name      string
+		cmd       *Command
+		wantLines []string
+		noLines   []string
+	}{
+		{
+			name:      "destructive idempotent and narrowed expose",
+			cmd:       &Command{Destructive: TriTrue, Idempotent: TriTrue, Expose: []Frontend{FrontendCLI, FrontendMCP}},
+			wantLines: []string{"annotations: destructive (asks for confirmation), idempotent", "expose: cli, mcp"},
+		},
+		{
+			name:      "all three in order",
+			cmd:       &Command{ReadOnly: TriTrue, Idempotent: TriTrue},
+			wantLines: []string{"annotations: readonly, idempotent"},
+			noLines:   []string{"expose:"},
+		},
+		{
+			name:    "false values are not shown",
+			cmd:     &Command{ReadOnly: TriFalse, Destructive: TriFalse, Idempotent: TriFalse, Expose: AllFrontends},
+			noLines: []string{"annotations:", "expose:"},
+		},
+		{
+			name:    "no annotations",
+			cmd:     &Command{Description: "x"},
+			noLines: []string{"annotations:", "expose:"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FormatCommandHelp("m", tc.cmd, FrontendCLI)
+			for _, w := range tc.wantLines {
+				if !strings.Contains(got, w+"\n") {
+					t.Errorf("help lacks line %q:\n%s", w, got)
+				}
+			}
+			for _, n := range tc.noLines {
+				if strings.Contains(got, n) {
+					t.Errorf("help must not contain %q:\n%s", n, got)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatCommandHelpAnnotationsPlacement(t *testing.T) {
+	cmd := &Command{
+		Destructive: TriTrue,
+		Commands:    map[string]*Command{"sub": {}},
+	}
+	got := FormatCommandHelp("m", cmd, FrontendCLI)
+	a, s := strings.Index(got, "annotations:"), strings.Index(got, "subcommands:")
+	if a < 0 || s < 0 || a > s {
+		t.Errorf("annotations must precede subcommands:\n%s", got)
+	}
+}

@@ -42,6 +42,8 @@ func FormatCommandHelp(cmdPath string, cmd *Command, f Frontend) string {
 		writeFlags(&b, cmd.Flags)
 	}
 
+	writeAnnotations(&b, cmd)
+
 	var names []string
 	for _, name := range sortedNames(cmd.Commands) {
 		if cmd.Commands[name].ExposedTo(f) {
@@ -68,6 +70,32 @@ func FormatCommandHelp(cmdPath string, cmd *Command, f Frontend) string {
 	}
 
 	return b.String()
+}
+
+// writeAnnotations writes the annotations: line (only the true values) and
+// the expose: line (only when the effective list is narrower than all
+// frontends).
+func writeAnnotations(b *strings.Builder, cmd *Command) {
+	var notes []string
+	if cmd.ReadOnly.IsTrue() {
+		notes = append(notes, "readonly")
+	}
+	if cmd.Destructive.IsTrue() {
+		notes = append(notes, "destructive (asks for confirmation)")
+	}
+	if cmd.Idempotent.IsTrue() {
+		notes = append(notes, "idempotent")
+	}
+	if len(notes) > 0 {
+		b.WriteString("annotations: " + strings.Join(notes, ", ") + "\n")
+	}
+	if len(cmd.Expose) > 0 && len(cmd.Expose) < len(AllFrontends) {
+		names := make([]string, len(cmd.Expose))
+		for i, f := range cmd.Expose {
+			names[i] = string(f)
+		}
+		b.WriteString("expose: " + strings.Join(names, ", ") + "\n")
+	}
 }
 
 // argUsage is the token of an arg in the usage line: <name> for a required

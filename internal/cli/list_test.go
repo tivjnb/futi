@@ -713,3 +713,101 @@ func TestRunListCollisionWarningToStderr(t *testing.T) {
 		t.Errorf("stderr = %q, want one Warning: line about \"dev deploy\"", got)
 	}
 }
+
+func TestListDestructiveSuffix(t *testing.T) {
+	dir := t.TempDir()
+	writeMainTestFile(t, filepath.Join(dir, "db.yaml"), `
+name: db
+cmd: "echo root"
+destructive: true
+commands:
+  drop:
+    description: Drop the db
+    cmd: "echo drop"
+    destructive: true
+  nodesc:
+    cmd: "echo nodesc"
+    destructive: true
+  safe:
+    description: Safe one
+    cmd: "echo safe"
+  explicit:
+    description: Not destructive
+    cmd: "echo explicit"
+    destructive: false
+  group:
+    destructive: false
+    cmd: "echo group"
+    commands:
+      wipe:
+        description: Wipe it
+        cmd: "echo wipe"
+        destructive: true
+`)
+	var buf bytes.Buffer
+	if err := printCommands(&buf, filepath.Join(dir, "db.yaml"), dir, false, nil); err != nil {
+		t.Fatalf("printCommands: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"Drop the db (destructive)", "(destructive)", "(default)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("module list lacks %q:\n%s", want, out)
+		}
+	}
+	rows := tableRows(out)
+	for name, want := range map[string]string{
+		"(default)": "(destructive)",
+		"drop":      "Drop the db (destructive)",
+		"nodesc":    "(destructive)",
+		"safe":      "Safe one",
+		"explicit":  "Not destructive",
+		"group":     "",
+	} {
+		if rows[name] != want {
+			t.Errorf("row %q description = %q, want %q:\n%s", name, rows[name], want, out)
+		}
+	}
+
+	buf.Reset()
+	if err := runList(&buf, io.Discard, discovery.NewGlobalSource(dir), "db.group", false, false, nil); err != nil {
+		t.Fatalf("runList: %v", err)
+	}
+	rows = tableRows(buf.String())
+	if rows["wipe"] != "Wipe it (destructive)" || rows["(default)"] != "" {
+		t.Errorf("subcommand list rows = %v:\n%s", rows, buf.String())
+	}
+
+	buf.Reset()
+	writeMainTestFile(t, filepath.Join(dir, "grp.yaml"), `
+name: grp
+commands:
+  g:
+    cmd: "echo g"
+    destructive: true
+    commands:
+      x:
+        cmd: "echo x"
+`)
+	if err := runList(&buf, io.Discard, discovery.NewGlobalSource(dir), "grp.g", false, false, nil); err != nil {
+		t.Fatalf("runList grp.g: %v", err)
+	}
+	if rows := tableRows(buf.String()); rows["(default)"] != "(destructive)" || rows["x"] != "" {
+		t.Errorf("fallback cmd rows = %v:\n%s", rows, buf.String())
+	}
+}
+
+// tableRows maps the first column of a two-column table to the second one.
+func tableRows(out string) map[string]string {
+	rows := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, "│") {
+			continue
+		}
+		cells := strings.Split(strings.Trim(strings.TrimSpace(line), "│"), "│")
+		if len(cells) < 2 {
+			continue
+		}
+		rows[strings.TrimSpace(cells[0])] = strings.TrimSpace(cells[1])
+	}
+	return rows
+}

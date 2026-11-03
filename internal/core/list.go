@@ -21,7 +21,10 @@ const (
 )
 
 // CommandEntry is one command of a module or subcommand listing.
-type CommandEntry struct{ Name, Description string }
+type CommandEntry struct {
+	Name, Description string
+	Destructive       bool // the command is marked destructive
+}
 
 // ChildEntry is one child of a namespace listing. Text fields are raw.
 type ChildEntry struct {
@@ -37,11 +40,13 @@ type ChildEntry struct {
 // ListResult is the data of one listing; which fields are set depends on Kind.
 type ListResult struct {
 	Kind       ListKind
-	Manifest   string         // ListModule, ListSubcommands: manifest path
-	HasDefault bool           // ListModule: module has cmd; ListSubcommands: command has cmd
-	Commands   []CommandEntry // sorted by Name
-	Children   []ChildEntry   // ListNamespace: in discovery order
-	Warnings   []string       // path collisions found in the listed subtree (error texts)
+	Manifest   string // ListModule, ListSubcommands: manifest path
+	HasDefault bool   // ListModule: module has cmd; ListSubcommands: command has cmd
+	// DefaultDestructive: the default cmd is marked destructive.
+	DefaultDestructive bool
+	Commands           []CommandEntry // sorted by Name
+	Children           []ChildEntry   // ListNamespace: in discovery order
+	Warnings           []string       // path collisions found in the listed subtree (error texts)
 
 	loaded []loadedModule // modules loaded for this listing, to check for path collisions
 }
@@ -122,7 +127,7 @@ func listIn(f execmodule.Frontend, src discovery.Source, loader modulerunner.Mod
 			}
 
 			if len(cmd.Commands) > 0 {
-				res := commandsResult(f, ListSubcommands, cmd.Commands, manifestPath, !cmd.Cmd.IsZero())
+				res := commandsResult(f, ListSubcommands, cmd.Commands, manifestPath, !cmd.Cmd.IsZero(), cmd.IsDestructive())
 				res.loaded = []loadedModule{{ns: ns, manifest: manifestPath, mod: mod}}
 				return res, nil
 			}
@@ -163,16 +168,16 @@ func moduleCommands(f execmodule.Frontend, loader modulerunner.ModuleLoader, man
 	if err != nil {
 		return ListResult{}, nil, fmt.Errorf("list: %w", err)
 	}
-	return commandsResult(f, ListModule, mod.Commands, manifestPath, !mod.Cmd.IsZero()), mod, nil
+	return commandsResult(f, ListModule, mod.Commands, manifestPath, !mod.Cmd.IsZero(), mod.IsDestructive()), mod, nil
 }
 
-func commandsResult(f execmodule.Frontend, kind ListKind, commands map[string]*execmodule.Command, manifestPath string, hasDefault bool) ListResult {
-	res := ListResult{Kind: kind, Manifest: manifestPath, HasDefault: hasDefault}
+func commandsResult(f execmodule.Frontend, kind ListKind, commands map[string]*execmodule.Command, manifestPath string, hasDefault, defaultDestructive bool) ListResult {
+	res := ListResult{Kind: kind, Manifest: manifestPath, HasDefault: hasDefault, DefaultDestructive: defaultDestructive}
 	for name, cmd := range commands {
 		if !cmd.ExposedTo(f) {
 			continue
 		}
-		res.Commands = append(res.Commands, CommandEntry{Name: name, Description: cmd.Description})
+		res.Commands = append(res.Commands, CommandEntry{Name: name, Description: cmd.Description, Destructive: cmd.IsDestructive()})
 	}
 	sort.Slice(res.Commands, func(i, j int) bool { return res.Commands[i].Name < res.Commands[j].Name })
 	return res
